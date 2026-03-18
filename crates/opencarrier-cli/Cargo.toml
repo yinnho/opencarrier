@@ -1,0 +1,33 @@
+[package]
+name = "opencarrier-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI tool for the OpenCarrier Agent OS"
+
+[[bin]]
+name = "yinghe"
+path = "src/main.rs"
+
+[dependencies]
+opencarrier-types = { path = "../opencarrier-types" }
+opencarrier-kernel = { path = "../opencarrier-kernel" }
+opencarrier-api = { path = "../opencarrier-api" }
+opencarrier-skills = { path = "../opencarrier-skills" }
+opencarrier-extensions = { path = "../opencarrier-extensions" }
+# Stub crates (to be removed)
+zeroize = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+dirs = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+opencarrier-runtime = { path = "../opencarrier-runtime" }
+uuid = { workspace = true }
+ratatui = { workspace = true }
+colored = { workspace = true }
