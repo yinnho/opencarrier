@@ -2,14 +2,21 @@
 //!
 //! 通过云端代理调用 LLM，API Key 只存在于云端。
 //! 这与 yingheclient 的 ProxyLLMClient 功能相同。
+//!
+//! 使用方式：
+//! 1. 先绑定：调用 `yinghe bind` 或使用 `CarrierCloudClient` 进行绑定
+//! 2. 绑定后 token 自动保存，LLM 调用会自动使用该 token
 
 use async_trait::async_trait;
 use opencarrier_types::message::{ContentBlock, Message, MessageContent, Role, StopReason, TokenUsage};
 use opencarrier_types::tool::{ToolCall, ToolDefinition};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc::Sender;
 
+use crate::cloud_client::CarrierCloudClient;
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
 
 /// Default cloud API base URL
@@ -93,6 +100,7 @@ struct ProxyFunction {
 
 /// OpenAI-compatible response from cloud proxy
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ProxyResponse {
     id: String,
     model: String,
@@ -102,6 +110,7 @@ struct ProxyResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ProxyChoice {
     index: u32,
     message: ProxyResponseMessage,
@@ -109,6 +118,7 @@ struct ProxyChoice {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ProxyResponseMessage {
     role: String,
     content: Option<String>,
@@ -119,6 +129,7 @@ struct ProxyResponseMessage {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ProxyUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
@@ -136,40 +147,95 @@ pub struct ProxyEndpoint {
 /// Cloud Proxy LLM Driver
 ///
 /// All LLM requests go through the cloud proxy. API keys are stored
-/// in the cloud, not locally. The carrier only needs an auth token.
+/// in the cloud, not locally. The carrier needs to be bound first.
+///
+/// # 绑定流程
+/// 1. 运行 `yinghe bind` 或调用 `CarrierCloudClient::perform_binding()`
+/// 2. 在 App 上输入配对码完成绑定
+/// 3. 绑定成功后，token 自动保存，ProxyDriver 自动使用
 pub struct ProxyDriver {
     client: Client,
     cloud_url: String,
-    auth_token: String,
+    /// 引用共享的云端客户端
+    cloud_client: Arc<CarrierCloudClient>,
+    /// 缓存的 token（避免频繁读取文件）
+    cached_token: Arc<RwLock<Option<String>>>,
     default_modality: String,
     endpoints: Vec<ProxyEndpoint>,
 }
 
 impl ProxyDriver {
-    /// Create a new proxy driver
-    pub fn new(auth_token: String, cloud_url: Option<String>) -> Self {
-        let cloud_url = cloud_url.unwrap_or_else(|| {
-            std::env::var("OPENCARRIER_CLOUD_URL")
-                .unwrap_or_else(|_| DEFAULT_CLOUD_API_URL.to_string())
-        });
+    /// Create a new proxy driver with a cloud client
+    ///
+    /// The cloud client handles binding and token management.
+    /// Make sure to bind first using `CarrierCloudClient::perform_binding()`
+    /// or the CLI `yinghe bind` command.
+    pub fn new(cloud_client: Arc<CarrierCloudClient>) -> Self {
+        let cloud_url = std::env::var("OPENCARRIER_CLOUD_URL")
+            .unwrap_or_else(|_| DEFAULT_CLOUD_API_URL.to_string());
 
         Self {
             client: Client::new(),
             cloud_url,
-            auth_token,
+            cloud_client,
+            cached_token: Arc::new(RwLock::new(None)),
             default_modality: "chat".to_string(),
             endpoints: Vec::new(),
         }
     }
 
+    /// Create a proxy driver from existing binding info
+    ///
+    /// Convenience method that creates a CarrierCloudClient internally.
+    pub async fn from_binding(cloud_url: Option<String>) -> Result<Self, LlmError> {
+        let cloud_client = Arc::new(CarrierCloudClient::new(cloud_url));
+
+        // 检查是否已绑定
+        if !cloud_client.is_bound().await {
+            return Err(LlmError::Config(
+                "Carrier not bound. Run 'yinghe bind' first or set OPENCARRIER_TOKEN env var".to_string()
+            ));
+        }
+
+        Ok(Self::new(cloud_client))
+    }
+
+    /// Get the auth token (from cache or binding file)
+    async fn get_token(&self) -> Result<String, LlmError> {
+        // 先检查缓存
+        {
+            let cached = self.cached_token.read().await;
+            if let Some(ref token) = *cached {
+                return Ok(token.clone());
+            }
+        }
+
+        // 从 cloud_client 获取
+        let token = self.cloud_client.get_token().await.ok_or_else(|| {
+            LlmError::Config(
+                "Carrier not bound. Run 'yinghe bind' first.".to_string()
+            )
+        })?;
+
+        // 缓存 token
+        {
+            let mut cached = self.cached_token.write().await;
+            *cached = Some(token.clone());
+        }
+
+        Ok(token)
+    }
+
     /// Initialize - load endpoints from cloud
     pub async fn initialize(&mut self) -> Result<(), LlmError> {
+        let token = self.get_token().await?;
+
         // Fetch endpoints from cloud
         let url = format!("{}/llm/endpoints", self.cloud_url);
         let resp = self
             .client
             .get(&url)
-            .bearer_auth(&self.auth_token)
+            .bearer_auth(&token)
             .send()
             .await
             .map_err(|e| LlmError::Http(format!("Failed to fetch endpoints: {}", e)))?;
@@ -198,7 +264,7 @@ impl ProxyDriver {
 
         // Fetch modalities
         let url = format!("{}/llm/modalities", self.cloud_url);
-        if let Ok(resp) = self.client.get(&url).bearer_auth(&self.auth_token).send().await {
+        if let Ok(resp) = self.client.get(&url).bearer_auth(&token).send().await {
             if resp.status().is_success() {
                 tracing::info!("Loaded modalities from cloud");
             }
@@ -215,6 +281,11 @@ impl ProxyDriver {
     /// Get available endpoints
     pub fn get_endpoints(&self) -> &[ProxyEndpoint] {
         &self.endpoints
+    }
+
+    /// Get the cloud client (for binding operations)
+    pub fn cloud_client(&self) -> Arc<CarrierCloudClient> {
+        self.cloud_client.clone()
     }
 
     /// Convert internal messages to proxy format (OpenAI-compatible)
@@ -393,6 +464,8 @@ impl ProxyDriver {
 #[async_trait]
 impl LlmDriver for ProxyDriver {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        let token = self.get_token().await?;
+
         // Get default model from first endpoint
         let default_model = self
             .endpoints
@@ -426,7 +499,7 @@ impl LlmDriver for ProxyDriver {
         let resp = self
             .client
             .post(&url)
-            .bearer_auth(&self.auth_token)
+            .bearer_auth(&token)
             .json(&proxy_req)
             .send()
             .await
@@ -435,6 +508,16 @@ impl LlmDriver for ProxyDriver {
         let status = resp.status().as_u16();
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
+
+            // 如果是认证错误，清除缓存的 token
+            if status == 401 {
+                let mut cached = self.cached_token.write().await;
+                *cached = None;
+                return Err(LlmError::Config(
+                    "Token expired or invalid. Run 'yinghe bind' to re-authenticate.".to_string()
+                ));
+            }
+
             return Err(LlmError::Api {
                 status,
                 message: format!("Proxy API error: {}", text),
@@ -584,7 +667,6 @@ mod tests {
             Message::assistant("Hi there!"),
         ];
 
-        let proxy = ProxyDriver::new("test-token".to_string(), None);
         let converted = ProxyDriver::convert_messages(&messages);
 
         assert_eq!(converted.len(), 3);

@@ -46,6 +46,9 @@ pub enum LlmError {
     /// Model not found.
     #[error("Model not found: {0}")]
     ModelNotFound(String),
+    /// Configuration error.
+    #[error("Configuration error: {0}")]
+    Config(String),
 }
 
 /// A request to an LLM for completion.
