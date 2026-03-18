@@ -1226,7 +1226,10 @@ fn cmd_bind(cloud_url: Option<String>, unbind: bool) {
 
         // Check if already bound
         if let Some(binding) = client.get_binding().await {
-            ui::success(&format!("Already bound (carrier_id: {})", binding.carrier_id));
+            ui::success(&format!(
+                "Already bound (carrier_id: {})",
+                binding.carrier_id
+            ));
             ui::hint("Run 'yinghe bind --unbind' to remove binding.");
             return;
         }
@@ -1253,10 +1256,13 @@ fn cmd_bind(cloud_url: Option<String>, unbind: bool) {
         println!("  ╔═══════════════════════════════════════════════════════════╗");
         println!("  ║                    配对码                                   ║");
         println!("  ╠═══════════════════════════════════════════════════════════╣");
-        println!( "  ║                                                           ║");
-        println!( "  ║   {:<53} ║", pairing.pairing_code);
-        println!( "  ║                                                           ║");
-        println!( "  ║   有效期: {:<44} ║", format!("{} 分钟", pairing.expires_in / 60));
+        println!("  ║                                                           ║");
+        println!("  ║   {:<53} ║", pairing.pairing_code);
+        println!("  ║                                                           ║");
+        println!(
+            "  ║   有效期: {:<44} ║",
+            format!("{} 分钟", pairing.expires_in / 60)
+        );
         println!("  ║                                                           ║");
         println!("  ║   请在 App 上输入此配对码进行绑定                          ║");
         println!("  ║                                                           ║");
@@ -1265,10 +1271,16 @@ fn cmd_bind(cloud_url: Option<String>, unbind: bool) {
         println!("  等待绑定...");
 
         // Wait for binding
-        match client.wait_for_binding(&pairing.pairing_code, pairing.expires_in).await {
+        match client
+            .wait_for_binding(&pairing.pairing_code, pairing.expires_in)
+            .await
+        {
             Ok(binding) => {
                 println!();
-                ui::success(&format!("Binding successful! (carrier_id: {})", binding.carrier_id));
+                ui::success(&format!(
+                    "Binding successful! (carrier_id: {})",
+                    binding.carrier_id
+                ));
                 ui::blank();
                 ui::hint("You can now use proxy LLM mode without setting API keys.");
                 ui::hint("Set provider='proxy' in your config to use cloud LLM.");
@@ -2151,7 +2163,10 @@ fn cmd_doctor(json: bool, repair: bool) {
         // --- Check 1: OpenCarrier directory ---
         if opencarrier_dir.exists() {
             if !json {
-                ui::check_ok(&format!("OpenCarrier directory: {}", opencarrier_dir.display()));
+                ui::check_ok(&format!(
+                    "OpenCarrier directory: {}",
+                    opencarrier_dir.display()
+                ));
             }
             checks.push(serde_json::json!({"check": "opencarrier_dir", "status": "ok", "path": opencarrier_dir.display().to_string()}));
         } else if repair {
@@ -2313,7 +2328,9 @@ decay_rate = 0.05
             if cfg_path.exists() {
                 std::fs::read_to_string(&cfg_path)
                     .ok()
-                    .and_then(|s| toml::from_str::<opencarrier_types::config::KernelConfig>(&s).ok())
+                    .and_then(|s| {
+                        toml::from_str::<opencarrier_types::config::KernelConfig>(&s).ok()
+                    })
                     .map(|c| c.api_listen)
                     .unwrap_or_else(|| "127.0.0.1:4200".to_string())
             } else {
@@ -2745,7 +2762,8 @@ decay_rate = 0.05
         let mut injection_warnings = 0;
         for skill in &skills {
             if let Some(ref prompt) = skill.manifest.prompt_context {
-                let warnings = opencarrier_skills::verify::SkillVerifier::scan_prompt_content(prompt);
+                let warnings =
+                    opencarrier_skills::verify::SkillVerifier::scan_prompt_content(prompt);
                 let has_critical = warnings.iter().any(|w| {
                     matches!(
                         w.severity,
@@ -3525,9 +3543,11 @@ fn cmd_skill_install(source: &str) {
                         let dest = skills_dir.join(&manifest.skill.name);
                         // Copy skill directory
                         copy_dir_recursive(&source_path, &dest);
-                        if let Err(e) = opencarrier_skills::openclaw_compat::write_opencarrier_manifest(
-                            &dest, &manifest,
-                        ) {
+                        if let Err(e) =
+                            opencarrier_skills::openclaw_compat::write_opencarrier_manifest(
+                                &dest, &manifest,
+                            )
+                        {
                             eprintln!("Failed to write manifest: {e}");
                             std::process::exit(1);
                         }
@@ -3983,7 +4003,9 @@ fn cmd_channel_setup(channel: Option<&str>) {
                     Err(_) => println!("    export EMAIL_PASSWORD=your_app_password"),
                 }
             } else {
-                ui::hint("Set later: opencarrier config set-key email (or export EMAIL_PASSWORD=...)");
+                ui::hint(
+                    "Set later: opencarrier config set-key email (or export EMAIL_PASSWORD=...)",
+                );
             }
 
             ui::blank();
@@ -4929,7 +4951,9 @@ fn cmd_config_test_key(provider: &str) {
         println!("{}", "OK".bright_green());
     } else {
         println!("{}", "FAILED (401/403)".bright_red());
-        ui::hint(&format!("Update key: opencarrier config set-key {provider}"));
+        ui::hint(&format!(
+            "Update key: opencarrier config set-key {provider}"
+        ));
         std::process::exit(1);
     }
 }
@@ -6361,7 +6385,10 @@ fn cmd_reset(confirm: bool) {
     }
 
     if !confirm {
-        println!("  This will delete all data in {}", opencarrier_dir.display());
+        println!(
+            "  This will delete all data in {}",
+            opencarrier_dir.display()
+        );
         println!("  Including: config, database, agent manifests, credentials.");
         println!();
         let answer = prompt_input("  Are you sure? Type 'yes' to confirm: ");
@@ -6374,7 +6401,10 @@ fn cmd_reset(confirm: bool) {
     match std::fs::remove_dir_all(&opencarrier_dir) {
         Ok(()) => ui::success(&format!("Removed {}", opencarrier_dir.display())),
         Err(e) => {
-            ui::error(&format!("Failed to remove {}: {e}", opencarrier_dir.display()));
+            ui::error(&format!(
+                "Failed to remove {}: {e}",
+                opencarrier_dir.display()
+            ));
             std::process::exit(1);
         }
     }
@@ -6471,7 +6501,10 @@ fn cmd_uninstall(confirm: bool, keep_config: bool) {
         } else {
             match std::fs::remove_dir_all(&opencarrier_dir) {
                 Ok(()) => ui::success(&format!("Removed {}", opencarrier_dir.display())),
-                Err(e) => ui::error(&format!("Failed to remove {}: {e}", opencarrier_dir.display())),
+                Err(e) => ui::error(&format!(
+                    "Failed to remove {}: {e}",
+                    opencarrier_dir.display()
+                )),
             }
         }
     }
@@ -6646,7 +6679,8 @@ fn clean_path_entries(home: &std::path::Path, opencarrier_dir: &str) {
 #[cfg(any(not(windows), test))]
 fn is_opencarrier_path_line(line: &str, opencarrier_dir: &str) -> bool {
     let lower = line.to_lowercase();
-    let has_opencarrier = lower.contains("opencarrier") || lower.contains(&opencarrier_dir.to_lowercase());
+    let has_opencarrier =
+        lower.contains("opencarrier") || lower.contains(&opencarrier_dir.to_lowercase());
     if !has_opencarrier {
         return false;
     }
@@ -6835,7 +6869,8 @@ args = ["-y", "@modelcontextprotocol/server-github"]
     #[test]
     fn test_doctor_skill_injection_scan_clean() {
         let clean_content = "This is a normal skill prompt with helpful instructions.";
-        let warnings = opencarrier_skills::verify::SkillVerifier::scan_prompt_content(clean_content);
+        let warnings =
+            opencarrier_skills::verify::SkillVerifier::scan_prompt_content(clean_content);
         assert!(warnings.is_empty(), "Clean content should have no warnings");
     }
 

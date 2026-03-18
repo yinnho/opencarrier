@@ -481,7 +481,8 @@ pub async fn get_agent_session(
                                     // Persist image to upload dir so it can be
                                     // served back when loading session history.
                                     let file_id = uuid::Uuid::new_v4().to_string();
-                                    let upload_dir = std::env::temp_dir().join("opencarrier_uploads");
+                                    let upload_dir =
+                                        std::env::temp_dir().join("opencarrier_uploads");
                                     let _ = std::fs::create_dir_all(&upload_dir);
                                     if let Ok(bytes) =
                                         base64::engine::general_purpose::STANDARD.decode(data)
@@ -3351,7 +3352,9 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
     out.push_str(&format!("opencarrier_agents_total {}\n\n", agents.len()));
 
     // Per-agent token and tool usage
-    out.push_str("# HELP opencarrier_tokens_total Total tokens consumed (rolling hourly window).\n");
+    out.push_str(
+        "# HELP opencarrier_tokens_total Total tokens consumed (rolling hourly window).\n",
+    );
     out.push_str("# TYPE opencarrier_tokens_total gauge\n");
     out.push_str("# HELP opencarrier_tool_calls_total Total tool calls (rolling hourly window).\n");
     out.push_str("# TYPE opencarrier_tool_calls_total gauge\n");
@@ -3374,7 +3377,10 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
     let health = state.kernel.supervisor.health();
     out.push_str("# HELP opencarrier_panics_total Total supervisor panics since start.\n");
     out.push_str("# TYPE opencarrier_panics_total counter\n");
-    out.push_str(&format!("opencarrier_panics_total {}\n", health.panic_count));
+    out.push_str(&format!(
+        "opencarrier_panics_total {}\n",
+        health.panic_count
+    ));
     out.push_str("# HELP opencarrier_restarts_total Total supervisor restarts since start.\n");
     out.push_str("# TYPE opencarrier_restarts_total counter\n");
     out.push_str(&format!(
@@ -9332,7 +9338,9 @@ pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
         );
     }
 
-    let file_path = std::env::temp_dir().join("opencarrier_uploads").join(&file_id);
+    let file_path = std::env::temp_dir()
+        .join("opencarrier_uploads")
+        .join(&file_id);
 
     // Look up metadata from registry; fall back to disk probe for generated images
     // (image_generate saves files without registering in UPLOAD_REGISTRY).
@@ -11042,8 +11050,9 @@ pub async fn auth_login(
     let token =
         crate::session_auth::create_session_token(username, &secret, auth_cfg.session_ttl_hours);
     let ttl_secs = auth_cfg.session_ttl_hours * 3600;
-    let cookie =
-        format!("opencarrier_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl_secs}");
+    let cookie = format!(
+        "opencarrier_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl_secs}"
+    );
 
     state.kernel.audit_log.record(
         "system",
