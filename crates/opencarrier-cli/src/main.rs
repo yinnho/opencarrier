@@ -265,6 +265,15 @@ enum Commands {
     },
     /// Interactive setup wizard for credentials and channels.
     Configure,
+    /// Bind to cloud for proxy LLM mode (use App to authorize).
+    Bind {
+        /// Cloud API URL (defaults to https://carrier.yinnho.cn).
+        #[arg(long)]
+        cloud_url: Option<String>,
+        /// Unbind from cloud (remove stored token).
+        #[arg(long)]
+        unbind: bool,
+    },
     /// Send a one-shot message to an agent.
     Message {
         /// Agent name or ID.
@@ -1066,6 +1075,7 @@ fn main() {
         },
         Some(Commands::Onboard { quick }) | Some(Commands::Setup { quick }) => cmd_init(quick),
         Some(Commands::Configure) => cmd_init(false),
+        Some(Commands::Bind { cloud_url, unbind }) => cmd_bind(cloud_url, unbind),
         Some(Commands::Message { agent, text, json }) => cmd_message(&agent, &text, json),
         Some(Commands::System(sub)) => match sub {
             SystemCommands::Info { json } => cmd_system_info(json),
@@ -1189,6 +1199,89 @@ pub(crate) fn daemon_json(
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
+
+/// Bind carrier to cloud for proxy LLM mode
+fn cmd_bind(cloud_url: Option<String>, unbind: bool) {
+    use opencarrier_runtime::cloud_client::CarrierCloudClient;
+
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+    rt.block_on(async {
+        let client = CarrierCloudClient::new(cloud_url.clone());
+
+        if unbind {
+            // Unbind: remove stored token
+            match client.clear_binding().await {
+                Ok(()) => {
+                    ui::success("Successfully unbound from cloud.");
+                    ui::hint("Run 'yinghe bind' to bind again.");
+                }
+                Err(e) => {
+                    ui::error(&format!("Failed to unbind: {}", e));
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+
+        // Check if already bound
+        if let Some(binding) = client.get_binding().await {
+            ui::success(&format!("Already bound (carrier_id: {})", binding.carrier_id));
+            ui::hint("Run 'yinghe bind --unbind' to remove binding.");
+            return;
+        }
+
+        // Start pairing flow
+        println!();
+        ui::section("Carrier Cloud Binding");
+        ui::blank();
+        println!("  This will bind your carrier to the cloud for proxy LLM mode.");
+        println!("  After binding, you can use LLM without setting API keys locally.");
+        ui::blank();
+
+        // Create pairing code
+        let pairing = match client.create_pairing_code().await {
+            Ok(p) => p,
+            Err(e) => {
+                ui::error(&format!("Failed to create pairing code: {}", e));
+                std::process::exit(1);
+            }
+        };
+
+        // Display pairing code
+        println!();
+        println!("  ╔═══════════════════════════════════════════════════════════╗");
+        println!("  ║                    配对码                                   ║");
+        println!("  ╠═══════════════════════════════════════════════════════════╣");
+        println!( "  ║                                                           ║");
+        println!( "  ║   {:<53} ║", pairing.pairing_code);
+        println!( "  ║                                                           ║");
+        println!( "  ║   有效期: {:<44} ║", format!("{} 分钟", pairing.expires_in / 60));
+        println!("  ║                                                           ║");
+        println!("  ║   请在 App 上输入此配对码进行绑定                          ║");
+        println!("  ║                                                           ║");
+        println!("  ╚═══════════════════════════════════════════════════════════╝");
+        println!();
+        println!("  等待绑定...");
+
+        // Wait for binding
+        match client.wait_for_binding(&pairing.pairing_code, pairing.expires_in).await {
+            Ok(binding) => {
+                println!();
+                ui::success(&format!("Binding successful! (carrier_id: {})", binding.carrier_id));
+                ui::blank();
+                ui::hint("You can now use proxy LLM mode without setting API keys.");
+                ui::hint("Set provider='proxy' in your config to use cloud LLM.");
+            }
+            Err(e) => {
+                println!();
+                ui::error(&format!("Binding failed: {}", e));
+                ui::hint("Please try again with 'yinghe bind'");
+                std::process::exit(1);
+            }
+        }
+    });
+}
 
 fn cmd_init(quick: bool) {
     let home = match dirs::home_dir() {
