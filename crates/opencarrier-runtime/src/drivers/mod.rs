@@ -2,7 +2,7 @@
 //!
 //! Contains drivers for Anthropic Claude, Google Gemini, OpenAI-compatible APIs, and more.
 //! Supports: Anthropic, Gemini, OpenAI, Groq, OpenRouter, DeepSeek, Together,
-//! Mistral, Fireworks, Ollama, vLLM, Chutes.ai, and any OpenAI-compatible endpoint.
+//! Mistral, Fireworks, Ollama, vLLM, Chutes.ai, Cloud Proxy, and any OpenAI-compatible endpoint.
 
 pub mod anthropic;
 pub mod claude_code;
@@ -10,6 +10,7 @@ pub mod copilot;
 pub mod fallback;
 pub mod gemini;
 pub mod openai;
+pub mod proxy;
 pub mod qwen_code;
 
 use crate::llm_driver::{DriverConfig, LlmDriver, LlmError};
@@ -325,6 +326,28 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             cli_path,
             config.skip_permissions,
         )));
+    }
+
+    // Cloud Proxy — LLM requests go through cloud, API keys stored remotely
+    // This matches yingheclient's ProxyLLMClient behavior
+    if provider == "proxy" || provider == "cloud" || provider == "carrier" {
+        let auth_token = config
+            .api_key
+            .clone()
+            .or_else(|| std::env::var("OPENCARRIER_AUTH_TOKEN").ok())
+            .or_else(|| std::env::var("CARRIER_AUTH_TOKEN").ok())
+            .ok_or_else(|| {
+                LlmError::MissingApiKey(
+                    "Set OPENCARRIER_AUTH_TOKEN or CARRIER_AUTH_TOKEN for cloud proxy mode".to_string(),
+                )
+            })?;
+        let cloud_url = config.base_url.clone();
+        let mut driver = proxy::ProxyDriver::new(auth_token, cloud_url);
+        // Initialize endpoints (async, but we block here for simplicity)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(driver.initialize())
+        }).map_err(|e| LlmError::Http(format!("Failed to initialize proxy driver: {}", e)))?;
+        return Ok(Arc::new(driver));
     }
 
     // GitHub Copilot — wraps OpenAI-compatible driver with automatic token exchange.
