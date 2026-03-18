@@ -1,0 +1,32 @@
+unknown shorthand flag: '1' in -100
+unknown shorthand flag: '1' in -100
+
+Usage:  gh run view [<run-id>] [flags]
+
+Flags:
+
+Usage:  gh run view [<run-id>] [flags]
+
+Flags:
+  -a, --attempt uint      The attempt number of the workflow run
+      --exit-status       Exit with non-zero status if run failed
+  -j, --job string        View a specific job ID from a run
+  -q, --jq expression     Filter JSON output using a jq expression
+      --json fields       Output JSON with the specified fields
+      --log               View full log for either a run or specific job
+      --log-failed        View the log for any failed steps in a run or specific job
+  -t, --template string   Format JSON output using a Go template; see "gh help formatting"
+  -v, --verbose           Show job steps
+  -w, --web               Open run in the browser
+  
+  -a, --attempt uint      The attempt number of the workflow run
+      --exit-status       Exit with non-zero status if run failed
+  -j, --job string        View a specific job ID from a run
+  -q, --jq expression     Filter JSON output using a jq expression
+      --json fields       Output JSON with the specified fields
+      --log               View full log for either a run or specific job
+      --log-failed        View the log for any failed steps in a run or specific job
+  -t, --template string   Format JSON output using a Go template; see "gh help formatting"
+  -v, --verbose           Show job steps
+  -w, --web               Open run in the browser
+  
