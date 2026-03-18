@@ -642,8 +642,7 @@ pub fn run() -> InitResult {
     let mut state = State::new();
 
     let (test_tx, test_rx) = std::sync::mpsc::channel::<bool>();
-    let (migrate_tx, migrate_rx) =
-        std::sync::mpsc::channel::<Result<MigrationReport, String>>();
+    let (migrate_tx, migrate_rx) = std::sync::mpsc::channel::<Result<MigrationReport, String>>();
 
     let result = loop {
         terminal

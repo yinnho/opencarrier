@@ -8,13 +8,15 @@
 //! 2. 绑定后 token 自动保存，LLM 调用会自动使用该 token
 
 use async_trait::async_trait;
-use opencarrier_types::message::{ContentBlock, Message, MessageContent, Role, StopReason, TokenUsage};
+use opencarrier_types::message::{
+    ContentBlock, Message, MessageContent, Role, StopReason, TokenUsage,
+};
 use opencarrier_types::tool::{ToolCall, ToolDefinition};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::RwLock;
 
 use crate::cloud_client::CarrierCloudClient;
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
@@ -193,7 +195,8 @@ impl ProxyDriver {
         // 检查是否已绑定
         if !cloud_client.is_bound().await {
             return Err(LlmError::Config(
-                "Carrier not bound. Run 'yinghe bind' first or set OPENCARRIER_TOKEN env var".to_string()
+                "Carrier not bound. Run 'yinghe bind' first or set OPENCARRIER_TOKEN env var"
+                    .to_string(),
             ));
         }
 
@@ -212,9 +215,7 @@ impl ProxyDriver {
 
         // 从 cloud_client 获取
         let token = self.cloud_client.get_token().await.ok_or_else(|| {
-            LlmError::Config(
-                "Carrier not bound. Run 'yinghe bind' first.".to_string()
-            )
+            LlmError::Config("Carrier not bound. Run 'yinghe bind' first.".to_string())
         })?;
 
         // 缓存 token
@@ -386,7 +387,9 @@ impl ProxyDriver {
                             ContentBlock::Text { text, .. } => {
                                 text_parts.push(text.clone());
                             }
-                            ContentBlock::ToolUse { id, name, input, .. } => {
+                            ContentBlock::ToolUse {
+                                id, name, input, ..
+                            } => {
                                 tool_calls.push(ProxyToolCall {
                                     id: id.clone(),
                                     call_type: "function".to_string(),
@@ -514,7 +517,7 @@ impl LlmDriver for ProxyDriver {
                 let mut cached = self.cached_token.write().await;
                 *cached = None;
                 return Err(LlmError::Config(
-                    "Token expired or invalid. Run 'yinghe bind' to re-authenticate.".to_string()
+                    "Token expired or invalid. Run 'yinghe bind' to re-authenticate.".to_string(),
                 ));
             }
 
@@ -550,8 +553,11 @@ impl LlmDriver for ProxyDriver {
             .unwrap_or_default()
             .into_iter()
             .map(|tc| {
-                let input: serde_json::Value =
-                    tc.function.arguments.parse().unwrap_or(serde_json::Value::Null);
+                let input: serde_json::Value = tc
+                    .function
+                    .arguments
+                    .parse()
+                    .unwrap_or(serde_json::Value::Null);
                 ToolCall {
                     id: tc.id,
                     name: tc.function.name,
@@ -582,13 +588,16 @@ impl LlmDriver for ProxyDriver {
             }
         }
 
-        let usage = proxy_resp.usage.map(|u| TokenUsage {
-            input_tokens: u.prompt_tokens as u64,
-            output_tokens: u.completion_tokens as u64,
-        }).unwrap_or(TokenUsage {
-            input_tokens: 0,
-            output_tokens: 0,
-        });
+        let usage = proxy_resp
+            .usage
+            .map(|u| TokenUsage {
+                input_tokens: u.prompt_tokens as u64,
+                output_tokens: u.completion_tokens as u64,
+            })
+            .unwrap_or(TokenUsage {
+                input_tokens: 0,
+                output_tokens: 0,
+            });
 
         Ok(CompletionResponse {
             content,
@@ -608,7 +617,9 @@ impl LlmDriver for ProxyDriver {
         let response = self.complete(request).await?;
 
         // Extract text content
-        let text = response.content.iter()
+        let text = response
+            .content
+            .iter()
             .filter_map(|b| match b {
                 ContentBlock::Text { text, .. } => Some(text.clone()),
                 _ => None,

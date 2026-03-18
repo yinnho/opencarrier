@@ -203,7 +203,10 @@ mod tests {
             "location_get",
         ];
         for tool in &known {
-            assert!(is_known_opencarrier_tool(tool), "Expected {tool} to be known");
+            assert!(
+                is_known_opencarrier_tool(tool),
+                "Expected {tool} to be known"
+            );
         }
 
         // Unknown

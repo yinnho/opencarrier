@@ -160,7 +160,10 @@ impl CarrierCloudClient {
         // 确保目录存在
         if let Some(parent) = self.config_path.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                return Err(CloudError::Io(format!("Failed to create config dir: {}", e)));
+                return Err(CloudError::Io(format!(
+                    "Failed to create config dir: {}",
+                    e
+                )));
             }
         }
 
@@ -301,7 +304,11 @@ impl CarrierCloudClient {
 
     /// 等待绑定完成（轮询）
     /// 返回绑定信息
-    pub async fn wait_for_binding(&self, pairing_code: &str, timeout_secs: u64) -> Result<BindingInfo, CloudError> {
+    pub async fn wait_for_binding(
+        &self,
+        pairing_code: &str,
+        timeout_secs: u64,
+    ) -> Result<BindingInfo, CloudError> {
         let start = std::time::Instant::now();
         let poll_interval = std::time::Duration::from_secs(3);
         let timeout = std::time::Duration::from_secs(timeout_secs);
@@ -370,7 +377,10 @@ impl CarrierCloudClient {
     }
 
     /// 调用 LLM 代理
-    pub async fn call_llm_proxy(&self, request: serde_json::Value) -> Result<serde_json::Value, CloudError> {
+    pub async fn call_llm_proxy(
+        &self,
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value, CloudError> {
         let token = self.get_token().await.ok_or(CloudError::NotBound)?;
 
         let url = format!("{}/llm/chat", self.cloud_url);
@@ -488,8 +498,11 @@ pub async fn perform_binding(client: &CarrierCloudClient) -> Result<BindingInfo,
     println!("║                    载体绑定                                ║");
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║                                                            ║");
-    println!( "║   配对码: {:<46} ║", pairing.pairing_code);
-    println!( "║   有效期: {:<46} ║", format!("{} 分钟", pairing.expires_in / 60));
+    println!("║   配对码: {:<46} ║", pairing.pairing_code);
+    println!(
+        "║   有效期: {:<46} ║",
+        format!("{} 分钟", pairing.expires_in / 60)
+    );
     println!("║                                                            ║");
     println!("║   请在 App 上输入此配对码进行绑定                          ║");
     println!("║                                                            ║");
@@ -498,7 +511,9 @@ pub async fn perform_binding(client: &CarrierCloudClient) -> Result<BindingInfo,
     println!("等待绑定...");
 
     // 等待绑定完成
-    let result = client.wait_for_binding(&pairing.pairing_code, pairing.expires_in).await?;
+    let result = client
+        .wait_for_binding(&pairing.pairing_code, pairing.expires_in)
+        .await?;
 
     println!("✓ 绑定成功！载体 ID: {}", result.carrier_id);
 

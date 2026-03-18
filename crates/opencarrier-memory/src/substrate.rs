@@ -38,7 +38,8 @@ pub struct MemorySubstrate {
 impl MemorySubstrate {
     /// Open or create a memory substrate at the given database path.
     pub fn open(db_path: &Path, decay_rate: f32) -> OpenCarrierResult<Self> {
-        let conn = Connection::open(db_path).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+        let conn =
+            Connection::open(db_path).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         run_migrations(&conn).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -120,7 +121,10 @@ impl MemorySubstrate {
     }
 
     /// List all KV pairs for an agent.
-    pub fn list_kv(&self, agent_id: AgentId) -> OpenCarrierResult<Vec<(String, serde_json::Value)>> {
+    pub fn list_kv(
+        &self,
+        agent_id: AgentId,
+    ) -> OpenCarrierResult<Vec<(String, serde_json::Value)>> {
         self.structured.list_kv(agent_id)
     }
 
@@ -203,7 +207,10 @@ impl MemorySubstrate {
     }
 
     /// List all sessions for a specific agent.
-    pub fn list_agent_sessions(&self, agent_id: AgentId) -> OpenCarrierResult<Vec<serde_json::Value>> {
+    pub fn list_agent_sessions(
+        &self,
+        agent_id: AgentId,
+    ) -> OpenCarrierResult<Vec<serde_json::Value>> {
         self.sessions.list_agent_sessions(agent_id)
     }
 
@@ -524,7 +531,10 @@ impl MemorySubstrate {
     }
 
     /// List tasks, optionally filtered by status.
-    pub async fn task_list(&self, status: Option<&str>) -> OpenCarrierResult<Vec<serde_json::Value>> {
+    pub async fn task_list(
+        &self,
+        status: Option<&str>,
+    ) -> OpenCarrierResult<Vec<serde_json::Value>> {
         let conn = Arc::clone(&self.conn);
         let status = status.map(|s| s.to_string());
 
@@ -570,7 +580,11 @@ impl MemorySubstrate {
 
 #[async_trait]
 impl Memory for MemorySubstrate {
-    async fn get(&self, agent_id: AgentId, key: &str) -> OpenCarrierResult<Option<serde_json::Value>> {
+    async fn get(
+        &self,
+        agent_id: AgentId,
+        key: &str,
+    ) -> OpenCarrierResult<Option<serde_json::Value>> {
         let store = self.structured.clone();
         let key = key.to_string();
         tokio::task::spawn_blocking(move || store.get(agent_id, &key))

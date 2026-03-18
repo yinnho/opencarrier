@@ -1111,7 +1111,8 @@ pub fn spawn_fetch_agent_mcp_servers(
                 if let Ok(mcp_tools) = kernel.mcp_tools.lock() {
                     let mut seen = std::collections::HashSet::new();
                     for tool in mcp_tools.iter() {
-                        if let Some(server) = opencarrier_runtime::mcp::extract_mcp_server(&tool.name)
+                        if let Some(server) =
+                            opencarrier_runtime::mcp::extract_mcp_server(&tool.name)
                         {
                             if seen.insert(server.to_string()) {
                                 available.push(server.to_string());

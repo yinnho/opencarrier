@@ -92,7 +92,9 @@ impl McpBackend {
 
     /// Find agent ID by tool name (strip `opencarrier_agent_` prefix, match by name).
     fn resolve_tool_agent(&self, tool_name: &str) -> Option<String> {
-        let agent_name = tool_name.strip_prefix("opencarrier_agent_")?.replace('_', "-");
+        let agent_name = tool_name
+            .strip_prefix("opencarrier_agent_")?
+            .replace('_', "-");
         let agents = self.list_agents();
         // Try exact match first (with underscores replaced by hyphens)
         for (id, name, _) in &agents {

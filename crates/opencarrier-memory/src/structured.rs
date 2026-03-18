@@ -19,7 +19,11 @@ impl StructuredStore {
     }
 
     /// Get a value from the key-value store.
-    pub fn get(&self, agent_id: AgentId, key: &str) -> OpenCarrierResult<Option<serde_json::Value>> {
+    pub fn get(
+        &self,
+        agent_id: AgentId,
+        key: &str,
+    ) -> OpenCarrierResult<Option<serde_json::Value>> {
         let conn = self
             .conn
             .lock()
@@ -53,8 +57,8 @@ impl StructuredStore {
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let blob =
-            serde_json::to_vec(&value).map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
+        let blob = serde_json::to_vec(&value)
+            .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO kv_store (agent_id, key, value, version, updated_at) VALUES (?1, ?2, ?3, 1, ?4)
@@ -80,7 +84,10 @@ impl StructuredStore {
     }
 
     /// List all key-value pairs for an agent.
-    pub fn list_kv(&self, agent_id: AgentId) -> OpenCarrierResult<Vec<(String, serde_json::Value)>> {
+    pub fn list_kv(
+        &self,
+        agent_id: AgentId,
+    ) -> OpenCarrierResult<Vec<(String, serde_json::Value)>> {
         let conn = self
             .conn
             .lock()
@@ -329,7 +336,8 @@ impl StructuredStore {
                 continue;
             }
 
-            let agent_id = match uuid::Uuid::parse_str(&id_str).map(opencarrier_types::agent::AgentId)
+            let agent_id = match uuid::Uuid::parse_str(&id_str)
+                .map(opencarrier_types::agent::AgentId)
             {
                 Ok(id) => id,
                 Err(e) => {

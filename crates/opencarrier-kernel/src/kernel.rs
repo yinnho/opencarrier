@@ -118,13 +118,16 @@ pub struct OpenCarrierKernel {
     /// Hand registry — curated autonomous capability packages.
     pub hand_registry: opencarrier_hands::registry::HandRegistry,
     /// Credential resolver — vault → dotenv → env var priority chain.
-    pub credential_resolver: std::sync::Mutex<opencarrier_extensions::credentials::CredentialResolver>,
+    pub credential_resolver:
+        std::sync::Mutex<opencarrier_extensions::credentials::CredentialResolver>,
     /// Extension/integration registry (bundled MCP templates + install state).
-    pub extension_registry: std::sync::RwLock<opencarrier_extensions::registry::IntegrationRegistry>,
+    pub extension_registry:
+        std::sync::RwLock<opencarrier_extensions::registry::IntegrationRegistry>,
     /// Integration health monitor.
     pub extension_health: opencarrier_extensions::health::HealthMonitor,
     /// Effective MCP server list (manual config + extension-installed, merged at boot).
-    pub effective_mcp_servers: std::sync::RwLock<Vec<opencarrier_types::config::McpServerConfigEntry>>,
+    pub effective_mcp_servers:
+        std::sync::RwLock<Vec<opencarrier_types::config::McpServerConfigEntry>>,
     /// Delivery receipt tracker (bounded LRU, max 10K entries).
     pub delivery_tracker: DeliveryTracker,
     /// Cron job scheduler.
@@ -704,7 +707,9 @@ impl OpenCarrierKernel {
 
         // Use the chain, or create a stub driver if everything failed
         let driver: Arc<dyn LlmDriver> = if driver_chain.len() > 1 {
-            Arc::new(opencarrier_runtime::drivers::fallback::FallbackDriver::with_models(model_chain))
+            Arc::new(
+                opencarrier_runtime::drivers::fallback::FallbackDriver::with_models(model_chain),
+            )
         } else if let Some(single) = driver_chain.into_iter().next() {
             single
         } else {
@@ -1410,9 +1415,9 @@ impl OpenCarrierKernel {
     pub fn verify_signed_manifest(&self, signed_json: &str) -> KernelResult<String> {
         let signed: opencarrier_types::manifest_signing::SignedManifest =
             serde_json::from_str(signed_json).map_err(|e| {
-                KernelError::OpenCarrier(opencarrier_types::error::OpenCarrierError::Config(format!(
-                    "Invalid signed manifest JSON: {e}"
-                )))
+                KernelError::OpenCarrier(opencarrier_types::error::OpenCarrierError::Config(
+                    format!("Invalid signed manifest JSON: {e}"),
+                ))
             })?;
         signed.verify().map_err(|e| {
             KernelError::OpenCarrier(opencarrier_types::error::OpenCarrierError::Config(format!(
@@ -1996,19 +2001,24 @@ impl OpenCarrierKernel {
                     // Persist usage to database (same as non-streaming path)
                     let model = &manifest.model.model;
                     let cost = MeteringEngine::estimate_cost_with_catalog(
-                        &kernel_clone.model_catalog.read().unwrap_or_else(|e| e.into_inner()),
+                        &kernel_clone
+                            .model_catalog
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner()),
                         model,
                         result.total_usage.input_tokens,
                         result.total_usage.output_tokens,
                     );
-                    let _ = kernel_clone.metering.record(&opencarrier_memory::usage::UsageRecord {
-                        agent_id,
-                        model: model.clone(),
-                        input_tokens: result.total_usage.input_tokens,
-                        output_tokens: result.total_usage.output_tokens,
-                        cost_usd: cost,
-                        tool_calls: result.iterations.saturating_sub(1),
-                    });
+                    let _ = kernel_clone
+                        .metering
+                        .record(&opencarrier_memory::usage::UsageRecord {
+                            agent_id,
+                            model: model.clone(),
+                            input_tokens: result.total_usage.input_tokens,
+                            output_tokens: result.total_usage.output_tokens,
+                            cost_usd: cost,
+                            tool_calls: result.iterations.saturating_sub(1),
+                        });
 
                     let _ = kernel_clone
                         .registry
@@ -2542,14 +2552,16 @@ impl OpenCarrierKernel {
             result.total_usage.input_tokens,
             result.total_usage.output_tokens,
         );
-        let _ = self.metering.record(&opencarrier_memory::usage::UsageRecord {
-            agent_id,
-            model: model.clone(),
-            input_tokens: result.total_usage.input_tokens,
-            output_tokens: result.total_usage.output_tokens,
-            cost_usd: cost,
-            tool_calls: result.iterations.saturating_sub(1),
-        });
+        let _ = self
+            .metering
+            .record(&opencarrier_memory::usage::UsageRecord {
+                agent_id,
+                model: model.clone(),
+                input_tokens: result.total_usage.input_tokens,
+                output_tokens: result.total_usage.output_tokens,
+                cost_usd: cost,
+                tool_calls: result.iterations.saturating_sub(1),
+            });
 
         // Populate cost on the result based on usage_footer mode
         let mut result = result;
@@ -2720,7 +2732,9 @@ impl OpenCarrierKernel {
             .get_session(session_id)
             .map_err(KernelError::OpenCarrier)?
             .ok_or_else(|| {
-                KernelError::OpenCarrier(OpenCarrierError::Internal("Session not found".to_string()))
+                KernelError::OpenCarrier(OpenCarrierError::Internal(
+                    "Session not found".to_string(),
+                ))
             })?;
 
         if session.agent_id != agent_id {
@@ -2894,9 +2908,9 @@ impl OpenCarrierKernel {
             let known = registry.skill_names();
             for name in &skills {
                 if !known.contains(name) {
-                    return Err(KernelError::OpenCarrier(OpenCarrierError::Internal(format!(
-                        "Unknown skill: {name}"
-                    ))));
+                    return Err(KernelError::OpenCarrier(OpenCarrierError::Internal(
+                        format!("Unknown skill: {name}"),
+                    )));
                 }
             }
         }
@@ -2932,9 +2946,9 @@ impl OpenCarrierKernel {
                 for name in &servers {
                     let normalized = opencarrier_runtime::mcp::normalize_name(name);
                     if !known_servers.contains(&normalized) {
-                        return Err(KernelError::OpenCarrier(OpenCarrierError::Internal(format!(
-                            "Unknown MCP server: {name}"
-                        ))));
+                        return Err(KernelError::OpenCarrier(OpenCarrierError::Internal(
+                            format!("Unknown MCP server: {name}"),
+                        )));
                     }
                 }
             }
@@ -3074,7 +3088,9 @@ impl OpenCarrierKernel {
 
         // Post-compaction audit: validate and repair the kept messages
         let (repaired_messages, repair_stats) =
-            opencarrier_runtime::session_repair::validate_and_repair_with_stats(&result.kept_messages);
+            opencarrier_runtime::session_repair::validate_and_repair_with_stats(
+                &result.kept_messages,
+            );
 
         // Also update the regular session with the repaired messages
         let mut updated_session = session;
@@ -3210,9 +3226,9 @@ impl OpenCarrierKernel {
             .hand_registry
             .activate(hand_id, config)
             .map_err(|e| match e {
-                HandError::AlreadyActive(id) => KernelError::OpenCarrier(OpenCarrierError::Internal(
-                    format!("Hand already active: {id}"),
-                )),
+                HandError::AlreadyActive(id) => KernelError::OpenCarrier(
+                    OpenCarrierError::Internal(format!("Hand already active: {id}")),
+                ),
                 other => KernelError::OpenCarrier(OpenCarrierError::Internal(other.to_string())),
             })?;
 
@@ -3647,7 +3663,9 @@ impl OpenCarrierKernel {
             .create_run(workflow_id, input)
             .await
             .ok_or_else(|| {
-                KernelError::OpenCarrier(OpenCarrierError::Internal("Workflow not found".to_string()))
+                KernelError::OpenCarrier(OpenCarrierError::Internal(
+                    "Workflow not found".to_string(),
+                ))
             })?;
 
         // Agent resolver: looks up by name or ID in the registry
@@ -3804,7 +3822,8 @@ impl OpenCarrierKernel {
         }
 
         let agents = self.registry.list();
-        let mut bg_agents: Vec<(opencarrier_types::agent::AgentId, String, ScheduleMode)> = Vec::new();
+        let mut bg_agents: Vec<(opencarrier_types::agent::AgentId, String, ScheduleMode)> =
+            Vec::new();
 
         for entry in &agents {
             if matches!(entry.manifest.schedule, ScheduleMode::Reactive) {
@@ -4185,7 +4204,8 @@ impl OpenCarrierKernel {
                 let kernel = Arc::clone(self);
                 let agents = a2a_config.external_agents.clone();
                 tokio::spawn(async move {
-                    let discovered = opencarrier_runtime::a2a::discover_external_agents(&agents).await;
+                    let discovered =
+                        opencarrier_runtime::a2a::discover_external_agents(&agents).await;
                     if let Ok(mut store) = kernel.a2a_external_agents.lock() {
                         *store = discovered;
                     }

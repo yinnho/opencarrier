@@ -116,8 +116,9 @@ impl CronScheduler {
     /// Persist all jobs to disk via atomic write (write to `.tmp`, then rename).
     pub fn persist(&self) -> OpenCarrierResult<()> {
         let metas: Vec<JobMeta> = self.jobs.iter().map(|r| r.value().clone()).collect();
-        let data = serde_json::to_string_pretty(&metas)
-            .map_err(|e| OpenCarrierError::Internal(format!("Failed to serialize cron jobs: {e}")))?;
+        let data = serde_json::to_string_pretty(&metas).map_err(|e| {
+            OpenCarrierError::Internal(format!("Failed to serialize cron jobs: {e}"))
+        })?;
         let tmp_path = self.persist_path.with_extension("json.tmp");
         std::fs::write(&tmp_path, data.as_bytes()).map_err(|e| {
             OpenCarrierError::Internal(format!("Failed to write cron jobs temp file: {e}"))
@@ -185,7 +186,9 @@ impl CronScheduler {
                 }
                 Ok(())
             }
-            None => Err(OpenCarrierError::Internal(format!("Cron job {id} not found"))),
+            None => Err(OpenCarrierError::Internal(format!(
+                "Cron job {id} not found"
+            ))),
         }
     }
 

@@ -225,7 +225,9 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             let status = match p.auth_status {
                 opencarrier_types::model_catalog::AuthStatus::Configured => "configured",
                 opencarrier_types::model_catalog::AuthStatus::Missing => "not configured",
-                opencarrier_types::model_catalog::AuthStatus::NotRequired => "local (no key needed)",
+                opencarrier_types::model_catalog::AuthStatus::NotRequired => {
+                    "local (no key needed)"
+                }
             };
             msg.push_str(&format!(
                 "  {} — {} [{}, {} model(s)]\n",
@@ -1404,7 +1406,8 @@ pub async fn start_channel_bridge_with_config(
     // Feishu/Lark
     if let Some(ref fs_config) = config.feishu {
         if let Some(secret) = read_token(&fs_config.app_secret_env, "Feishu") {
-            let region = opencarrier_channels::feishu::FeishuRegion::parse_region(&fs_config.region);
+            let region =
+                opencarrier_channels::feishu::FeishuRegion::parse_region(&fs_config.region);
             let encrypt_key = fs_config
                 .encrypt_key_env
                 .as_ref()
