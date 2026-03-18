@@ -749,6 +749,8 @@ mod tests {
     #[test]
     fn test_nvidia_provider_no_key_errors() {
         // NVIDIA NIM provider with no API key should error.
+        // Ensure NVIDIA_API_KEY is not set from previous tests
+        std::env::remove_var("NVIDIA_API_KEY");
         let config = DriverConfig {
             provider: "nvidia".to_string(),
             api_key: None,
