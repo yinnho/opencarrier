@@ -9,6 +9,7 @@ pub const USER_AGENT: &str = "opencarrier/0.3.48";
 
 pub mod a2a;
 pub mod agent_loop;
+pub mod cloud_client;
 pub mod apply_patch;
 pub mod audit;
 pub mod auth_cooldown;
