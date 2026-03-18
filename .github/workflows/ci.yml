@@ -62,7 +62,9 @@ jobs:
             librsvg2-dev \
             patchelf
       # Tests that need a display (Tauri) are skipped in headless CI via cfg
-      - run: cargo test --workspace
+      - name: Run tests
+        run: cargo test --workspace
+        timeout-minutes: 10
 
   clippy:
     name: Clippy
