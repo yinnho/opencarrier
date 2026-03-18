@@ -298,6 +298,7 @@ enum Step {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum MigrationPhase {
     Detecting,
     Offer,

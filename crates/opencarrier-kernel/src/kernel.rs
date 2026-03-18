@@ -485,6 +485,7 @@ fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
 }
 
 /// Get the system hostname as a String.
+#[allow(dead_code)]
 fn gethostname() -> Option<String> {
     #[cfg(unix)]
     {
@@ -4234,6 +4235,7 @@ impl OpenCarrierKernel {
     }
 
     /// Get the kernel's strong Arc reference from the stored weak handle.
+    #[allow(dead_code)]
     fn self_arc(self: &Arc<Self>) -> Arc<Self> {
         Arc::clone(self)
     }
