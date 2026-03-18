@@ -64,7 +64,7 @@ jobs:
       # Tests that need a display (Tauri) are skipped in headless CI via cfg
       - name: Run tests
         run: cargo test --workspace
-        timeout-minutes: 10
+        timeout-minutes: 15
 
   clippy:
     name: Clippy
