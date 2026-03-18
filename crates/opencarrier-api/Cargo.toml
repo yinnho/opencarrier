@@ -1,0 +1,44 @@
+[package]
+name = "opencarrier-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HTTP/WebSocket API server for the OpenCarrier Agent OS daemon"
+
+[dependencies]
+opencarrier-types = { path = "../opencarrier-types" }
+opencarrier-kernel = { path = "../opencarrier-kernel" }
+opencarrier-runtime = { path = "../opencarrier-runtime" }
+opencarrier-memory = { path = "../opencarrier-memory" }
+opencarrier-channels = { path = "../opencarrier-channels" }
+opencarrier-skills = { path = "../opencarrier-skills" }
+# Stub crates (to be removed)
+opencarrier-hands = { path = "../opencarrier-hands" }
+opencarrier-extensions = { path = "../opencarrier-extensions" }
+dashmap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+governor = { workspace = true }
+tokio-stream = { workspace = true }
+subtle = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+hex = { workspace = true }
+socket2 = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
