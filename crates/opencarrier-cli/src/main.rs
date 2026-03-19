@@ -911,7 +911,7 @@ fn main() {
         init_tracing_stderr();
     }
 
-    // 默认运行 start 命令
+    // 使用 unwrap_or_else 处理默认命令
     let command = cli.command.unwrap_or_else(|| Commands::Start {
         yolo: false,
         cloud_url: None,
