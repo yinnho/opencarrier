@@ -60,29 +60,19 @@ fn install_ctrlc_handler() {
 }
 
 const AFTER_HELP: &str = "\
-\x1b[1mHint:\x1b[0m Commands suffixed with [*] have subcommands. Run `<command> --help` for details.
+\x1b[1mQuick Start:\x1b[0m
+  yinghe                    直接启动（自动绑定，如未绑定）
+  yinghe --no-bind          启动不绑定（使用本地 LLM 配置）
+  yinghe bind               单独绑定命令
+  yinghe unbind             解除绑定
 
 \x1b[1;36mExamples:\x1b[0m
-  opencarrier init                 Initialize config and data directories
-  opencarrier start                Start the kernel daemon
-  opencarrier tui                  Launch the interactive terminal dashboard
-  opencarrier chat                 Quick chat with the default agent
-  opencarrier agent new coder      Spawn a new agent from a template
-  opencarrier models list          Browse available LLM models
-  opencarrier add github           Install the GitHub integration
-  opencarrier doctor               Run diagnostic health checks
-  opencarrier channel setup        Interactive channel setup wizard
-  opencarrier cron list            List scheduled jobs
-  opencarrier uninstall            Completely remove OpenCarrier from your system
-
-\x1b[1;36mQuick Start:\x1b[0m
-  1. opencarrier init              Set up config + API key
-  2. opencarrier start             Launch the daemon
-  3. opencarrier chat              Start chatting!
+  yinghe agent new coder      创建新的 coder agent
+  yinghe models list          查看可用模型
+  yinghe doctor               运行诊断检查
 
 \x1b[1;36mMore:\x1b[0m
-  Docs:       https://github.com/RightNow-AI/opencarrier
-  Dashboard:  http://127.0.0.1:4200/ (when daemon is running)";
+  Dashboard:  http://127.0.0.1:4200/ (when running)";
 
 /// OpenCarrier — the open-source Agent Operating System.
 #[derive(Parser)]
@@ -104,19 +94,39 @@ struct Cli {
     command: Option<Commands>,
 }
 
+impl Default for Cli {
+    fn default() -> Self {
+        Self {
+            config: None,
+            command: Some(Commands::Start {
+                yolo: false,
+                cloud_url: None,
+                no_bind: false,
+            }),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
+    /// Start the carrier (default command - auto-binds if needed).
+    #[command(name = "start", alias = "s")]
+    Start {
+        /// Auto-approve all tool calls (no confirmation prompts).
+        #[arg(long)]
+        yolo: bool,
+        /// Cloud API URL (defaults to https://carrier.yinnho.cn).
+        #[arg(long)]
+        cloud_url: Option<String>,
+        /// Skip binding check and use local LLM config.
+        #[arg(long)]
+        no_bind: bool,
+    },
     /// Initialize OpenCarrier (create ~/.opencarrier/ and default config).
     Init {
         /// Quick mode: no prompts, just write config + .env (for CI/scripts).
         #[arg(long)]
         quick: bool,
-    },
-    /// Start the OpenCarrier kernel daemon (API server + kernel).
-    Start {
-        /// Auto-approve all tool calls (no confirmation prompts).
-        #[arg(long)]
-        yolo: bool,
     },
     /// Stop the running daemon.
     Stop,
@@ -888,14 +898,9 @@ fn main() {
     // TUI modes must NOT install the Ctrl+C handler (it calls process::exit
     // which bypasses ratatui::restore and leaves the terminal in raw mode).
     // TUI modes also need file-based tracing (stderr output corrupts the TUI).
-    let is_launcher = cli.command.is_none() && std::io::IsTerminal::is_terminal(&std::io::stdout());
-    let is_tui_mode = is_launcher
-        || matches!(cli.command, Some(Commands::Tui))
-        || matches!(cli.command, Some(Commands::Chat { .. }))
-        || matches!(
-            cli.command,
-            Some(Commands::Agent(AgentCommands::Chat { .. }))
-        );
+    let is_tui_mode = matches!(cli.command.as_ref(), Some(Commands::Tui))
+        || matches!(cli.command.as_ref(), Some(Commands::Chat { .. }))
+        || matches!(cli.command.as_ref(), Some(Commands::Agent(AgentCommands::Chat { .. })));
 
     if is_tui_mode {
         init_tracing_file();
@@ -906,34 +911,19 @@ fn main() {
         init_tracing_stderr();
     }
 
-    match cli.command {
-        None => {
-            if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-                // Piped: fall back to text help
-                use clap::CommandFactory;
-                Cli::command().print_help().unwrap();
-                println!();
-                return;
-            }
-            match launcher::run(cli.config.clone()) {
-                launcher::LauncherChoice::GetStarted => cmd_init(false),
-                launcher::LauncherChoice::Chat => cmd_quick_chat(cli.config, None),
-                launcher::LauncherChoice::Dashboard => cmd_dashboard(),
-                launcher::LauncherChoice::DesktopApp => launcher::launch_desktop_app(),
-                launcher::LauncherChoice::TerminalUI => tui::run(cli.config),
-                launcher::LauncherChoice::ShowHelp => {
-                    use clap::CommandFactory;
-                    Cli::command().print_help().unwrap();
-                    println!();
-                }
-                launcher::LauncherChoice::Quit => {}
-            }
-        }
-        Some(Commands::Tui) => tui::run(cli.config),
-        Some(Commands::Init { quick }) => cmd_init(quick),
-        Some(Commands::Start { yolo }) => cmd_start(cli.config, yolo),
-        Some(Commands::Stop) => cmd_stop(),
-        Some(Commands::Agent(sub)) => match sub {
+    // 默认运行 start 命令
+    let command = cli.command.unwrap_or_else(|| Commands::Start {
+        yolo: false,
+        cloud_url: None,
+        no_bind: false,
+    });
+
+    match command {
+        Commands::Tui => tui::run(cli.config),
+        Commands::Init { quick } => cmd_init(quick),
+        Commands::Start { yolo, cloud_url, no_bind } => cmd_start(cli.config, yolo, cloud_url, no_bind),
+        Commands::Stop => cmd_stop(),
+        Commands::Agent(sub) => match sub {
             AgentCommands::New { template } => cmd_agent_new(cli.config, template),
             AgentCommands::Spawn { manifest } => cmd_agent_spawn(cli.config, manifest),
             AgentCommands::List { json } => cmd_agent_list(cli.config, json),
@@ -945,7 +935,7 @@ fn main() {
                 value,
             } => cmd_agent_set(&agent_id, &field, &value),
         },
-        Some(Commands::Workflow(sub)) => match sub {
+        Commands::Workflow(sub) => match sub {
             WorkflowCommands::List => cmd_workflow_list(),
             WorkflowCommands::Create { file } => cmd_workflow_create(file),
             WorkflowCommands::Get { workflow_id } => cmd_workflow_get(&workflow_id),
@@ -955,7 +945,7 @@ fn main() {
             WorkflowCommands::Delete { workflow_id } => cmd_workflow_delete(&workflow_id),
             WorkflowCommands::Run { workflow_id, input } => cmd_workflow_run(&workflow_id, &input),
         },
-        Some(Commands::Trigger(sub)) => match sub {
+        Commands::Trigger(sub) => match sub {
             TriggerCommands::List { agent_id } => cmd_trigger_list(agent_id.as_deref()),
             TriggerCommands::Create {
                 agent_id,
@@ -965,22 +955,22 @@ fn main() {
             } => cmd_trigger_create(&agent_id, &pattern_json, &prompt, max_fires),
             TriggerCommands::Delete { trigger_id } => cmd_trigger_delete(&trigger_id),
         },
-        Some(Commands::Migrate(args)) => cmd_migrate(args),
-        Some(Commands::Skill(sub)) => match sub {
+        Commands::Migrate(args) => cmd_migrate(args),
+        Commands::Skill(sub) => match sub {
             SkillCommands::Install { source } => cmd_skill_install(&source),
             SkillCommands::List => cmd_skill_list(),
             SkillCommands::Remove { name } => cmd_skill_remove(&name),
             SkillCommands::Search { query } => cmd_skill_search(&query),
             SkillCommands::Create => cmd_skill_create(),
         },
-        Some(Commands::Channel(sub)) => match sub {
+        Commands::Channel(sub) => match sub {
             ChannelCommands::List => cmd_channel_list(),
             ChannelCommands::Setup { channel } => cmd_channel_setup(channel.as_deref()),
             ChannelCommands::Test { channel } => cmd_channel_test(&channel),
             ChannelCommands::Enable { channel } => cmd_channel_toggle(&channel, true),
             ChannelCommands::Disable { channel } => cmd_channel_toggle(&channel, false),
         },
-        Some(Commands::Hand(sub)) => match sub {
+        Commands::Hand(sub) => match sub {
             HandCommands::List => cmd_hand_list(),
             HandCommands::Active => cmd_hand_active(),
             HandCommands::Install { path } => cmd_hand_install(&path),
@@ -992,7 +982,7 @@ fn main() {
             HandCommands::Pause { id } => cmd_hand_pause(&id),
             HandCommands::Resume { id } => cmd_hand_resume(&id),
         },
-        Some(Commands::Config(sub)) => match sub {
+        Commands::Config(sub) => match sub {
             ConfigCommands::Show => cmd_config_show(),
             ConfigCommands::Edit => cmd_config_edit(),
             ConfigCommands::Get { key } => cmd_config_get(&key),
@@ -1002,40 +992,40 @@ fn main() {
             ConfigCommands::DeleteKey { provider } => cmd_config_delete_key(&provider),
             ConfigCommands::TestKey { provider } => cmd_config_test_key(&provider),
         },
-        Some(Commands::Chat { agent }) => cmd_quick_chat(cli.config, agent),
-        Some(Commands::Status { json }) => cmd_status(cli.config, json),
-        Some(Commands::Doctor { json, repair }) => cmd_doctor(json, repair),
-        Some(Commands::Dashboard) => cmd_dashboard(),
-        Some(Commands::Completion { shell }) => cmd_completion(shell),
-        Some(Commands::Mcp) => mcp::run_mcp_server(cli.config),
-        Some(Commands::Add { name, key }) => cmd_integration_add(&name, key.as_deref()),
-        Some(Commands::Remove { name }) => cmd_integration_remove(&name),
-        Some(Commands::Integrations { query }) => cmd_integrations_list(query.as_deref()),
-        Some(Commands::Vault(sub)) => match sub {
+        Commands::Chat { agent } => cmd_quick_chat(cli.config, agent),
+        Commands::Status { json } => cmd_status(cli.config, json),
+        Commands::Doctor { json, repair } => cmd_doctor(json, repair),
+        Commands::Dashboard => cmd_dashboard(),
+        Commands::Completion { shell } => cmd_completion(shell),
+        Commands::Mcp => mcp::run_mcp_server(cli.config),
+        Commands::Add { name, key } => cmd_integration_add(&name, key.as_deref()),
+        Commands::Remove { name } => cmd_integration_remove(&name),
+        Commands::Integrations { query } => cmd_integrations_list(query.as_deref()),
+        Commands::Vault(sub) => match sub {
             VaultCommands::Init => cmd_vault_init(),
             VaultCommands::Set { key } => cmd_vault_set(&key),
             VaultCommands::List => cmd_vault_list(),
             VaultCommands::Remove { key } => cmd_vault_remove(&key),
         },
-        Some(Commands::New { kind }) => cmd_scaffold(kind),
+        Commands::New { kind } => cmd_scaffold(kind),
         // ── New commands ────────────────────────────────────────────────
-        Some(Commands::Models(sub)) => match sub {
+        Commands::Models(sub) => match sub {
             ModelsCommands::List { provider, json } => cmd_models_list(provider.as_deref(), json),
             ModelsCommands::Aliases { json } => cmd_models_aliases(json),
             ModelsCommands::Providers { json } => cmd_models_providers(json),
             ModelsCommands::Set { model } => cmd_models_set(model),
         },
-        Some(Commands::Gateway(sub)) => match sub {
-            GatewayCommands::Start => cmd_start(cli.config, false),
+        Commands::Gateway(sub) => match sub {
+            GatewayCommands::Start => cmd_start(cli.config, false, None, false),
             GatewayCommands::Stop => cmd_stop(),
             GatewayCommands::Status { json } => cmd_status(cli.config, json),
         },
-        Some(Commands::Approvals(sub)) => match sub {
+        Commands::Approvals(sub) => match sub {
             ApprovalsCommands::List { json } => cmd_approvals_list(json),
             ApprovalsCommands::Approve { id } => cmd_approvals_respond(&id, true),
             ApprovalsCommands::Reject { id } => cmd_approvals_respond(&id, false),
         },
-        Some(Commands::Cron(sub)) => match sub {
+        Commands::Cron(sub) => match sub {
             CronCommands::List { json } => cmd_cron_list(json),
             CronCommands::Create {
                 agent,
@@ -1047,45 +1037,45 @@ fn main() {
             CronCommands::Enable { id } => cmd_cron_toggle(&id, true),
             CronCommands::Disable { id } => cmd_cron_toggle(&id, false),
         },
-        Some(Commands::Sessions { agent, json }) => cmd_sessions(agent.as_deref(), json),
-        Some(Commands::Logs { lines, follow }) => cmd_logs(lines, follow),
-        Some(Commands::Health { json }) => cmd_health(json),
-        Some(Commands::Security(sub)) => match sub {
+        Commands::Sessions { agent, json } => cmd_sessions(agent.as_deref(), json),
+        Commands::Logs { lines, follow } => cmd_logs(lines, follow),
+        Commands::Health { json } => cmd_health(json),
+        Commands::Security(sub) => match sub {
             SecurityCommands::Status { json } => cmd_security_status(json),
             SecurityCommands::Audit { limit, json } => cmd_security_audit(limit, json),
             SecurityCommands::Verify => cmd_security_verify(),
         },
-        Some(Commands::Memory(sub)) => match sub {
+        Commands::Memory(sub) => match sub {
             MemoryCommands::List { agent, json } => cmd_memory_list(&agent, json),
             MemoryCommands::Get { agent, key, json } => cmd_memory_get(&agent, &key, json),
             MemoryCommands::Set { agent, key, value } => cmd_memory_set(&agent, &key, &value),
             MemoryCommands::Delete { agent, key } => cmd_memory_delete(&agent, &key),
         },
-        Some(Commands::Devices(sub)) => match sub {
+        Commands::Devices(sub) => match sub {
             DevicesCommands::List { json } => cmd_devices_list(json),
             DevicesCommands::Pair => cmd_devices_pair(),
             DevicesCommands::Remove { id } => cmd_devices_remove(&id),
         },
-        Some(Commands::Qr) => cmd_devices_pair(),
-        Some(Commands::Webhooks(sub)) => match sub {
+        Commands::Qr => cmd_devices_pair(),
+        Commands::Webhooks(sub) => match sub {
             WebhooksCommands::List { json } => cmd_webhooks_list(json),
             WebhooksCommands::Create { agent, url } => cmd_webhooks_create(&agent, &url),
             WebhooksCommands::Delete { id } => cmd_webhooks_delete(&id),
             WebhooksCommands::Test { id } => cmd_webhooks_test(&id),
         },
-        Some(Commands::Onboard { quick }) | Some(Commands::Setup { quick }) => cmd_init(quick),
-        Some(Commands::Configure) => cmd_init(false),
-        Some(Commands::Bind { cloud_url, unbind }) => cmd_bind(cloud_url, unbind),
-        Some(Commands::Message { agent, text, json }) => cmd_message(&agent, &text, json),
-        Some(Commands::System(sub)) => match sub {
+        Commands::Onboard { quick } | Commands::Setup { quick } => cmd_init(quick),
+        Commands::Configure => cmd_init(false),
+        Commands::Bind { cloud_url, unbind } => cmd_bind(cloud_url, unbind),
+        Commands::Message { agent, text, json } => cmd_message(&agent, &text, json),
+        Commands::System(sub) => match sub {
             SystemCommands::Info { json } => cmd_system_info(json),
             SystemCommands::Version { json } => cmd_system_version(json),
         },
-        Some(Commands::Reset { confirm }) => cmd_reset(confirm),
-        Some(Commands::Uninstall {
+        Commands::Reset { confirm } => cmd_reset(confirm),
+        Commands::Uninstall {
             confirm,
             keep_config,
-        }) => cmd_uninstall(confirm, keep_config),
+        } => cmd_uninstall(confirm, keep_config),
     }
 }
 
@@ -1570,7 +1560,85 @@ decay_rate = 0.05
     }
 }
 
-fn cmd_start(config: Option<PathBuf>, yolo: bool) {
+/// 检查绑定状态，如果未绑定则自动进入绑定流程
+fn ensure_binding(cloud_url: Option<String>) -> bool {
+    use opencarrier_runtime::cloud_client::CarrierCloudClient;
+
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+    rt.block_on(async {
+        let client = CarrierCloudClient::new(cloud_url.clone());
+
+        // 检查是否已绑定
+        if let Some(binding) = client.get_binding().await {
+            ui::success(&format!(
+                "已绑定 (carrier_id: {})",
+                binding.carrier_id
+            ));
+            return true;
+        }
+
+        // 未绑定，进入绑定流程
+        ui::blank();
+        ui::section("载体绑定");
+        ui::blank();
+        println!("  载体未绑定，将进入配对流程...");
+        println!("  绑定后可使用云端 LLM 代理模式。");
+        ui::blank();
+
+        // 创建配对码
+        let pairing = match client.create_pairing_code().await {
+            Ok(p) => p,
+            Err(e) => {
+                ui::error(&format!("创建配对码失败: {}", e));
+                return false;
+            }
+        };
+
+        // 显示配对码
+        ui::blank();
+        println!("  ╔═══════════════════════════════════════════════════════════╗");
+        println!("  ║                    配对码                                   ║");
+        println!("  ╠═══════════════════════════════════════════════════════════╣");
+        println!("  ║                                                           ║");
+        println!("  ║   {:<53} ║", pairing.pairing_code);
+        println!("  ║                                                           ║");
+        println!(
+            "  ║   有效期: {:<44} ║",
+            format!("{} 分钟", pairing.expires_in / 60)
+        );
+        println!("  ║                                                           ║");
+        println!("  ║   请在 App 上输入此配对码进行绑定                          ║");
+        println!("  ║                                                           ║");
+        println!("  ╚═══════════════════════════════════════════════════════════╝");
+        ui::blank();
+        println!("  等待绑定...");
+
+        // 等待绑定
+        match client
+            .wait_for_binding(&pairing.pairing_code, pairing.expires_in)
+            .await
+        {
+            Ok(binding) => {
+                ui::blank();
+                ui::success(&format!(
+                    "绑定成功! (carrier_id: {})",
+                    binding.carrier_id
+                ));
+                ui::hint("正在启动服务...");
+                true
+            }
+            Err(e) => {
+                ui::blank();
+                ui::error(&format!("绑定失败: {}", e));
+                ui::hint("请重试 'yinghe start'");
+                false
+            }
+        }
+    })
+}
+
+fn cmd_start(config: Option<PathBuf>, yolo: bool, cloud_url: Option<String>, no_bind: bool) {
     if let Some(base) = find_daemon() {
         ui::error_with_fix(
             &format!("Daemon already running at {base}"),
@@ -1581,12 +1649,27 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool) {
 
     ui::banner();
     ui::blank();
-    println!("  Starting daemon...");
+
+    // 检查绑定状态（除非使用 --no-bind 跳过）
+    if !no_bind {
+        if !ensure_binding(cloud_url) {
+            std::process::exit(1);
+        }
+    }
+
+    println!("  启动服务中...");
     ui::blank();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let mut kernel_config = opencarrier_kernel::config::load_config(config.as_deref());
+
+        // 如果没有指定 no_bind，设置默认 provider 为 proxy
+        if !no_bind {
+            kernel_config.default_model.provider = "proxy".to_string();
+            kernel_config.default_model.model = "default".to_string();
+            kernel_config.default_model.api_key_env = String::new();
+        }
         if yolo {
             kernel_config.approval.auto_approve = true;
             kernel_config.approval.apply_shorthands();
