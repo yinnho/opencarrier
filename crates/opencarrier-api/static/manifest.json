@@ -1,6 +1,6 @@
 {
-  "name": "OpenFang Agent OS",
-  "short_name": "OpenFang",
+  "name": "OpenCarrier Agent OS",
+  "short_name": "OpenCarrier",
   "description": "Open-source Agent Operating System",
   "start_url": "/",
   "display": "standalone",

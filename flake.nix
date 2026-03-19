@@ -1,5 +1,5 @@
 {
-  description = "The OpenFang Agent OS";
+  description = "The OpenCarrier Agent OS";
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -27,7 +27,7 @@
           openssl
           pkg-config
         ];
-        rust-project.crates.openfang-desktop.crane.args.buildInputs = with pkgs; [
+        rust-project.crates.opencarrier-desktop.crane.args.buildInputs = with pkgs; [
           atk
           glib
           gtk3
@@ -36,17 +36,17 @@
           webkitgtk_4_1
         ];
 
-        packages.default = self'.packages.openfang-cli;
+        packages.default = self'.packages.opencarrier-cli;
         apps = {
-          openfang-cli = {
-            program = "${self'.packages.openfang-cli}/bin/openfang";
-            meta.description = "CLI tool for the OpenFang Agent OS";
+          opencarrier-cli = {
+            program = "${self'.packages.opencarrier-cli}/bin/opencarrier";
+            meta.description = "CLI tool for the OpenCarrier Agent OS";
           };
-          openfang-desktop = {
-            program = "${self'.packages.openfang-desktop}/bin/openfang-desktop";
-            meta.description = "Native desktop application for the OpenFang Agent OS (Tauri 2.0)";
+          opencarrier-desktop = {
+            program = "${self'.packages.opencarrier-desktop}/bin/opencarrier-desktop";
+            meta.description = "Native desktop application for the OpenCarrier Agent OS (Tauri 2.0)";
           };
-          default = self'.apps.openfang-cli;
+          default = self'.apps.opencarrier-cli;
         };
       };
       flake = {

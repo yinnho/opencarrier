@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# OpenFang installer — works on Linux, macOS, WSL
-# Usage: curl -sSf https://openfang.sh | sh
+# OpenCarrier installer — works on Linux, macOS, WSL
+# Usage: curl -sSf https://opencarrier.sh | sh
 #
 # Environment variables:
-#   OPENFANG_INSTALL_DIR  — custom install directory (default: ~/.openfang/bin)
+#   OPENFANG_INSTALL_DIR  — custom install directory (default: ~/.opencarrier/bin)
 #   OPENFANG_VERSION      — install a specific version tag (default: latest)
 
 set -euo pipefail
 
-REPO="RightNow-AI/openfang"
-INSTALL_DIR="${OPENFANG_INSTALL_DIR:-$HOME/.openfang/bin}"
+REPO="RightNow-AI/opencarrier"
+INSTALL_DIR="${OPENFANG_INSTALL_DIR:-$HOME/.opencarrier/bin}"
 
 detect_platform() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -25,13 +25,13 @@ detect_platform() {
         mingw*|msys*|cygwin*)
             echo ""
             echo "  For Windows, use PowerShell instead:"
-            echo "    irm https://openfang.sh/install.ps1 | iex"
+            echo "    irm https://opencarrier.sh/install.ps1 | iex"
             echo ""
             echo "  Or download the .msi installer from:"
             echo "    https://github.com/$REPO/releases/latest"
             echo ""
             echo "  Or install via cargo:"
-            echo "    cargo install --git https://github.com/$REPO openfang-cli"
+            echo "    cargo install --git https://github.com/$REPO opencarrier-cli"
             exit 1
             ;;
         *) echo "  Unsupported OS: $OS"; exit 1 ;;
@@ -42,7 +42,7 @@ install() {
     detect_platform
 
     echo ""
-    echo "  OpenFang Installer"
+    echo "  OpenCarrier Installer"
     echo "  =================="
     echo ""
 
@@ -58,19 +58,19 @@ install() {
     if [ -z "$VERSION" ]; then
         echo "  Could not determine latest version."
         echo "  Install from source instead:"
-        echo "    cargo install --git https://github.com/$REPO openfang-cli"
+        echo "    cargo install --git https://github.com/$REPO opencarrier-cli"
         exit 1
     fi
 
-    URL="https://github.com/$REPO/releases/download/$VERSION/openfang-$PLATFORM.tar.gz"
+    URL="https://github.com/$REPO/releases/download/$VERSION/opencarrier-$PLATFORM.tar.gz"
     CHECKSUM_URL="$URL.sha256"
 
-    echo "  Installing OpenFang $VERSION for $PLATFORM..."
+    echo "  Installing OpenCarrier $VERSION for $PLATFORM..."
     mkdir -p "$INSTALL_DIR"
 
     # Download to temp
     TMPDIR=$(mktemp -d)
-    ARCHIVE="$TMPDIR/openfang.tar.gz"
+    ARCHIVE="$TMPDIR/opencarrier.tar.gz"
     CHECKSUM_FILE="$TMPDIR/checksum.sha256"
 
     cleanup() { rm -rf "$TMPDIR"; }
@@ -79,7 +79,7 @@ install() {
     if ! curl -fsSL "$URL" -o "$ARCHIVE" 2>/dev/null; then
         echo "  Download failed. The release may not exist for your platform."
         echo "  Install from source instead:"
-        echo "    cargo install --git https://github.com/$REPO openfang-cli"
+        echo "    cargo install --git https://github.com/$REPO opencarrier-cli"
         exit 1
     fi
 
@@ -108,7 +108,7 @@ install() {
 
     # Extract
     tar xzf "$ARCHIVE" -C "$INSTALL_DIR"
-    chmod +x "$INSTALL_DIR/openfang"
+    chmod +x "$INSTALL_DIR/opencarrier"
 
     # Ad-hoc codesign on macOS (prevents SIGKILL on Apple Silicon)
     # Must strip extended attributes (com.apple.quarantine) BEFORE signing,
@@ -116,14 +116,14 @@ install() {
     # rejects it as "Code Signature Invalid" → SIGKILL.
     if [ "$OS" = "darwin" ]; then
         if command -v xattr &>/dev/null; then
-            xattr -cr "$INSTALL_DIR/openfang" 2>/dev/null || true
+            xattr -cr "$INSTALL_DIR/opencarrier" 2>/dev/null || true
         fi
         if command -v codesign &>/dev/null; then
-            if ! codesign --force --sign - "$INSTALL_DIR/openfang"; then
+            if ! codesign --force --sign - "$INSTALL_DIR/opencarrier"; then
                 echo ""
                 echo "  Warning: ad-hoc code signing failed."
                 echo "  On Apple Silicon, the binary may be killed (SIGKILL) by Gatekeeper."
-                echo "  Try manually: xattr -cr $INSTALL_DIR/openfang && codesign --force --sign - $INSTALL_DIR/openfang"
+                echo "  Try manually: xattr -cr $INSTALL_DIR/opencarrier && codesign --force --sign - $INSTALL_DIR/opencarrier"
                 echo ""
             fi
         fi
@@ -158,7 +158,7 @@ install() {
         fi
     fi
 
-    if [ -n "$SHELL_RC" ] && ! grep -q "openfang" "$SHELL_RC" 2>/dev/null; then
+    if [ -n "$SHELL_RC" ] && ! grep -q "opencarrier" "$SHELL_RC" 2>/dev/null; then
         # Determine syntax from the TARGET FILE, not $USER_SHELL — this
         # prevents Bash syntax from ever being written to config.fish even
         # when shell detection mis-identifies the user's shell.
@@ -175,18 +175,18 @@ install() {
     fi
 
     # Verify installation
-    if "$INSTALL_DIR/openfang" --version >/dev/null 2>&1; then
-        INSTALLED_VERSION=$("$INSTALL_DIR/openfang" --version 2>/dev/null || echo "$VERSION")
+    if "$INSTALL_DIR/opencarrier" --version >/dev/null 2>&1; then
+        INSTALLED_VERSION=$("$INSTALL_DIR/opencarrier" --version 2>/dev/null || echo "$VERSION")
         echo ""
-        echo "  OpenFang installed successfully! ($INSTALLED_VERSION)"
+        echo "  OpenCarrier installed successfully! ($INSTALLED_VERSION)"
     else
         echo ""
-        echo "  OpenFang binary installed to $INSTALL_DIR/openfang"
+        echo "  OpenCarrier binary installed to $INSTALL_DIR/opencarrier"
     fi
 
     echo ""
     echo "  Get started:"
-    echo "    openfang init"
+    echo "    opencarrier init"
     echo ""
     echo "  The setup wizard will guide you through provider selection"
     echo "  and configuration."
