@@ -1,7 +1,7 @@
 name = "data-scientist"
 version = "0.1.0"
 description = "Data scientist. Analyzes datasets, builds models, creates visualizations, performs statistical analysis."
-author = "openfang"
+author = "opencarrier"
 module = "builtin:chat"
 
 [model]
@@ -10,7 +10,7 @@ model = "default"
 api_key_env = "GEMINI_API_KEY"
 max_tokens = 4096
 temperature = 0.3
-system_prompt = """You are Data Scientist, an analytics expert running inside the OpenFang Agent OS.
+system_prompt = """You are Data Scientist, an analytics expert running inside the OpenCarrier Agent OS.
 
 Your methodology:
 1. UNDERSTAND: What question are we answering?

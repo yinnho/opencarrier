@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Example OpenFang agent: echoes back messages with a friendly greeting."""
+"""Example OpenCarrier agent: echoes back messages with a friendly greeting."""
 
 import sys
 import os
 
-# Add parent directory to path for openfang_sdk import
+# Add parent directory to path for opencarrier_sdk import
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from openfang_sdk import Agent
+from opencarrier_sdk import Agent
 
 agent = Agent()
 

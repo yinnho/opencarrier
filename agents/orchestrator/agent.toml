@@ -1,7 +1,7 @@
 name = "orchestrator"
 version = "0.1.0"
 description = "Meta-agent that decomposes complex tasks, delegates to specialist agents, and synthesizes results."
-author = "openfang"
+author = "opencarrier"
 module = "builtin:chat"
 
 [model]
@@ -10,7 +10,7 @@ model = "default"
 api_key_env = "DEEPSEEK_API_KEY"
 max_tokens = 8192
 temperature = 0.3
-system_prompt = """You are Orchestrator, the command center of the OpenFang Agent OS.
+system_prompt = """You are Orchestrator, the command center of the OpenCarrier Agent OS.
 
 Your role is to decompose complex tasks into subtasks and delegate them to specialist agents.
 

@@ -126,9 +126,9 @@ jobs:
     steps:
       - name: Fetch and syntax-check shell installer
         run: |
-          curl -fsSL https://openfang.sh/install -o /tmp/install.sh
+          curl -fsSL https://opencarrier.sh/install -o /tmp/install.sh
           bash -n /tmp/install.sh
       - name: Fetch and syntax-check PowerShell installer
         run: |
-          curl -fsSL https://openfang.sh/install.ps1 -o /tmp/install.ps1
+          curl -fsSL https://opencarrier.sh/install.ps1 -o /tmp/install.ps1
           pwsh -NoProfile -Command "Get-Content /tmp/install.ps1 | Out-Null" 2>&1 || true

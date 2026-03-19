@@ -666,7 +666,7 @@ mod tests {
 
         // The test vector was generated for "opencarrier-wecom-check"
         // Actual output depends on the AES key used
-        assert_eq!(plain, "openfang-wecom-check");
+        assert_eq!(plain, "opencarrier-wecom-check");
     }
 
     #[test]

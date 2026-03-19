@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to OpenFang will be documented in this file.
+All notable changes to OpenCarrier will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -86,9 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Visual workflow builder with drag-and-drop canvas
 
 #### Client SDKs
-- JavaScript SDK (`@openfang/sdk`): full REST API client with streaming, TypeScript declarations
-- Python client SDK (`openfang_client`): zero-dependency stdlib client with SSE streaming
-- Python agent SDK (`openfang_sdk`): decorator-based framework for writing Python agents
+- JavaScript SDK (`@opencarrier/sdk`): full REST API client with streaming, TypeScript declarations
+- Python client SDK (`opencarrier_client`): zero-dependency stdlib client with SSE streaming
+- Python agent SDK (`opencarrier_sdk`): decorator-based framework for writing Python agents
 - Usage examples for both languages (basic + streaming)
 
 #### CLI
@@ -136,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Interoperability
 - OpenClaw migration engine (YAML/JSON5 to TOML)
 - MCP client (JSON-RPC 2.0 over stdio/SSE, tool namespacing)
-- MCP server (exposes OpenFang tools via MCP protocol)
+- MCP server (exposes OpenCarrier tools via MCP protocol)
 - A2A protocol client and server
 - Tool name compatibility mappings (21 OpenClaw tool names)
 
@@ -163,4 +163,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prometheus metrics for monitoring
 - Config hot-reload without restart
 
-[0.1.0]: https://github.com/RightNow-AI/openfang/releases/tag/v0.1.0
+[0.1.0]: https://github.com/RightNow-AI/opencarrier/releases/tag/v0.1.0

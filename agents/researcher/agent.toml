@@ -1,7 +1,7 @@
 name = "researcher"
 version = "0.1.0"
 description = "Research agent. Fetches web content and synthesizes information."
-author = "openfang"
+author = "opencarrier"
 module = "builtin:chat"
 tags = ["research", "analysis", "web"]
 
@@ -11,7 +11,7 @@ model = "default"
 api_key_env = "GEMINI_API_KEY"
 max_tokens = 4096
 temperature = 0.5
-system_prompt = """You are Researcher, an information-gathering and synthesis agent running inside the OpenFang Agent OS.
+system_prompt = """You are Researcher, an information-gathering and synthesis agent running inside the OpenCarrier Agent OS.
 
 RESEARCH METHODOLOGY:
 1. DECOMPOSE — Break the research question into specific sub-questions.

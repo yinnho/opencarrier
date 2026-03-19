@@ -1,6 +1,6 @@
 # Troubleshooting & FAQ
 
-Common issues, diagnostics, and answers to frequently asked questions about OpenFang.
+Common issues, diagnostics, and answers to frequently asked questions about OpenCarrier.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ Common issues, diagnostics, and answers to frequently asked questions about Open
 Run the built-in diagnostic tool:
 
 ```bash
-openfang doctor
+opencarrier doctor
 ```
 
 This checks:
@@ -36,7 +36,7 @@ This checks:
 ### Check Daemon Status
 
 ```bash
-openfang status
+opencarrier status
 ```
 
 ### Check Health via API
@@ -48,12 +48,12 @@ curl http://127.0.0.1:4200/api/health/detail  # Requires auth
 
 ### View Logs
 
-OpenFang uses `tracing` for structured logging. Set the log level via environment:
+OpenCarrier uses `tracing` for structured logging. Set the log level via environment:
 
 ```bash
-RUST_LOG=info openfang start          # Default
-RUST_LOG=debug openfang start         # Verbose
-RUST_LOG=openfang=debug openfang start  # Only OpenFang debug, deps at info
+RUST_LOG=info opencarrier start          # Default
+RUST_LOG=debug opencarrier start         # Verbose
+RUST_LOG=opencarrier=debug opencarrier start  # Only OpenCarrier debug, deps at info
 ```
 
 ---
@@ -80,7 +80,7 @@ sudo apt install pkg-config libssl-dev libsqlite3-dev
 sudo dnf install openssl-devel sqlite-devel
 ```
 
-### `openfang` command not found after install
+### `opencarrier` command not found after install
 
 **Fix**: Ensure `~/.cargo/bin` is in your PATH:
 ```bash
@@ -91,7 +91,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 ### Docker container won't start
 
 **Common causes**:
-- No API key provided: `docker run -e GROQ_API_KEY=... ghcr.io/RightNow-AI/openfang`
+- No API key provided: `docker run -e GROQ_API_KEY=... ghcr.io/RightNow-AI/opencarrier`
 - Port already in use: change the port mapping `-p 3001:4200`
 - Permission denied on volume mount: check directory permissions
 
@@ -101,12 +101,12 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 ### "Config file not found"
 
-**Fix**: Run `openfang init` to create the default config:
+**Fix**: Run `opencarrier init` to create the default config:
 ```bash
-openfang init
+opencarrier init
 ```
 
-This creates `~/.openfang/config.toml` with sensible defaults.
+This creates `~/.opencarrier/config.toml` with sensible defaults.
 
 ### "Missing API key" warnings on start
 
@@ -127,7 +127,7 @@ Add to your shell profile to persist across sessions.
 
 Run validation manually:
 ```bash
-openfang config show
+opencarrier config show
 ```
 
 Common issues:
@@ -272,7 +272,7 @@ python -m vllm.entrypoints.openai.api_server --model ...
 
 Check logs for the specific error:
 ```bash
-RUST_LOG=openfang_channels=debug openfang start
+RUST_LOG=opencarrier_channels=debug opencarrier start
 ```
 
 ---
@@ -283,7 +283,7 @@ RUST_LOG=openfang_channels=debug openfang start
 
 **Cause**: The agent is repeatedly calling the same tool with the same parameters.
 
-**Automatic protection**: OpenFang has a built-in loop guard:
+**Automatic protection**: OpenCarrier has a built-in loop guard:
 - **Warn** at 3 identical tool calls
 - **Block** at 5 identical tool calls
 - **Circuit breaker** at 30 total blocked calls (stops the agent)
@@ -333,7 +333,7 @@ tools = ["file_read", "web_fetch", "shell_exec"]  # Must list each tool
 ### Agent spawning fails
 
 **Check**:
-1. TOML manifest is valid: `openfang agent spawn --dry-run manifest.toml`
+1. TOML manifest is valid: `opencarrier agent spawn --dry-run manifest.toml`
 2. LLM provider is configured and has a valid key
 3. Model specified in manifest exists in the catalog
 
@@ -383,7 +383,7 @@ cors_origins = ["http://localhost:5173", "https://your-app.com"]
 
 **Checklist**:
 1. Use `POST /v1/chat/completions` (not `/api/agents/{id}/message`)
-2. Set the model to `openfang:agent-name` (e.g., `openfang:coder`)
+2. Set the model to `opencarrier:agent-name` (e.g., `opencarrier:coder`)
 3. Streaming: set `"stream": true` for SSE responses
 4. Images: use `image_url` with `data:image/png;base64,...` format
 
@@ -396,7 +396,7 @@ cors_origins = ["http://localhost:5173", "https://your-app.com"]
 **Checklist**:
 1. Only one instance can run at a time (single-instance enforcement)
 2. Check if the daemon is already running on the same ports
-3. Try deleting `~/.openfang/daemon.json` and restarting
+3. Try deleting `~/.opencarrier/daemon.json` and restarting
 
 ### White/blank screen in app
 
@@ -428,7 +428,7 @@ cors_origins = ["http://localhost:5173", "https://your-app.com"]
 **Normal startup**: <200ms for the kernel, ~1-2s with channel adapters.
 
 If slower:
-- Check database size (`~/.openfang/data/openfang.db`)
+- Check database size (`~/.opencarrier/data/opencarrier.db`)
 - Reduce the number of enabled channels
 - Check network connectivity (MCP server connections happen at boot)
 
@@ -445,7 +445,7 @@ If slower:
 
 ### How do I switch the default LLM provider?
 
-Edit `~/.openfang/config.toml`:
+Edit `~/.opencarrier/config.toml`:
 ```toml
 [default_model]
 provider = "groq"
@@ -459,18 +459,18 @@ Yes. Each agent can use a different provider via its manifest `[model]` section.
 
 ### How do I add a new channel?
 
-1. Add the channel config to `~/.openfang/config.toml` under `[channels]`
+1. Add the channel config to `~/.opencarrier/config.toml` under `[channels]`
 2. Set the required environment variables (tokens, secrets)
 3. Restart the daemon
 
-### How do I update OpenFang?
+### How do I update OpenCarrier?
 
 ```bash
 # From source
-cd openfang && git pull && cargo install --path crates/openfang-cli
+cd opencarrier && git pull && cargo install --path crates/opencarrier-cli
 
 # Docker
-docker pull ghcr.io/RightNow-AI/openfang:latest
+docker pull ghcr.io/RightNow-AI/opencarrier:latest
 ```
 
 ### Can agents talk to each other?
@@ -479,23 +479,23 @@ Yes. Agents can use the `agent_send`, `agent_spawn`, `agent_find`, and `agent_li
 
 ### Is my data sent to the cloud?
 
-Only LLM API calls go to the provider's servers. All agent data, memory, sessions, and configuration are stored locally in SQLite (`~/.openfang/data/openfang.db`). The OFP wire protocol uses HMAC-SHA256 mutual authentication for P2P communication.
+Only LLM API calls go to the provider's servers. All agent data, memory, sessions, and configuration are stored locally in SQLite (`~/.opencarrier/data/opencarrier.db`). The OFP wire protocol uses HMAC-SHA256 mutual authentication for P2P communication.
 
 ### How do I back up my data?
 
 Back up these files:
-- `~/.openfang/config.toml` (configuration)
-- `~/.openfang/data/openfang.db` (all agent data, memory, sessions)
-- `~/.openfang/skills/` (installed skills)
+- `~/.opencarrier/config.toml` (configuration)
+- `~/.opencarrier/data/opencarrier.db` (all agent data, memory, sessions)
+- `~/.opencarrier/skills/` (installed skills)
 
 ### How do I reset everything?
 
 ```bash
-rm -rf ~/.openfang
-openfang init  # Start fresh
+rm -rf ~/.opencarrier
+opencarrier init  # Start fresh
 ```
 
-### Can I run OpenFang without an internet connection?
+### Can I run OpenCarrier without an internet connection?
 
 Yes, if you use a local LLM provider:
 - **Ollama**: `ollama serve` + `ollama pull llama3.2`
@@ -509,9 +509,9 @@ provider = "ollama"
 model = "llama3.2"
 ```
 
-### What's the difference between OpenFang and OpenClaw?
+### What's the difference between OpenCarrier and OpenClaw?
 
-| Aspect | OpenFang | OpenClaw |
+| Aspect | OpenCarrier | OpenClaw |
 |--------|----------|----------|
 | Language | Rust | Python |
 | Channels | 40 | 38 |
@@ -521,7 +521,7 @@ model = "llama3.2"
 | Binary size | ~30 MB | ~200 MB |
 | Startup | <200 ms | ~3 s |
 
-OpenFang can import OpenClaw configs: `openfang migrate --from openclaw`
+OpenCarrier can import OpenClaw configs: `opencarrier migrate --from openclaw`
 
 ### How do I report a bug or request a feature?
 
@@ -542,16 +542,16 @@ OpenFang can import OpenClaw configs: `openfang migrate --from openclaw`
 ### How do I enable debug logging for a specific crate?
 
 ```bash
-RUST_LOG=openfang_runtime=debug,openfang_channels=info openfang start
+RUST_LOG=opencarrier_runtime=debug,opencarrier_channels=info opencarrier start
 ```
 
-### Can I use OpenFang as a library?
+### Can I use OpenCarrier as a library?
 
 Yes. Each crate is independently usable:
 ```toml
 [dependencies]
-openfang-runtime = { path = "crates/openfang-runtime" }
-openfang-memory = { path = "crates/openfang-memory" }
+opencarrier-runtime = { path = "crates/opencarrier-runtime" }
+opencarrier-memory = { path = "crates/opencarrier-memory" }
 ```
 
-The `openfang-kernel` crate assembles everything, but you can use individual crates for custom integrations.
+The `opencarrier-kernel` crate assembles everything, but you can use individual crates for custom integrations.

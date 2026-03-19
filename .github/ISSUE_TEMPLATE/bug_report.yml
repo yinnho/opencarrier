@@ -25,7 +25,7 @@ body:
       label: Steps to Reproduce
       description: How can we reproduce this?
       placeholder: |
-        1. Run `openfang start`
+        1. Run `opencarrier start`
         2. Open dashboard at http://localhost:4200
         3. Click ...
     validations:
@@ -34,8 +34,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: OpenFang Version
-      description: Output of `openfang -V`
+      label: OpenCarrier Version
+      description: Output of `opencarrier -V`
       placeholder: "0.3.23"
     validations:
       required: true

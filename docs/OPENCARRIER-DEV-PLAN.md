@@ -1,13 +1,13 @@
 # OpenCarrier 开发计划
 
-> 基于 OpenFang 改造，实现 yingheclient 的 Rust 版本
+> 基于 OpenCarrier 改造，实现 yingheclient 的 Rust 版本
 
 ## 项目概述
 
 | 项目 | 语言 | 状态 | 说明 |
 |------|------|------|------|
 | yingheclient | TypeScript | 生产环境 | 保持不动，继续服务 |
-| opencarrier | Rust | 开发中 | 基于OpenFang改造，最终替换 |
+| opencarrier | Rust | 开发中 | 基于OpenCarrier改造，最终替换 |
 
 **目标**: 功能对等的 Rust 实现，命令统一为 `yinghe`
 
@@ -17,7 +17,7 @@
 
 ### yingheclient 功能需求
 
-| 功能 | yingheclient 实现 | OpenFang 对应 | 改造策略 |
+| 功能 | yingheclient 实现 | OpenCarrier 对应 | 改造策略 |
 |------|-------------------|---------------|----------|
 | LLM 调用 | ProxyLLM (云端代理) | 多驱动 | 新增 ProxyLLM driver |
 | 工具执行 | Agent Tools | tool_runner | ✅ 直接复用 |
@@ -26,7 +26,7 @@
 | 连接 | Relay WebSocket | channels | 新增 Relay channel |
 | 会话 | SessionManager | kernel session | ✅ 直接复用 |
 | 调度 | 定时任务 | scheduler | ✅ 直接复用 |
-| 记忆 | memory/ | openfang-memory | ✅ 直接复用 |
+| 记忆 | memory/ | opencarrier-memory | ✅ 直接复用 |
 | 加密 | Ed25519 + AES | crypto | 需要适配 |
 
 ### 命令对照
@@ -52,19 +52,19 @@ yinghe unbind
 ### Crate 重命名
 
 ```
-openfang-runtime    → opencarrier-runtime
-openfang-kernel     → opencarrier-kernel
-openfang-cli        → opencarrier-cli (→ yinghe 二进制)
-openfang-types      → opencarrier-types
-openfang-memory     → opencarrier-memory
-openfang-skills     → opencarrier-skills
-openfang-api        → opencarrier-api
-openfang-channels   → opencarrier-channels
-openfang-wire       → 删除 (不需要 P2P)
-openfang-hands      → 删除 (不需要)
-openfang-extensions → 删除 (不需要)
-openfang-desktop    → 删除 (不需要)
-openfang-migrate    → 删除 (不需要)
+opencarrier-runtime    → opencarrier-runtime
+opencarrier-kernel     → opencarrier-kernel
+opencarrier-cli        → opencarrier-cli (→ yinghe 二进制)
+opencarrier-types      → opencarrier-types
+opencarrier-memory     → opencarrier-memory
+opencarrier-skills     → opencarrier-skills
+opencarrier-api        → opencarrier-api
+opencarrier-channels   → opencarrier-channels
+opencarrier-wire       → 删除 (不需要 P2P)
+opencarrier-hands      → 删除 (不需要)
+opencarrier-extensions → 删除 (不需要)
+opencarrier-desktop    → 删除 (不需要)
+opencarrier-migrate    → 删除 (不需要)
 ```
 
 ### 新增模块
@@ -92,8 +92,8 @@ crates/
 
 ### Phase 0: 项目初始化 (1-2 天) 🔄 进行中
 
-- [x] 复制 OpenFang 代码到 yinnhoos/opencarrier
-- [x] 重命名核心 crates (openfang → opencarrier)
+- [x] 复制 OpenCarrier 代码到 yinnhoos/opencarrier
+- [x] 重命名核心 crates (opencarrier → opencarrier)
 - [x] 更新根 Cargo.toml
 - [x] 删除不需要的 crates (desktop)
 - [x] 创建 stub crates (wire, hands, extensions, migrate)
@@ -201,7 +201,7 @@ yingheclient/src/
 └── sandbox/                  # 沙箱
 ```
 
-### OpenFang 对应模块
+### OpenCarrier 对应模块
 
 ```
 opencarrier/crates/
@@ -283,7 +283,7 @@ opencarrier/crates/
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|----------|
-| OpenFang 代码复杂 | 高 | 先熟悉架构，逐步改造 |
+| OpenCarrier 代码复杂 | 高 | 先熟悉架构，逐步改造 |
 | 协议不兼容 | 高 | 参考 yingheclient 逐字段对齐 |
 | Skill 格式差异 | 中 | 编写转换层 |
 | 编译问题 | 中 | 保持增量编译，及时测试 |

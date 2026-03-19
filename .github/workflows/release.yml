@@ -104,11 +104,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.MAC_NOTARIZE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "OpenFang ${{ github.ref_name }}"
+          releaseName: "OpenCarrier ${{ github.ref_name }}"
           releaseBody: |
             ## What's New
 
-            See the [CHANGELOG](https://github.com/RightNow-AI/openfang/blob/main/CHANGELOG.md) for full details.
+            See the [CHANGELOG](https://github.com/RightNow-AI/opencarrier/blob/main/CHANGELOG.md) for full details.
 
             ## Installation
 
@@ -116,22 +116,22 @@ jobs:
 
             **CLI (Linux/macOS)**:
             ```bash
-            curl -sSf https://openfang.sh | sh
+            curl -sSf https://opencarrier.sh | sh
             ```
 
             **Docker**:
             ```bash
-            docker pull ghcr.io/rightnow-ai/openfang:latest
+            docker pull ghcr.io/rightnow-ai/opencarrier:latest
             ```
 
             **Coming from OpenClaw?**
             ```bash
-            openfang migrate --from openclaw
+            opencarrier migrate --from openclaw
             ```
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
-          projectPath: crates/openfang-desktop
+          projectPath: crates/opencarrier-desktop
           args: ${{ matrix.platform.args }}
 
   # ── CLI Binary (5 platforms) ──────────────────────────────────────────────
@@ -177,33 +177,33 @@ jobs:
           key: cli-${{ matrix.target }}
       - name: Build CLI (cross)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cross build --release --target ${{ matrix.target }} --bin openfang
+        run: cross build --release --target ${{ matrix.target }} --bin opencarrier
       - name: Build CLI
         if: matrix.target != 'aarch64-unknown-linux-gnu'
-        run: cargo build --release --target ${{ matrix.target }} --bin openfang
+        run: cargo build --release --target ${{ matrix.target }} --bin opencarrier
       - name: Ad-hoc codesign CLI binary (macOS)
         if: runner.os == 'macOS'
         run: |
-          xattr -cr target/${{ matrix.target }}/release/openfang || true
-          codesign --force --sign - target/${{ matrix.target }}/release/openfang
+          xattr -cr target/${{ matrix.target }}/release/opencarrier || true
+          codesign --force --sign - target/${{ matrix.target }}/release/opencarrier
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../openfang-${{ matrix.target }}.tar.gz openfang
+          tar czf ../../../opencarrier-${{ matrix.target }}.tar.gz opencarrier
           cd ../../..
-          sha256sum openfang-${{ matrix.target }}.tar.gz > openfang-${{ matrix.target }}.tar.gz.sha256
+          sha256sum opencarrier-${{ matrix.target }}.tar.gz > opencarrier-${{ matrix.target }}.tar.gz.sha256
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/openfang.exe" -DestinationPath "openfang-${{ matrix.target }}.zip"
-          $hash = (Get-FileHash "openfang-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  openfang-${{ matrix.target }}.zip" | Out-File -Encoding ASCII "openfang-${{ matrix.target }}.zip.sha256"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/opencarrier.exe" -DestinationPath "opencarrier-${{ matrix.target }}.zip"
+          $hash = (Get-FileHash "opencarrier-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  opencarrier-${{ matrix.target }}.zip" | Out-File -Encoding ASCII "opencarrier-${{ matrix.target }}.zip.sha256"
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: openfang-${{ matrix.target }}.*
+          files: opencarrier-${{ matrix.target }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -233,7 +233,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/rightnow-ai/openfang:latest
-            ghcr.io/rightnow-ai/openfang:${{ steps.version.outputs.version }}
+            ghcr.io/rightnow-ai/opencarrier:latest
+            ghcr.io/rightnow-ai/opencarrier:${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

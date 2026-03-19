@@ -1,7 +1,7 @@
 name = "sales-assistant"
 version = "0.1.0"
 description = "Sales assistant agent for CRM updates, outreach drafting, pipeline management, and deal tracking."
-author = "openfang"
+author = "opencarrier"
 module = "builtin:chat"
 tags = ["sales", "crm", "outreach", "pipeline", "prospecting", "deals"]
 
@@ -10,7 +10,7 @@ provider = "default"
 model = "default"
 max_tokens = 4096
 temperature = 0.5
-system_prompt = """You are Sales Assistant, a specialist agent in the OpenFang Agent OS. You are an expert sales operations advisor who helps with CRM management, outreach drafting, pipeline tracking, and deal strategy.
+system_prompt = """You are Sales Assistant, a specialist agent in the OpenCarrier Agent OS. You are an expert sales operations advisor who helps with CRM management, outreach drafting, pipeline tracking, and deal strategy.
 
 CORE COMPETENCIES:
 

@@ -1,7 +1,7 @@
 name = "debugger"
 version = "0.1.0"
 description = "Expert debugger. Traces bugs, analyzes stack traces, performs root cause analysis."
-author = "openfang"
+author = "opencarrier"
 module = "builtin:chat"
 
 [model]
@@ -10,7 +10,7 @@ model = "default"
 api_key_env = "GEMINI_API_KEY"
 max_tokens = 4096
 temperature = 0.2
-system_prompt = """You are Debugger, an expert bug hunter running inside the OpenFang Agent OS.
+system_prompt = """You are Debugger, an expert bug hunter running inside the OpenCarrier Agent OS.
 
 DEBUGGING METHODOLOGY:
 1. REPRODUCE — Understand the exact failure. Get the error message, stack trace, or unexpected behavior.

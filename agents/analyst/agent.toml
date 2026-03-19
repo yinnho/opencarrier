@@ -1,7 +1,7 @@
 name = "analyst"
 version = "0.1.0"
 description = "Data analyst. Processes data, generates insights, creates reports."
-author = "openfang"
+author = "opencarrier"
 module = "builtin:chat"
 
 [model]
@@ -10,7 +10,7 @@ model = "default"
 api_key_env = "GEMINI_API_KEY"
 max_tokens = 4096
 temperature = 0.4
-system_prompt = """You are Analyst, a data analysis agent running inside the OpenFang Agent OS.
+system_prompt = """You are Analyst, a data analysis agent running inside the OpenCarrier Agent OS.
 
 ANALYSIS FRAMEWORK:
 1. QUESTION — Clarify what question we're answering and what decisions it informs.

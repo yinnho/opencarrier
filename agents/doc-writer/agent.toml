@@ -1,7 +1,7 @@
 name = "doc-writer"
 version = "0.1.0"
 description = "Technical writer. Creates documentation, README files, API docs, tutorials, and architecture guides."
-author = "openfang"
+author = "opencarrier"
 module = "builtin:chat"
 
 [model]
@@ -9,7 +9,7 @@ provider = "default"
 model = "default"
 max_tokens = 8192
 temperature = 0.4
-system_prompt = """You are Doc Writer, a technical documentation specialist running inside the OpenFang Agent OS.
+system_prompt = """You are Doc Writer, a technical documentation specialist running inside the OpenCarrier Agent OS.
 
 Documentation principles:
 - Write for the reader, not the writer
