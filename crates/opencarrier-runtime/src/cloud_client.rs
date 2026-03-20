@@ -566,14 +566,87 @@ impl CarrierCloudClient {
         Ok(())
     }
 
-    /// 获取或创建 device ID
+    /// 获取或创建 device ID（基于机器指纹，重装后不变）
     async fn get_or_create_device_id(&self) -> String {
+        // 优先从 binding 文件加载（保持兼容性）
         if let Some(binding) = self.load_binding().await {
-            return binding.device_id;
+            if !binding.device_id.is_empty() {
+                return binding.device_id;
+            }
         }
 
-        // 创建新的 device ID
-        uuid::Uuid::new_v4().to_string()
+        // 生成基于机器指纹的 device_id
+        Self::generate_machine_fingerprint()
+    }
+
+    /// 生成机器指纹（跨平台稳定）
+    fn generate_machine_fingerprint() -> String {
+        use sha2::{Digest, Sha256};
+
+        // 尝试获取系统机器 ID
+        let machine_id = Self::get_system_machine_id()
+            .or_else(|| {
+                // 备用：使用主机名 + 用户名 + OS 信息
+                let hostname = std::env::var("HOSTNAME")
+                    .or_else(|_| std::env::var("COMPUTERNAME"))
+                    .unwrap_or_else(|_| "unknown".to_string());
+                let username = std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_else(|_| "unknown".to_string());
+                Some(format!("{}-{}-{}-{}", hostname, username, std::env::consts::OS, std::env::consts::ARCH))
+            })
+            .unwrap_or_else(|| "opencarrier-device".to_string());
+
+        // 使用 SHA256 哈希并取前 16 字节作为 device_id
+        let mut hasher = Sha256::new();
+        hasher.update(machine_id.as_bytes());
+        let result = hasher.finalize();
+        hex::encode(&result[..16]) // 32 字符的十六进制字符串
+    }
+
+    /// 获取系统机器 ID（平台特定）
+    #[cfg(target_os = "macos")]
+    fn get_system_machine_id() -> Option<String> {
+        use std::process::Command;
+        // macOS: 使用 IOPlatformUUID
+        let output = Command::new("ioreg")
+            .args(&["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if line.contains("IOPlatformUUID") {
+                let parts: Vec<&str> = line.split('"').collect();
+                if parts.len() >= 4 {
+                    return Some(parts[3].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// 获取系统机器 ID（Linux）
+    #[cfg(target_os = "linux")]
+    fn get_system_machine_id() -> Option<String> {
+        use std::fs;
+        // Linux: 读取 /etc/machine-id 或 /var/lib/dbus/machine-id
+        fs::read_to_string("/etc/machine-id")
+            .or_else(|_| fs::read_to_string("/var/lib/dbus/machine-id"))
+            .ok()
+            .map(|s| s.trim().to_string())
+    }
+
+    /// 获取系统机器 ID（Windows）
+    #[cfg(target_os = "windows")]
+    fn get_system_machine_id() -> Option<String> {
+        use std::process::Command;
+        // Windows: 使用 wmic 获取 MachineGuid
+        let output = Command::new("wmic")
+            .args(&["csproduct", "get", "uuid"])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout.lines().nth(1).map(|s| s.trim().to_string())
     }
 
     /// 获取设备信息
