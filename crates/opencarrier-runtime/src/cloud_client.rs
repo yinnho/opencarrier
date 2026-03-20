@@ -610,7 +610,7 @@ impl CarrierCloudClient {
         use std::process::Command;
         // macOS: 使用 IOPlatformUUID
         let output = Command::new("ioreg")
-            .args(&["-rd1", "-c", "IOPlatformExpertDevice"])
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
             .output()
             .ok()?;
         let stdout = String::from_utf8_lossy(&output.stdout);
