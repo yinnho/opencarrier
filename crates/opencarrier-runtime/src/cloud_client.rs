@@ -789,10 +789,11 @@ impl CarrierCloudClient {
         );
 
         // 2. 注册 ECDH 公钥到云端（App 绑定需要这个公钥）
-        // 先获取 ECDH 公钥（Base64 编码）
+        // 使用 SPKI DER 格式（与 yingheclient 一致）
+        let ecdh_public_key_spki_der = relay.get_ecdh_public_key_spki_der();
         let ecdh_public_key_base64 = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
-            relay.get_ecdh_public_key(),
+            &ecdh_public_key_spki_der,
         );
         if let Err(e) = self.register_carrier_key(binding.carrier_id, &ecdh_public_key_base64).await {
             warn!("Failed to register ECDH key: {}", e);

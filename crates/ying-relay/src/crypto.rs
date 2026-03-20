@@ -44,6 +44,34 @@ impl EcdhKeyPair {
             private_key: secret.to_bytes().to_vec(),
         }
     }
+
+    /// 获取 SPKI DER 格式的公钥（用于注册到云端）
+    /// SPKI DER = AlgorithmIdentifier (19 bytes) + BIT STRING wrapper (4 bytes) + SEC1 public key (65 bytes)
+    /// 总共 91 字节，Base64 编码后 124 字符
+    pub fn public_key_spki_der(&self) -> Vec<u8> {
+        // SPKI DER 格式对于 P-256:
+        // SEQUENCE (91 bytes)
+        //   SEQUENCE (19 bytes) - AlgorithmIdentifier
+        //     OID ecPublicKey (1.2.840.10045.2.1)
+        //     OID P-256 (1.2.840.10045.3.1.7)
+        //   BIT STRING (68 bytes)
+        //     0x00 (unused bits)
+        //     SEC1 public key (65 bytes, starting with 0x04)
+
+        // SPKI DER 前缀（26 字节）
+        const SPKI_PREFIX: &[u8; 26] = &[
+            0x30, 0x59, // SEQUENCE, 89 bytes
+            0x30, 0x13, // SEQUENCE, 19 bytes (AlgorithmIdentifier)
+            0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, // OID ecPublicKey
+            0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, // OID P-256
+            0x03, 0x42, 0x00, // BIT STRING, 66 bytes, 0 unused bits
+        ];
+
+        let mut spki = Vec::with_capacity(91);
+        spki.extend_from_slice(SPKI_PREFIX);
+        spki.extend_from_slice(&self.public_key);
+        spki
+    }
 }
 
 /// 计算 ECDH 共享密钥
