@@ -8,6 +8,7 @@ mod dotenv;
 mod launcher;
 mod mcp;
 pub mod progress;
+pub mod serve;
 pub mod table;
 mod templates;
 mod tui;
@@ -183,6 +184,8 @@ enum Commands {
     },
     /// Start MCP (Model Context Protocol) server over stdio.
     Mcp,
+    /// Start A2A serve mode (stdin/stdout JSON-RPC for agentd).
+    Serve,
     /// Add an integration (one-click MCP server setup).
     Add {
         /// Integration name (e.g., "github", "slack", "notion").
@@ -998,6 +1001,7 @@ fn main() {
         Commands::Dashboard => cmd_dashboard(),
         Commands::Completion { shell } => cmd_completion(shell),
         Commands::Mcp => mcp::run_mcp_server(cli.config),
+        Commands::Serve => serve::run_serve_mode(cli.config),
         Commands::Add { name, key } => cmd_integration_add(&name, key.as_deref()),
         Commands::Remove { name } => cmd_integration_remove(&name),
         Commands::Integrations { query } => cmd_integrations_list(query.as_deref()),

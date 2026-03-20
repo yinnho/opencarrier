@@ -1,5 +1,19 @@
 # OpenCarrier — Agent Instructions
 
+## Architecture Principles
+
+**App = Brain, Carrier = Hands**
+
+- **App 端**: 记忆管理 + 协调调度（大脑）
+- **Carrier 端**: 任务执行 + 监控修复（双手）
+
+关键原则：
+1. 记忆存储在 App 端，Carrier 不持久化会话记忆
+2. 记忆压缩由 App 发起，Carrier 执行（LLM 生成摘要）
+3. Carrier 负责任务分解、工具调用、自动修复、结果保证
+
+详见: [docs/ARCHITECTURE-PRINCIPLES.md](docs/ARCHITECTURE-PRINCIPLES.md)
+
 ## Project Overview
 OpenCarrier is an open-source Agent Operating System written in Rust (14 crates).
 - Config: `~/.opencarrier/config.toml`
