@@ -14,8 +14,8 @@ use tracing::{debug, error, info, warn};
 use url::Url;
 
 use crate::auth::{create_auth_message, SigningKeyPair};
-use crate::crypto::{compute_shared_secret, decrypt, encrypt, EncryptedPacket};
-use crate::protocol::{AuthResultMessage, ChatRequest, DataMessage, EncryptedPayload, RelayMessage};
+use crate::crypto::{compute_shared_secret, decrypt, encrypt};
+use crate::protocol::{AuthResultMessage, ChatRequest, DataMessage, EncryptedPayload};
 
 /// 默认 Relay 服务器地址
 pub const DEFAULT_RELAY_URL: &str = "wss://relay.yinnho.cn";
@@ -24,12 +24,15 @@ pub const DEFAULT_RELAY_URL: &str = "wss://relay.yinnho.cn";
 const HEARTBEAT_INTERVAL_MS: u64 = 30000;
 
 /// 重连基础延迟（毫秒）
+#[allow(dead_code)]
 const RECONNECT_BASE_DELAY_MS: u64 = 1000;
 
 /// 最大重连延迟（毫秒）
+#[allow(dead_code)]
 const RECONNECT_MAX_DELAY_MS: u64 = 30000;
 
 /// 最大重连次数（0 = 无限制）
+#[allow(dead_code)]
 const MAX_RECONNECT_ATTEMPTS: usize = 0;
 
 /// Relay 客户端事件
@@ -116,6 +119,7 @@ impl RelayClient {
     }
 
     /// 订阅事件
+    #[allow(unused_variables)]
     pub fn subscribe(&self) -> mpsc::UnboundedReceiver<RelayEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
         // 注意：这里需要复制 sender
@@ -160,7 +164,7 @@ impl RelayClient {
             timestamp: chrono::Utc::now().timestamp_millis(),
         };
 
-        let json = serde_json::to_string(&msg)?;
+        let _json = serde_json::to_string(&msg)?;
         // 通过 WebSocket 发送
         // 注意：这里需要实际的 WebSocket 连接
         info!("Sent chat message: {}", request.message_id);
@@ -202,7 +206,7 @@ impl RelayClient {
         );
 
         let auth_json = serde_json::to_string(&auth_msg)?;
-        write.send(Message::Text(auth_json.into())).await?;
+        write.send(Message::Text(auth_json)).await?;
         info!("Auth message sent");
 
         *self.connected.write().await = true;
@@ -226,7 +230,7 @@ impl RelayClient {
                     "timestamp": chrono::Utc::now().timestamp_millis()
                 });
                 if let Ok(json) = serde_json::to_string(&ping) {
-                    let _ = w.send(Message::Text(json.into())).await;
+                    let _ = w.send(Message::Text(json)).await;
                     debug!("Ping sent");
                 }
             }
@@ -262,6 +266,7 @@ impl RelayClient {
     }
 
     /// 重新连接
+    #[allow(dead_code)]
     async fn reconnect(&mut self) {
         loop {
             if !*self.running.read().await {
@@ -359,6 +364,7 @@ impl RelayClient {
     }
 
     /// 处理断开连接
+    #[allow(dead_code)]
     async fn handle_disconnect(&mut self) {
         loop {
             if !*self.running.read().await {

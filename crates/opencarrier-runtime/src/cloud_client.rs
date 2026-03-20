@@ -27,6 +27,13 @@ pub struct BindingInfo {
     pub device_id: String,
 }
 
+/// 签名密钥文件格式（hex 编码，与 yingheclient 兼容）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SigningKeyData {
+    public_key: String,  // hex 编码
+    private_key: String, // hex 编码
+}
+
 /// 配对码响应
 #[derive(Debug, Deserialize)]
 pub struct PairingCodeResponse {
@@ -239,7 +246,14 @@ impl CarrierCloudClient {
 
     /// 创建配对码（用于 App 扫码绑定）
     pub async fn create_pairing_code(&self) -> Result<PairingCodeResponse, CloudError> {
+        // 先获取或创建设备ID并保存（这样在轮询时能保持一致）
         let device_id = self.get_or_create_device_id().await;
+        let info = BindingInfo {
+            token: String::new(),
+            carrier_id: 0,
+            device_id: device_id.clone(),
+        };
+        self.save_binding(&info).await?;
 
         let url = format!("{}/carrier/pairing", self.cloud_url);
         let body = serde_json::json!({
@@ -269,15 +283,19 @@ impl CarrierCloudClient {
             .await
             .map_err(|e| CloudError::Parse(format!("Failed to parse pairing response: {}", e)))?;
 
-        info!(code = %result.pairing_code, expires_in = result.expires_in, "Created pairing code");
+        info!(code = %result.pairing_code, expires_in = result.expires_in, device_id = %result.device_id, "Created pairing code");
 
-        // 保存 device_id 到内存和文件
-        let info = BindingInfo {
-            token: String::new(),  // 尚未绑定，token 为空
-            carrier_id: 0,         // 尚未绑定，carrier_id 为 0
-            device_id: result.device_id.clone(),
-        };
-        self.save_binding(&info).await?;
+        // 注意：result.device_id 可能与发送的 device_id 不同（服务器可能返回新的）
+        // 如果不同，需要更新保存
+        if result.device_id != device_id {
+            let info = BindingInfo {
+                token: String::new(),
+                carrier_id: 0,
+                device_id: result.device_id.clone(),
+            };
+            self.save_binding(&info).await?;
+            info!(device_id = %result.device_id, "Updated device_id from server");
+        }
 
         Ok(result)
     }
@@ -335,24 +353,29 @@ impl CarrierCloudClient {
             let status = self.check_binding().await?;
 
             if status.bound {
+                // 检查 carrier_id 是否有效（必须 > 0）
                 if let (Some(token), Some(carrier_id)) = (status.token, status.carrier_id) {
-                    let device_id = self
-                        .load_binding()
-                        .await
-                        .map(|b| b.device_id)
-                        .unwrap_or_default();
+                    if carrier_id == 0 {
+                        warn!("Server returned carrier_id=0, binding not actually complete");
+                    } else {
+                        let device_id = self
+                            .load_binding()
+                            .await
+                            .map(|b| b.device_id)
+                            .unwrap_or_default();
 
-                    let info = BindingInfo {
-                        token,
-                        carrier_id,
-                        device_id,
-                    };
+                        let info = BindingInfo {
+                            token,
+                            carrier_id,
+                            device_id,
+                        };
 
-                    // 保存到文件
-                    self.save_binding(&info).await?;
+                        // 保存到文件
+                        self.save_binding(&info).await?;
 
-                    info!(carrier_id = info.carrier_id, "Binding completed!");
-                    return Ok(info);
+                        info!(carrier_id = info.carrier_id, "Binding completed!");
+                        return Ok(info);
+                    }
                 }
             }
 
@@ -479,6 +502,70 @@ impl CarrierCloudClient {
         Ok(())
     }
 
+    /// 注册 ECDH 公钥到云端
+    pub async fn register_carrier_key(&self, carrier_id: u64, public_key: &str) -> Result<(), CloudError> {
+        let binding = self.load_binding().await.ok_or(CloudError::NotBound)?;
+
+        let url = format!("{}/relay/carrier/key", self.cloud_url);
+        let body = serde_json::json!({
+            "carrier_id": carrier_id,
+            "public_key": public_key,
+        });
+
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&binding.token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| CloudError::Http(format!("Failed to register carrier key: {}", e)))?;
+
+        let status = resp.status().as_u16();
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(CloudError::Api {
+                status,
+                message: format!("Failed to register carrier key: {}", text),
+            });
+        }
+
+        info!(carrier_id = carrier_id, "ECDH public key registered");
+        Ok(())
+    }
+
+    /// 注册 Ed25519 公钥到云端
+    pub async fn register_ed25519_key(&self, carrier_id: u64, ed25519_public_key_hex: &str) -> Result<(), CloudError> {
+        let binding = self.load_binding().await.ok_or(CloudError::NotBound)?;
+
+        let url = format!("{}/relay/carrier/ed25519key", self.cloud_url);
+        let body = serde_json::json!({
+            "carrier_id": carrier_id,
+            "ed25519_public_key": ed25519_public_key_hex,
+        });
+
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&binding.token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| CloudError::Http(format!("Failed to register Ed25519 key: {}", e)))?;
+
+        let status = resp.status().as_u16();
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(CloudError::Api {
+                status,
+                message: format!("Failed to register Ed25519 key: {}", text),
+            });
+        }
+
+        info!(carrier_id = carrier_id, "Ed25519 public key registered");
+        Ok(())
+    }
+
     /// 获取或创建 device ID
     async fn get_or_create_device_id(&self) -> String {
         if let Some(binding) = self.load_binding().await {
@@ -506,16 +593,93 @@ impl CarrierCloudClient {
 
     // ========== Relay 连接管理 ==========
 
-    /// 获取或生成 Ed25519 签名密钥对
+    /// 获取签名密钥文件路径
+    fn get_signing_key_path() -> PathBuf {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        home.join(".opencarrier").join("signing_key.json")
+    }
+
+    /// 保存签名密钥对到文件
+    async fn save_signing_key_pair(&self, key_pair: &SigningKeyPair) -> Result<(), CloudError> {
+        let path = Self::get_signing_key_path();
+
+        // 确保目录存在
+        if let Some(parent) = path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                return Err(CloudError::Io(format!("Failed to create config dir: {}", e)));
+            }
+        }
+
+        // 保存为 JSON（hex 格式，与 yingheclient 兼容）
+        let data = SigningKeyData {
+            public_key: hex::encode(&key_pair.public_key),
+            private_key: hex::encode(&key_pair.private_key),
+        };
+
+        let content = serde_json::to_string_pretty(&data)
+            .map_err(|e| CloudError::Parse(format!("Failed to serialize signing key: {}", e)))?;
+
+        tokio::fs::write(&path, &content)
+            .await
+            .map_err(|e| CloudError::Io(format!("Failed to write signing key file: {}", e)))?;
+
+        // 设置文件权限（Unix）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+
+        info!(path = %path.display(), "Saved signing key to file");
+        Ok(())
+    }
+
+    /// 从文件加载签名密钥对
+    async fn load_signing_key_pair() -> Option<SigningKeyPair> {
+        let path = Self::get_signing_key_path();
+
+        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+            if let Ok(data) = serde_json::from_str::<SigningKeyData>(&content) {
+                // 从 hex 解码
+                if let (Ok(public_key), Ok(private_key)) = (
+                    hex::decode(&data.public_key),
+                    hex::decode(&data.private_key),
+                ) {
+                    info!("Loaded signing key from file");
+                    // from_bytes 返回 Option，直接返回
+                    return SigningKeyPair::from_bytes(&public_key, &private_key);
+                }
+            }
+        }
+        None
+    }
+
+    /// 获取或生成 Ed25519 签名密钥对（带持久化）
     pub async fn get_or_create_signing_key_pair(&self) -> SigningKeyPair {
+        // 先检查内存缓存
         {
             let guard = self.signing_key_pair.read().await;
             if let Some(ref kp) = *guard {
                 return kp.clone();
             }
         }
+
+        // 尝试从文件加载
+        if let Some(kp) = Self::load_signing_key_pair().await {
+            let mut guard = self.signing_key_pair.write().await;
+            *guard = Some(kp.clone());
+            return kp;
+        }
+
         // 生成新的
         let kp = SigningKeyPair::generate();
+
+        // 保存到文件
+        if let Err(e) = self.save_signing_key_pair(&kp).await {
+            error!("Failed to save signing key: {}", e);
+        }
+
         let mut guard = self.signing_key_pair.write().await;
         *guard = Some(kp.clone());
         kp
@@ -527,14 +691,23 @@ impl CarrierCloudClient {
         key_pair.public_key_base64()
     }
 
+    /// 获取 Ed25519 公钥（Hex 编码，用于注册到云端）
+    pub async fn get_signing_public_key_hex(&self) -> String {
+        let key_pair = self.get_or_create_signing_key_pair().await;
+        hex::encode(&key_pair.public_key)
+    }
+
     /// 启动 Relay WebSocket 连接（使用 Arc<Self> 调用）
     pub async fn start_relay(self: Arc<Self>) -> Result<(), CloudError> {
         let binding = self.load_binding().await.ok_or(CloudError::NotBound)?;
 
-        // 获取或创建签名密钥对
+        // 获取或创建签名密钥对（持久化的）
         let signing_key_pair = self.get_or_create_signing_key_pair().await;
 
-        // 创建 Relay 客户端
+        // 提前获取 Ed25519 公钥 hex（signing_key_pair 会被 move 到 RelayClient）
+        let ed25519_public_key_hex = hex::encode(&signing_key_pair.public_key);
+
+        // 1. 创建 Relay 客户端（会生成 ECDH 密钥对）
         let mut relay = RelayClient::new(
             binding.carrier_id,
             signing_key_pair,
@@ -542,7 +715,31 @@ impl CarrierCloudClient {
             Some(binding.device_id.clone()),
         );
 
-        // 获取事件接收器
+        // 2. 注册 ECDH 公钥到云端（App 绑定需要这个公钥）
+        // 先获取 ECDH 公钥（Base64 编码）
+        let ecdh_public_key_base64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            relay.get_ecdh_public_key(),
+        );
+        if let Err(e) = self.register_carrier_key(binding.carrier_id, &ecdh_public_key_base64).await {
+            warn!("Failed to register ECDH key: {}", e);
+            // 不阻塞，继续尝试
+        }
+
+        // 3. 注册 Ed25519 公钥到云端（hex 格式）
+        // 注意：这个端点在 yingheyun 中不存在，但 yingheclient 也调用它
+        if let Err(e) = self.register_ed25519_key(binding.carrier_id, &ed25519_public_key_hex).await {
+            warn!("Failed to register Ed25519 key: {}", e);
+            // 不阻塞，继续尝试
+        }
+
+        // 4. 上报在线状态
+        if let Err(e) = self.report_online().await {
+            warn!("Failed to report online: {}", e);
+            // 不阻塞，继续
+        }
+
+        // 5. 获取事件接收器（需要在连接前获取）
         let event_rx = relay.take_event_receiver();
 
         // 克隆需要在后台任务中使用的数据
