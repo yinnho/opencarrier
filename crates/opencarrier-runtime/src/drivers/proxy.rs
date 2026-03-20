@@ -271,6 +271,12 @@ impl ProxyDriver {
             }
         }
 
+        // 启动 Relay 连接
+        if let Err(e) = self.start_relay().await {
+            tracing::warn!("Failed to start relay: {}", e);
+            // 不阻塞初始化，relay 连接失败不影响 LLM 功能
+        }
+
         Ok(())
     }
 
@@ -287,6 +293,18 @@ impl ProxyDriver {
     /// Get the cloud client (for binding operations)
     pub fn cloud_client(&self) -> Arc<CarrierCloudClient> {
         self.cloud_client.clone()
+    }
+
+    /// Start the Relay WebSocket connection
+    ///
+    /// This establishes the connection to relay.yinnho.cn for real-time messaging.
+    /// Should be called after binding is complete.
+    pub async fn start_relay(&self) -> Result<(), LlmError> {
+        self.cloud_client
+            .clone()
+            .start_relay()
+            .await
+            .map_err(|e| LlmError::Config(format!("Failed to start relay: {}", e)))
     }
 
     /// Convert internal messages to proxy format (OpenAI-compatible)

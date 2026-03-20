@@ -11,6 +11,7 @@ members = [
     "crates/opencarrier-skills",
     "crates/opencarrier-hands",
     "crates/opencarrier-extensions",
+    "crates/ying-relay",
     "xtask",
 ]
 
@@ -106,6 +107,7 @@ hmac = "0.12"
 hex = "0.4"
 subtle = "2"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
+p256 = { version = "0.13", features = ["ecdh"] }
 rand = "0.8"
 zeroize = { version = "1", features = ["derive"] }
 
@@ -156,6 +158,7 @@ opencarrier-channels = { path = "crates/opencarrier-channels" }
 opencarrier-skills = { path = "crates/opencarrier-skills" }
 opencarrier-hands = { path = "crates/opencarrier-hands" }
 opencarrier-extensions = { path = "crates/opencarrier-extensions" }
+ying-relay = { path = "crates/ying-relay" }
 
 [profile.release]
 lto = true

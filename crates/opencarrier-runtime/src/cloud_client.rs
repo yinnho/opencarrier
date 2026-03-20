@@ -4,6 +4,7 @@
 //! - 配对码绑定流程
 //! - LLM 代理调用
 //! - 载体状态上报
+//! - Relay WebSocket 连接
 //!
 //! 这与 yingheclient 的 CarrierClient 功能相同。
 
@@ -12,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
+use ying_relay::{RelayClient, RelayEvent, SigningKeyPair};
 
 /// Default cloud API base URL
 pub const DEFAULT_CLOUD_API_URL: &str = "https://carrier.yinnho.cn";
@@ -87,6 +89,10 @@ pub struct CarrierCloudClient {
     binding: Arc<RwLock<Option<BindingInfo>>>,
     /// 配置文件路径
     config_path: PathBuf,
+    /// Ed25519 签名密钥对（用于 Relay 认证）
+    signing_key_pair: Arc<RwLock<Option<SigningKeyPair>>>,
+    /// Relay WebSocket 客户端
+    relay_client: Arc<RwLock<Option<RelayClient>>>,
 }
 
 impl CarrierCloudClient {
@@ -104,6 +110,8 @@ impl CarrierCloudClient {
             cloud_url,
             binding: Arc::new(RwLock::new(None)),
             config_path,
+            signing_key_pair: Arc::new(RwLock::new(None)),
+            relay_client: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -215,12 +223,18 @@ impl CarrierCloudClient {
 
     /// 检查是否已绑定
     pub async fn is_bound(&self) -> bool {
-        self.load_binding().await.is_some()
+        self.load_binding()
+            .await
+            .map(|b| b.carrier_id != 0 && !b.token.is_empty())
+            .unwrap_or(false)
     }
 
     /// 获取认证 token
     pub async fn get_token(&self) -> Option<String> {
-        self.load_binding().await.map(|b| b.token)
+        self.load_binding()
+            .await
+            .filter(|b| !b.token.is_empty())
+            .map(|b| b.token)
     }
 
     /// 创建配对码（用于 App 扫码绑定）
@@ -257,11 +271,13 @@ impl CarrierCloudClient {
 
         info!(code = %result.pairing_code, expires_in = result.expires_in, "Created pairing code");
 
-        // 保存 device_id
-        let mut binding = self.binding.write().await;
-        if let Some(ref mut info) = *binding {
-            info.device_id = result.device_id.clone();
-        }
+        // 保存 device_id 到内存和文件
+        let info = BindingInfo {
+            token: String::new(),  // 尚未绑定，token 为空
+            carrier_id: 0,         // 尚未绑定，carrier_id 为 0
+            device_id: result.device_id.clone(),
+        };
+        self.save_binding(&info).await?;
 
         Ok(result)
     }
@@ -486,6 +502,141 @@ impl CarrierCloudClient {
             "arch": std::env::consts::ARCH,
             "version": env!("CARGO_PKG_VERSION"),
         })
+    }
+
+    // ========== Relay 连接管理 ==========
+
+    /// 获取或生成 Ed25519 签名密钥对
+    pub async fn get_or_create_signing_key_pair(&self) -> SigningKeyPair {
+        {
+            let guard = self.signing_key_pair.read().await;
+            if let Some(ref kp) = *guard {
+                return kp.clone();
+            }
+        }
+        // 生成新的
+        let kp = SigningKeyPair::generate();
+        let mut guard = self.signing_key_pair.write().await;
+        *guard = Some(kp.clone());
+        kp
+    }
+
+    /// 获取 Ed25519 公钥（Base64 编码）
+    pub async fn get_signing_public_key_base64(&self) -> String {
+        let key_pair = self.get_or_create_signing_key_pair().await;
+        key_pair.public_key_base64()
+    }
+
+    /// 启动 Relay WebSocket 连接（使用 Arc<Self> 调用）
+    pub async fn start_relay(self: Arc<Self>) -> Result<(), CloudError> {
+        let binding = self.load_binding().await.ok_or(CloudError::NotBound)?;
+
+        // 获取或创建签名密钥对
+        let signing_key_pair = self.get_or_create_signing_key_pair().await;
+
+        // 创建 Relay 客户端
+        let mut relay = RelayClient::new(
+            binding.carrier_id,
+            signing_key_pair,
+            Some(binding.token.clone()),
+            Some(binding.device_id.clone()),
+        );
+
+        // 获取事件接收器
+        let event_rx = relay.take_event_receiver();
+
+        // 克隆需要在后台任务中使用的数据
+        let binding_clone = binding.clone();
+        let client_clone = self.client.clone();
+        let cloud_url_clone = self.cloud_url.clone();
+        let relay_client_arc = self.relay_client.clone();
+        let self_arc = self.clone();
+
+        // 在后台启动事件处理任务
+        tokio::spawn(async move {
+            let mut event_rx = event_rx;
+            while let Some(event) = event_rx.recv().await {
+                match event {
+                    RelayEvent::Connected => {
+                        info!("Relay connected");
+                        // 报告在线状态
+                        let url = format!("{}/relay/carrier/online", cloud_url_clone);
+                        let body = serde_json::json!({
+                            "carrier_id": binding_clone.carrier_id,
+                        });
+                        if let Err(e) = client_clone
+                            .post(&url)
+                            .bearer_auth(&binding_clone.token)
+                            .json(&body)
+                            .send()
+                            .await
+                        {
+                            error!("Failed to report online: {}", e);
+                        }
+                    }
+                    RelayEvent::Disconnected => {
+                        info!("Relay disconnected");
+                    }
+                    RelayEvent::PeerConnected { carrier_id } => {
+                        info!("Peer connected: {}", carrier_id);
+                    }
+                    RelayEvent::PeerDisconnected { message } => {
+                        info!("Peer disconnected: {:?}", message);
+                    }
+                    RelayEvent::JwtRefreshed { jwt } => {
+                        info!("JWT refreshed");
+                        // 更新本地 token
+                        if let Some(mut binding) = self_arc.binding.write().await.take() {
+                            binding.token = jwt;
+                            // 保存到文件
+                            let _ = self_arc.save_binding(&binding).await;
+                        }
+                    }
+                    RelayEvent::Message(msg) => {
+                        info!("Received relay message: {:?}", msg);
+                    }
+                    RelayEvent::Error(err) => {
+                        error!("Relay error: {}", err);
+                    }
+                }
+            }
+        });
+
+        // 先连接
+        relay.connect().await.map_err(|e| CloudError::Http(e.to_string()))?;
+
+        // 存储 relay 客户端
+        let mut client = relay_client_arc.write().await;
+        *client = Some(relay);
+
+        info!("Relay connection started for carrier {}", binding.carrier_id);
+        Ok(())
+    }
+
+    /// 停止 Relay 连接
+    pub async fn stop_relay(&mut self) {
+        // 报告离线
+        let _ = self.report_offline().await;
+
+        // 断开连接
+        {
+            let mut client = self.relay_client.write().await;
+            if let Some(ref mut r) = *client {
+                r.disconnect().await;
+            }
+            *client = None;
+        }
+
+        info!("Relay connection stopped");
+    }
+
+    /// 检查 Relay 是否已连接
+    pub async fn is_relay_connected(&self) -> bool {
+        let client = self.relay_client.read().await;
+        match client.as_ref() {
+            Some(c) => c.is_connected().await,
+            None => false,
+        }
     }
 }
 
