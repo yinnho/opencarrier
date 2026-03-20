@@ -179,9 +179,14 @@ impl RelayClient {
         info!("Shared secret established");
     }
 
-    /// 获取 ECDH 公钥（用于发给 App）
+    /// 获取 ECDH 公钥（用于发给 App，SEC1 格式）
     pub fn get_ecdh_public_key(&self) -> Vec<u8> {
         self.ecdh_key_pair.public_key.clone()
+    }
+
+    /// 获取 ECDH 公钥 SPKI DER 格式（用于注册到云端）
+    pub fn get_ecdh_public_key_spki_der(&self) -> Vec<u8> {
+        self.ecdh_key_pair.public_key_spki_der()
     }
 
     /// 实际执行连接
