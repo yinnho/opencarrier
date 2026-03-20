@@ -42,6 +42,32 @@ impl SigningKeyPair {
         })
     }
 
+    /// 从原始字节创建密钥对（用于从文件加载）
+    pub fn from_bytes(public_key: &[u8], private_key: &[u8]) -> Option<Self> {
+        // 验证公钥长度 (32 bytes for Ed25519)
+        if public_key.len() != 32 {
+            return None;
+        }
+        // 验证私钥长度 (32 bytes for Ed25519)
+        if private_key.len() != 32 {
+            return None;
+        }
+        // 验证密钥对有效
+        let private_array: [u8; 32] = match private_key.try_into() {
+            Ok(arr) => arr,
+            Err(_) => return None,
+        };
+        let signing_key = SigningKey::from_bytes(&private_array);
+        let computed_public_key = signing_key.verifying_key().to_bytes().to_vec();
+        if computed_public_key != public_key {
+            return None;
+        }
+        Some(Self {
+            public_key: public_key.to_vec(),
+            private_key: private_key.to_vec(),
+        })
+    }
+
     /// 获取 Base64 编码的公钥
     pub fn public_key_base64(&self) -> String {
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.public_key)
