@@ -77,8 +77,8 @@ fn test_jsonrpc_error_codes() {
     let internal_error: i32 = -32603;
 
     // All codes are in the -32xxx range
-    assert!(parse_error >= -32799 && parse_error <= -32700);
-    assert!(invalid_request >= -32699 && invalid_request <= -32600);
+    assert!((-32799..=-32700).contains(&parse_error));
+    assert!((-32699..=-32600).contains(&invalid_request));
     assert!(method_not_found == -32601);
     assert!(invalid_params == -32602);
     assert!(internal_error == -32603);
