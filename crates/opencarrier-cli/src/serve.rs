@@ -14,14 +14,22 @@
 //! - listAgents: List all agents
 //! - compactMemory: Compress memory (App initiates, Carrier executes)
 //! - bye: Close connection (notification, no response)
+//!
+//! yingheclient compatibility:
+//! - Also supports direct ChatRequest format (type: "chat" | "message")
+//! - Routes based on conversationType, chatType, conversationId
+//! - Session persistence with conversation history
 
 use opencarrier_kernel::OpenCarrierKernel;
+use opencarrier_memory::yinghe_session::YingheSessionManager;
 use opencarrier_runtime::a2a::{AgentCapabilities, AgentCard, AgentSkill};
 use opencarrier_types::agent::AgentId;
+use opencarrier_types::yinghe::{ChatRequest, ChatResponse, ErrorResponse};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
 
 // ---------------------------------------------------------------------------
@@ -98,6 +106,9 @@ pub fn run_serve_mode(config_path: Option<std::path::PathBuf>) {
         }
     };
 
+    // Initialize yingheclient session manager for conversation persistence
+    let session_manager = init_session_manager(&kernel);
+
     eprintln!("[serve] Kernel booted, ready for requests");
 
     let stdin = io::stdin();
@@ -122,13 +133,19 @@ pub fn run_serve_mode(config_path: Option<std::path::PathBuf>) {
 
                 debug!("[serve] Received: {}", &trimmed[..trimmed.len().min(200)]);
 
-                // Parse and handle request
-                let response = match serde_json::from_str::<JsonRpcRequest>(trimmed) {
-                    Ok(req) => handle_request(&kernel, &rt, &req),
-                    Err(e) => {
-                        // Parse error
-                        error!("[serve] Parse error: {e}");
-                        Some(jsonrpc_error(None, PARSE_ERROR, &format!("Parse error: {e}")))
+                // Try to detect message format and route accordingly
+                let response = if is_yingheclient_format(trimmed) {
+                    // yingheclient ChatRequest format
+                    handle_yingheclient_message(&kernel, &rt, &session_manager, trimmed)
+                } else {
+                    // JSON-RPC 2.0 format
+                    match serde_json::from_str::<JsonRpcRequest>(trimmed) {
+                        Ok(req) => handle_request(&kernel, &rt, &req),
+                        Err(e) => {
+                            // Parse error
+                            error!("[serve] Parse error: {e}");
+                            Some(jsonrpc_error(None, PARSE_ERROR, &format!("Parse error: {e}")))
+                        }
                     }
                 };
 
@@ -136,6 +153,7 @@ pub fn run_serve_mode(config_path: Option<std::path::PathBuf>) {
                 if let Some(resp) = response {
                     let resp_json = match resp {
                         Response::Success(r) => serde_json::to_string(&r),
+                        Response::Yingheclient(r) => serde_json::to_string(&r),
                         Response::Error(r) => serde_json::to_string(&r),
                     };
 
@@ -169,7 +187,121 @@ pub fn run_serve_mode(config_path: Option<std::path::PathBuf>) {
 /// Response type (success or error)
 enum Response {
     Success(JsonRpcResponse),
+    Yingheclient(serde_json::Value),
     Error(JsonRpcErrorResponse),
+}
+
+// ---------------------------------------------------------------------------
+// yingheclient Protocol Detection and Handling
+// ---------------------------------------------------------------------------
+
+/// Check if the message is in yingheclient ChatRequest format.
+///
+/// yingheclient format has `type: "chat" | "message"` with conversation routing fields.
+fn is_yingheclient_format(json: &str) -> bool {
+    // Quick check for yingheclient format indicators
+    if !json.contains("conversationType") && !json.contains("conversation_type") {
+        return false;
+    }
+
+    // Try to parse and check for required fields
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json) {
+        let msg_type = value.get("type").and_then(|v| v.as_str());
+        matches!(msg_type, Some("chat") | Some("message"))
+    } else {
+        false
+    }
+}
+
+/// Handle yingheclient-format message with session persistence
+fn handle_yingheclient_message(
+    kernel: &Arc<OpenCarrierKernel>,
+    rt: &tokio::runtime::Runtime,
+    session_manager: &YingheSessionManager,
+    json: &str,
+) -> Option<Response> {
+    match serde_json::from_str::<ChatRequest>(json) {
+        Ok(request) => {
+            info!(
+                "[serve] yingheclient request: conversationId={}, type={:?}, chatType={:?}",
+                request.conversation_id, request.conversation_type, request.chat_type
+            );
+
+            // Get message content
+            let message = request.text_content();
+            if message.is_empty() {
+                let error = ErrorResponse::for_request(&request, "Empty message");
+                return Some(Response::Yingheclient(serde_json::to_value(error).unwrap_or_default()));
+            }
+
+            // Group chat: check for @ mention or implicit mention
+            if request.is_group() && !request.mentioned && !request.implicit_mention {
+                // In group chat without mention, just acknowledge silently
+                debug!(
+                    "[serve] Group message without mention, skipping response (conversationId={})",
+                    request.conversation_id
+                );
+                // Store message in session for context, but don't respond
+                if let Err(e) = session_manager.add_user_message(&request) {
+                    error!("[serve] Failed to store group message: {e}");
+                }
+                // Return None to indicate no response should be sent
+                return None;
+            }
+
+            // Build message context with sender info for group chats
+            let context_message = if request.is_group() {
+                let sender_name = request.sender_name.as_deref().unwrap_or("Someone");
+                format!("[{}]: {}", sender_name, message)
+            } else {
+                message.to_string()
+            };
+
+            // Store user message in session
+            if let Err(e) = session_manager.add_user_message(&request) {
+                error!("[serve] Failed to store user message: {e}");
+                // Continue anyway - session storage is not critical
+            }
+
+            // Get or create default agent
+            let agent_id = kernel
+                .registry
+                .list()
+                .first()
+                .map(|e| e.id)
+                .unwrap_or_default();
+
+            // Send message to agent (with group context if applicable)
+            match rt.block_on(kernel.send_message(agent_id, &context_message)) {
+                Ok(result) => {
+                    let response = ChatResponse::for_request(&request, result.response.clone())
+                        .with_metadata(opencarrier_types::yinghe::ResponseMetadata {
+                            rounds: Some(result.iterations),
+                            ..Default::default()
+                        });
+
+                    // Store assistant response in session
+                    if let Err(e) = session_manager.add_assistant_message(&request, &response) {
+                        error!("[serve] Failed to store assistant message: {e}");
+                    }
+
+                    Some(Response::Yingheclient(
+                        serde_json::to_value(response).unwrap_or_default(),
+                    ))
+                }
+                Err(e) => {
+                    error!("[serve] yingheclient send_message error: {e}");
+                    let error = ErrorResponse::for_request(&request, format!("Error: {e}"));
+                    Some(Response::Yingheclient(serde_json::to_value(error).unwrap_or_default()))
+                }
+            }
+        }
+        Err(e) => {
+            error!("[serve] yingheclient parse error: {e}");
+            let error = ErrorResponse::new(format!("Parse error: {e}"));
+            Some(Response::Yingheclient(serde_json::to_value(error).unwrap_or_default()))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +579,66 @@ fn jsonrpc_error(id: Option<Value>, code: i32, message: &str) -> Response {
             data: None,
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// Session Manager Initialization
+// ---------------------------------------------------------------------------
+
+/// Initialize yingheclient session manager.
+///
+/// Creates a SQLite connection for session persistence and wraps it with
+/// the yingheclient-compatible session manager.
+fn init_session_manager(kernel: &OpenCarrierKernel) -> YingheSessionManager {
+    // Get data directory (default to ~/.opencarrier/data)
+    let data_dir = dirs::home_dir()
+        .map(|h| h.join(".opencarrier").join("data"))
+        .unwrap_or_else(|| std::path::PathBuf::from("./data"));
+
+    let db_path = data_dir.join("yinghe_sessions.db");
+
+    // Ensure data directory exists
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        error!("[serve] Failed to create data directory: {e}");
+    }
+
+    // Open SQLite connection
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("[serve] Failed to open session database at {:?}: {e}", db_path);
+            // Fall back to in-memory database
+            Connection::open_in_memory().expect("Failed to create in-memory database")
+        }
+    };
+
+    // Run migrations for yingheclient session tables
+    if let Err(e) = opencarrier_memory::migration::run_migrations(&conn) {
+        error!("[serve] Failed to run session migrations: {e}");
+    }
+
+    // Get default agent ID from kernel
+    let default_agent_id = kernel
+        .registry
+        .list()
+        .first()
+        .map(|e| e.id)
+        .unwrap_or_else(opencarrier_types::agent::AgentId::new);
+
+    match YingheSessionManager::new(Arc::new(Mutex::new(conn)), default_agent_id) {
+        Ok(mgr) => {
+            info!("[serve] yingheclient session manager initialized at {:?}", db_path);
+            mgr
+        }
+        Err(e) => {
+            error!("[serve] Failed to initialize session manager: {e}");
+            // Create with in-memory fallback
+            let mem_conn = Connection::open_in_memory().expect("Failed to create in-memory database");
+            opencarrier_memory::migration::run_migrations(&mem_conn).ok();
+            YingheSessionManager::new(Arc::new(Mutex::new(mem_conn)), default_agent_id)
+                .expect("Failed to create fallback session manager")
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

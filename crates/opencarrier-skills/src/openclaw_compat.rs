@@ -20,14 +20,47 @@ use tracing::info;
 // ---------------------------------------------------------------------------
 
 /// YAML frontmatter from a SKILL.md file.
+///
+/// Supports both OpenClaw and yingheclient formats:
+///
+/// **OpenClaw format:**
+/// ```yaml
+/// name: GitHub Helper
+/// description: Helps with GitHub operations
+/// metadata:
+///   openclaw:
+///     commands:
+///       - name: create_pr
+///         description: Create a pull request
+/// ```
+///
+/// **yingheclient format (simplified):**
+/// ```yaml
+/// id: stock-query
+/// name: 股票查询
+/// description: 查询股票实时价格
+/// keywords:
+///   - 股票
+///   - 股价
+/// tools:
+///   - fetch
+///   - bash
+/// ```
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SkillMdFrontmatter {
+    /// Skill ID (used by yingheclient format).
+    pub id: String,
     /// Skill display name.
     pub name: String,
     /// Short description.
     pub description: String,
-    /// Nested metadata block.
+    /// Keywords for skill matching (used by yingheclient format).
+    pub keywords: Vec<String>,
+    /// Tool names as simple strings (yingheclient simplified format).
+    /// These are converted to tool requirements without full schema.
+    pub tools: Vec<String>,
+    /// Nested metadata block (OpenClaw format).
     pub metadata: SkillMdMetadata,
 }
 
@@ -161,18 +194,30 @@ pub fn parse_skillmd_str(content: &str) -> Result<(SkillMdFrontmatter, String), 
 ///
 /// Most SKILL.md skills are prompt-only (no executable code). The Markdown body
 /// is stored as `prompt_context` and injected into the LLM's system prompt.
+///
+/// Supports both OpenClaw and yingheclient formats.
 pub fn convert_skillmd(dir: &Path) -> Result<ConvertedSkillMd, SkillError> {
     let skillmd_path = dir.join("SKILL.md");
     let (frontmatter, body) = parse_skillmd(&skillmd_path)?;
 
-    let skill_name = if frontmatter.name.is_empty() {
+    // Determine skill name: name > id > directory name
+    let skill_name = if !frontmatter.name.is_empty() {
+        frontmatter.name.clone()
+    } else if !frontmatter.id.is_empty() {
+        frontmatter.id.clone()
+    } else {
         // Derive name from directory
         dir.file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unnamed-skill")
             .to_string()
+    };
+
+    // Use id as skill identifier if provided (for yingheclient compatibility)
+    let skill_id = if !frontmatter.id.is_empty() {
+        frontmatter.id.clone()
     } else {
-        frontmatter.name.clone()
+        skill_name.clone()
     };
 
     let mut tool_translations = Vec::new();
@@ -180,6 +225,36 @@ pub fn convert_skillmd(dir: &Path) -> Result<ConvertedSkillMd, SkillError> {
     let mut required_env = Vec::new();
     let mut tools = Vec::new();
 
+    // Process yingheclient simplified format: tools as string array
+    for tool_name in &frontmatter.tools {
+        if tool_name.is_empty() {
+            continue;
+        }
+
+        // Translate tool name if it's a known name
+        let opencarrier_name = if let Some(mapped) = tool_compat::map_tool_name(tool_name) {
+            tool_translations.push((tool_name.clone(), mapped.to_string()));
+            mapped.to_string()
+        } else if tool_compat::is_known_opencarrier_tool(tool_name) {
+            tool_name.clone()
+        } else {
+            // Unknown tool — keep original name, normalize to snake_case
+            tool_name.replace('-', "_")
+        };
+
+        tools.push(SkillToolDef {
+            name: opencarrier_name,
+            description: format!("{} tool", tool_name),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string", "description": "Input for the tool" }
+                }
+            }),
+        });
+    }
+
+    // Process OpenClaw format: metadata.openclaw.commands
     if let Some(ref meta) = frontmatter.metadata.openclaw {
         // Extract system requirements
         if let Some(ref requires) = meta.requires {
@@ -221,6 +296,14 @@ pub fn convert_skillmd(dir: &Path) -> Result<ConvertedSkillMd, SkillError> {
         }
     }
 
+    // Build tags from keywords (yingheclient format)
+    let mut tags = vec!["openclaw-compat".to_string(), "prompt-only".to_string()];
+    for kw in &frontmatter.keywords {
+        if !kw.is_empty() {
+            tags.push(kw.clone());
+        }
+    }
+
     // Determine runtime: if no executable tools, this is prompt-only
     let runtime_type = if tools.is_empty() {
         SkillRuntime::PromptOnly
@@ -232,12 +315,12 @@ pub fn convert_skillmd(dir: &Path) -> Result<ConvertedSkillMd, SkillError> {
 
     let manifest = SkillManifest {
         skill: SkillMeta {
-            name: skill_name,
+            name: skill_id, // Use skill_id (from id or name) for unique identification
             version: "0.1.0".to_string(),
             description: frontmatter.description.clone(),
             author: String::new(),
             license: String::new(),
-            tags: vec!["openclaw-compat".to_string(), "prompt-only".to_string()],
+            tags,
         },
         runtime: SkillRuntimeConfig {
             runtime_type,
@@ -703,5 +786,55 @@ metadata:
         let content = "---\ndescription: No name field\n---\n# Body";
         let converted = convert_skillmd_str("my-hint", content).unwrap();
         assert_eq!(converted.manifest.skill.name, "my-hint");
+    }
+
+    #[test]
+    fn test_yingheclient_simplified_format() {
+        // Test yingheclient's simplified SKILL.md format
+        let dir = TempDir::new().unwrap();
+        let content = r#"---
+id: stock-query
+name: 股票查询
+description: 查询股票实时价格
+keywords:
+  - 股票
+  - 股价
+  - stock
+tools:
+  - fetch
+  - bash
+---
+# 股票查询
+
+当用户询问股票价格时，按以下步骤操作：
+1. 识别股票代码
+2. 调用 fetch 工具获取数据"#;
+
+        std::fs::write(dir.path().join("SKILL.md"), content).unwrap();
+        let converted = convert_skillmd(dir.path()).unwrap();
+
+        // ID should be used as skill name for identification
+        assert_eq!(converted.manifest.skill.name, "stock-query");
+        // Keywords should be added to tags
+        assert!(converted.manifest.skill.tags.contains(&"股票".to_string()));
+        assert!(converted.manifest.skill.tags.contains(&"stock".to_string()));
+        // Tools should be parsed from the simplified format
+        assert!(!converted.manifest.tools.provided.is_empty());
+        assert!(converted.prompt_context.contains("股票价格"));
+    }
+
+    #[test]
+    fn test_yingheclient_id_fallback_to_name() {
+        // If id is not provided, use name as identifier
+        let dir = TempDir::new().unwrap();
+        let content = r#"---
+name: My Skill
+description: Test
+---
+# Body"#;
+
+        std::fs::write(dir.path().join("SKILL.md"), content).unwrap();
+        let converted = convert_skillmd(dir.path()).unwrap();
+        assert_eq!(converted.manifest.skill.name, "My Skill");
     }
 }

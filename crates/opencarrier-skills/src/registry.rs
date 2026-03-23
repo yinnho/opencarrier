@@ -8,6 +8,67 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+/// Resolve skills directory with yingheclient compatibility.
+///
+/// Priority:
+/// 1. Environment variable `YINGHE_SKILLS_DIR` (yingheclient compat)
+/// 2. Environment variable `OPENCARRIER_SKILLS_DIR` (OpenCarrier native)
+/// 3. `skills` directory next to the executable (yingheclient compat)
+/// 4. Default: `~/.opencarrier/skills` or `~/.yinghe/skills`
+pub fn resolve_skills_dir() -> PathBuf {
+    // 1. yingheclient environment variable
+    if let Ok(dir) = std::env::var("YINGHE_SKILLS_DIR") {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            let path = PathBuf::from(trimmed);
+            if path.exists() {
+                return path;
+            }
+        }
+    }
+
+    // 2. OpenCarrier environment variable
+    if let Ok(dir) = std::env::var("OPENCARRIER_SKILLS_DIR") {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            let path = PathBuf::from(trimmed);
+            if path.exists() {
+                return path;
+            }
+        }
+    }
+
+    // 3. Executable sibling directory
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let sibling = exe_dir.join("skills");
+            if sibling.exists() {
+                return sibling;
+            }
+        }
+    }
+
+    // 4. Default directories
+    if let Some(home) = dirs::home_dir() {
+        // Prefer opencarrier dir, but fall back to yinghe for compatibility
+        let opencarrier_dir = home.join(".opencarrier").join("skills");
+        if opencarrier_dir.exists() {
+            return opencarrier_dir;
+        }
+
+        let yinghe_dir = home.join(".yinghe").join("skills");
+        if yinghe_dir.exists() {
+            return yinghe_dir;
+        }
+
+        // Return opencarrier dir even if it doesn't exist (will be created)
+        return opencarrier_dir;
+    }
+
+    // Fallback to current directory
+    PathBuf::from("skills")
+}
+
 /// Registry of installed skills.
 #[derive(Debug, Default)]
 pub struct SkillRegistry {
@@ -550,5 +611,37 @@ input_schema = {{ type = "object" }}
 
         // Verify that skill.toml was written
         assert!(skill_dir.join("skill.toml").exists());
+    }
+
+    #[test]
+    fn test_resolve_skills_dir_env_priority() {
+        // Test environment variable priority in a single test to avoid race conditions
+
+        // Clear all env vars first
+        std::env::remove_var("YINGHE_SKILLS_DIR");
+        std::env::remove_var("OPENCARRIER_SKILLS_DIR");
+
+        // Test YINGHE_SKILLS_DIR has highest priority
+        let temp_dir1 = TempDir::new().unwrap();
+        let yinghe_path = temp_dir1.path().join("yinghe_skills");
+        std::fs::create_dir_all(&yinghe_path).unwrap();
+
+        let temp_dir2 = TempDir::new().unwrap();
+        let oc_path = temp_dir2.path().join("oc_skills");
+        std::fs::create_dir_all(&oc_path).unwrap();
+
+        // Set both env vars - YINGHE should win
+        std::env::set_var("YINGHE_SKILLS_DIR", &yinghe_path);
+        std::env::set_var("OPENCARRIER_SKILLS_DIR", &oc_path);
+        let resolved = resolve_skills_dir();
+        std::env::remove_var("YINGHE_SKILLS_DIR");
+
+        assert_eq!(resolved, yinghe_path, "YINGHE_SKILLS_DIR should have priority");
+
+        // Now test OPENCARRIER_SKILLS_DIR when YINGHE is not set
+        let resolved = resolve_skills_dir();
+        std::env::remove_var("OPENCARRIER_SKILLS_DIR");
+
+        assert_eq!(resolved, oc_path, "OPENCARRIER_SKILLS_DIR should be used as fallback");
     }
 }
