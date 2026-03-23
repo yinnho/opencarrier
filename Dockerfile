@@ -13,7 +13,7 @@ ARG LTO=true
 ARG CODEGEN_UNITS=1
 ENV CARGO_PROFILE_RELEASE_LTO=${LTO} \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CODEGEN_UNITS}
-RUN cargo build --release --bin opencarrier
+RUN cargo build --release --bin yinghe
 
 FROM rust:1-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,10 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/opencarrier /usr/local/bin/
+COPY --from=builder /build/target/release/yinghe /usr/local/bin/
 COPY --from=builder /build/agents /opt/opencarrier/agents
 EXPOSE 4200
 VOLUME /data
 ENV OPENFANG_HOME=/data
-ENTRYPOINT ["opencarrier"]
+ENTRYPOINT ["yinghe"]
 CMD ["start"]
