@@ -177,33 +177,33 @@ jobs:
           key: cli-${{ matrix.target }}
       - name: Build CLI (cross)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cross build --release --target ${{ matrix.target }} --bin opencarrier
+        run: cross build --release --target ${{ matrix.target }} --bin yinghe
       - name: Build CLI
         if: matrix.target != 'aarch64-unknown-linux-gnu'
-        run: cargo build --release --target ${{ matrix.target }} --bin opencarrier
+        run: cargo build --release --target ${{ matrix.target }} --bin yinghe
       - name: Ad-hoc codesign CLI binary (macOS)
         if: runner.os == 'macOS'
         run: |
-          xattr -cr target/${{ matrix.target }}/release/opencarrier || true
-          codesign --force --sign - target/${{ matrix.target }}/release/opencarrier
+          xattr -cr target/${{ matrix.target }}/release/yinghe || true
+          codesign --force --sign - target/${{ matrix.target }}/release/yinghe
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../opencarrier-${{ matrix.target }}.tar.gz opencarrier
+          tar czf ../../../yinghe-${{ matrix.target }}.tar.gz yinghe
           cd ../../..
-          sha256sum opencarrier-${{ matrix.target }}.tar.gz > opencarrier-${{ matrix.target }}.tar.gz.sha256
+          sha256sum yinghe-${{ matrix.target }}.tar.gz > yinghe-${{ matrix.target }}.tar.gz.sha256
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/opencarrier.exe" -DestinationPath "opencarrier-${{ matrix.target }}.zip"
-          $hash = (Get-FileHash "opencarrier-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  opencarrier-${{ matrix.target }}.zip" | Out-File -Encoding ASCII "opencarrier-${{ matrix.target }}.zip.sha256"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/yinghe.exe" -DestinationPath "yinghe-${{ matrix.target }}.zip"
+          $hash = (Get-FileHash "yinghe-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  yinghe-${{ matrix.target }}.zip" | Out-File -Encoding ASCII "yinghe-${{ matrix.target }}.zip.sha256"
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: opencarrier-${{ matrix.target }}.*
+          files: yinghe-${{ matrix.target }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
