@@ -903,7 +903,10 @@ fn main() {
     // TUI modes also need file-based tracing (stderr output corrupts the TUI).
     let is_tui_mode = matches!(cli.command.as_ref(), Some(Commands::Tui))
         || matches!(cli.command.as_ref(), Some(Commands::Chat { .. }))
-        || matches!(cli.command.as_ref(), Some(Commands::Agent(AgentCommands::Chat { .. })));
+        || matches!(
+            cli.command.as_ref(),
+            Some(Commands::Agent(AgentCommands::Chat { .. }))
+        );
 
     if is_tui_mode {
         init_tracing_file();
@@ -924,7 +927,11 @@ fn main() {
     match command {
         Commands::Tui => tui::run(cli.config),
         Commands::Init { quick } => cmd_init(quick),
-        Commands::Start { yolo, cloud_url, no_bind } => cmd_start(cli.config, yolo, cloud_url, no_bind),
+        Commands::Start {
+            yolo,
+            cloud_url,
+            no_bind,
+        } => cmd_start(cli.config, yolo, cloud_url, no_bind),
         Commands::Stop => cmd_stop(),
         Commands::Agent(sub) => match sub {
             AgentCommands::New { template } => cmd_agent_new(cli.config, template),
@@ -1575,10 +1582,7 @@ fn ensure_binding(cloud_url: Option<String>) -> bool {
 
         // 检查是否已绑定
         if let Some(binding) = client.get_binding().await {
-            ui::success(&format!(
-                "已绑定 (carrier_id: {})",
-                binding.carrier_id
-            ));
+            ui::success(&format!("已绑定 (carrier_id: {})", binding.carrier_id));
             return true;
         }
 
@@ -1625,10 +1629,7 @@ fn ensure_binding(cloud_url: Option<String>) -> bool {
         {
             Ok(binding) => {
                 ui::blank();
-                ui::success(&format!(
-                    "绑定成功! (carrier_id: {})",
-                    binding.carrier_id
-                ));
+                ui::success(&format!("绑定成功! (carrier_id: {})", binding.carrier_id));
                 ui::hint("正在启动服务...");
                 true
             }

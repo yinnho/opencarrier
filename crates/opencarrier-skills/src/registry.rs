@@ -636,12 +636,18 @@ input_schema = {{ type = "object" }}
         let resolved = resolve_skills_dir();
         std::env::remove_var("YINGHE_SKILLS_DIR");
 
-        assert_eq!(resolved, yinghe_path, "YINGHE_SKILLS_DIR should have priority");
+        assert_eq!(
+            resolved, yinghe_path,
+            "YINGHE_SKILLS_DIR should have priority"
+        );
 
         // Now test OPENCARRIER_SKILLS_DIR when YINGHE is not set
         let resolved = resolve_skills_dir();
         std::env::remove_var("OPENCARRIER_SKILLS_DIR");
 
-        assert_eq!(resolved, oc_path, "OPENCARRIER_SKILLS_DIR should be used as fallback");
+        assert_eq!(
+            resolved, oc_path,
+            "OPENCARRIER_SKILLS_DIR should be used as fallback"
+        );
     }
 }

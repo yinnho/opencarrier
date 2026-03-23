@@ -151,7 +151,9 @@ impl RelayClient {
         }
 
         let shared = self.shared_secret.read().await;
-        let secret = shared.as_ref().ok_or_else(|| anyhow::anyhow!("No shared secret"))?;
+        let secret = shared
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No shared secret"))?;
 
         // 序列化消息
         let plaintext = serde_json::to_string(request)?;
@@ -326,7 +328,8 @@ impl RelayClient {
                 }
             }
             "connected" => {
-                let carrier_id = msg.get("carrier_id")
+                let carrier_id = msg
+                    .get("carrier_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -334,7 +337,10 @@ impl RelayClient {
                 let _ = self.event_tx.send(RelayEvent::PeerConnected { carrier_id });
             }
             "disconnect" => {
-                let message = msg.get("message").and_then(|v| v.as_str()).map(String::from);
+                let message = msg
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
                 info!("Peer disconnected: {:?}", message);
                 let _ = self.event_tx.send(RelayEvent::PeerDisconnected { message });
             }
@@ -342,7 +348,9 @@ impl RelayClient {
                 // JWT 刷新
                 if let Some(jwt) = msg.get("jwt").and_then(|v| v.as_str()) {
                     info!("JWT refreshed");
-                    let _ = self.event_tx.send(RelayEvent::JwtRefreshed { jwt: jwt.to_string() });
+                    let _ = self.event_tx.send(RelayEvent::JwtRefreshed {
+                        jwt: jwt.to_string(),
+                    });
                 }
             }
             "data" => {

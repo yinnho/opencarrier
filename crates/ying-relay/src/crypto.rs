@@ -75,20 +75,14 @@ impl EcdhKeyPair {
 }
 
 /// 计算 ECDH 共享密钥
-pub fn compute_shared_secret(
-    private_key: &[u8],
-    peer_public_key: &[u8],
-) -> Vec<u8> {
-    use p256::{SecretKey, PublicKey};
+pub fn compute_shared_secret(private_key: &[u8], peer_public_key: &[u8]) -> Vec<u8> {
+    use p256::{PublicKey, SecretKey};
 
     let secret_key = SecretKey::from_slice(private_key).expect("Invalid private key");
     let public_key = PublicKey::from_sec1_bytes(peer_public_key).expect("Invalid public key");
 
     // ECDH: 使用 diffie_hellman 函数
-    let shared_secret = diffie_hellman(
-        secret_key.to_nonzero_scalar(),
-        public_key.as_affine(),
-    );
+    let shared_secret = diffie_hellman(secret_key.to_nonzero_scalar(), public_key.as_affine());
 
     // 共享密钥的原始字节
     let shared_bytes = shared_secret.raw_secret_bytes();
@@ -100,16 +94,12 @@ pub fn compute_shared_secret(
 }
 
 /// 加密数据
-pub fn encrypt(
-    plaintext: &str,
-    shared_secret: &[u8],
-) -> Result<EncryptedPacket, CryptoError> {
+pub fn encrypt(plaintext: &str, shared_secret: &[u8]) -> Result<EncryptedPacket, CryptoError> {
     if shared_secret.len() != 32 {
         return Err(CryptoError::InvalidKeyLength);
     }
 
-    let cipher = Aes256Gcm::new_from_slice(shared_secret)
-        .map_err(|_| CryptoError::InvalidKey)?;
+    let cipher = Aes256Gcm::new_from_slice(shared_secret).map_err(|_| CryptoError::InvalidKey)?;
 
     // 生成 12 字节随机 nonce
     let mut nonce_bytes = [0u8; 12];
@@ -134,10 +124,7 @@ pub fn encrypt(
 }
 
 /// 解密数据
-pub fn decrypt(
-    packet: &EncryptedPayload,
-    shared_secret: &[u8],
-) -> Result<String, CryptoError> {
+pub fn decrypt(packet: &EncryptedPayload, shared_secret: &[u8]) -> Result<String, CryptoError> {
     if shared_secret.len() != 32 {
         return Err(CryptoError::InvalidKeyLength);
     }
@@ -148,13 +135,15 @@ pub fn decrypt(
         return Err(CryptoError::TimestampExpired);
     }
 
-    let cipher = Aes256Gcm::new_from_slice(shared_secret)
-        .map_err(|_| CryptoError::InvalidKey)?;
+    let cipher = Aes256Gcm::new_from_slice(shared_secret).map_err(|_| CryptoError::InvalidKey)?;
 
     let nonce = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &packet.nonce)
         .map_err(|_| CryptoError::InvalidNonce)?;
-    let ciphertext = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &packet.ciphertext)
-        .map_err(|_| CryptoError::InvalidCiphertext)?;
+    let ciphertext = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &packet.ciphertext,
+    )
+    .map_err(|_| CryptoError::InvalidCiphertext)?;
     let tag = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &packet.tag)
         .map_err(|_| CryptoError::InvalidTag)?;
 
@@ -198,8 +187,14 @@ impl From<EncryptedPacket> for EncryptedPayload {
         EncryptedPayload {
             version: packet.version,
             timestamp: packet.timestamp,
-            nonce: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &packet.nonce),
-            ciphertext: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &packet.ciphertext),
+            nonce: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &packet.nonce,
+            ),
+            ciphertext: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &packet.ciphertext,
+            ),
             tag: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &packet.tag),
         }
     }

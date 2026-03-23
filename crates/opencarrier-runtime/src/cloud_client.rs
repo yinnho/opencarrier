@@ -503,7 +503,11 @@ impl CarrierCloudClient {
     }
 
     /// 注册 ECDH 公钥到云端
-    pub async fn register_carrier_key(&self, carrier_id: u64, public_key: &str) -> Result<(), CloudError> {
+    pub async fn register_carrier_key(
+        &self,
+        carrier_id: u64,
+        public_key: &str,
+    ) -> Result<(), CloudError> {
         let binding = self.load_binding().await.ok_or(CloudError::NotBound)?;
 
         let url = format!("{}/relay/carrier/key", self.cloud_url);
@@ -535,7 +539,11 @@ impl CarrierCloudClient {
     }
 
     /// 注册 Ed25519 公钥到云端
-    pub async fn register_ed25519_key(&self, carrier_id: u64, ed25519_public_key_hex: &str) -> Result<(), CloudError> {
+    pub async fn register_ed25519_key(
+        &self,
+        carrier_id: u64,
+        ed25519_public_key_hex: &str,
+    ) -> Result<(), CloudError> {
         let binding = self.load_binding().await.ok_or(CloudError::NotBound)?;
 
         let url = format!("{}/relay/carrier/ed25519key", self.cloud_url);
@@ -593,7 +601,13 @@ impl CarrierCloudClient {
                 let username = std::env::var("USER")
                     .or_else(|_| std::env::var("USERNAME"))
                     .unwrap_or_else(|_| "unknown".to_string());
-                Some(format!("{}-{}-{}-{}", hostname, username, std::env::consts::OS, std::env::consts::ARCH))
+                Some(format!(
+                    "{}-{}-{}-{}",
+                    hostname,
+                    username,
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ))
             })
             .unwrap_or_else(|| "opencarrier-device".to_string());
 
@@ -679,7 +693,10 @@ impl CarrierCloudClient {
         // 确保目录存在
         if let Some(parent) = path.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                return Err(CloudError::Io(format!("Failed to create config dir: {}", e)));
+                return Err(CloudError::Io(format!(
+                    "Failed to create config dir: {}",
+                    e
+                )));
             }
         }
 
@@ -795,14 +812,20 @@ impl CarrierCloudClient {
             &base64::engine::general_purpose::STANDARD,
             &ecdh_public_key_spki_der,
         );
-        if let Err(e) = self.register_carrier_key(binding.carrier_id, &ecdh_public_key_base64).await {
+        if let Err(e) = self
+            .register_carrier_key(binding.carrier_id, &ecdh_public_key_base64)
+            .await
+        {
             warn!("Failed to register ECDH key: {}", e);
             // 不阻塞，继续尝试
         }
 
         // 3. 注册 Ed25519 公钥到云端（hex 格式）
         // 注意：这个端点在 yingheyun 中不存在，但 yingheclient 也调用它
-        if let Err(e) = self.register_ed25519_key(binding.carrier_id, &ed25519_public_key_hex).await {
+        if let Err(e) = self
+            .register_ed25519_key(binding.carrier_id, &ed25519_public_key_hex)
+            .await
+        {
             warn!("Failed to register Ed25519 key: {}", e);
             // 不阻塞，继续尝试
         }
@@ -874,13 +897,19 @@ impl CarrierCloudClient {
         });
 
         // 先连接
-        relay.connect().await.map_err(|e| CloudError::Http(e.to_string()))?;
+        relay
+            .connect()
+            .await
+            .map_err(|e| CloudError::Http(e.to_string()))?;
 
         // 存储 relay 客户端
         let mut client = relay_client_arc.write().await;
         *client = Some(relay);
 
-        info!("Relay connection started for carrier {}", binding.carrier_id);
+        info!(
+            "Relay connection started for carrier {}",
+            binding.carrier_id
+        );
         Ok(())
     }
 
