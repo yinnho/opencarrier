@@ -13,10 +13,11 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 /// Conversation type (permission level)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConversationType {
     /// Carrier mode: Full access to all tools
+    #[default]
     Carrier,
     /// Plugin mode: Standard tool access
     Plugin,
@@ -24,12 +25,6 @@ pub enum ConversationType {
     Avatar,
     /// Role mode: Full access (handled by RoleHandler)
     Role,
-}
-
-impl Default for ConversationType {
-    fn default() -> Self {
-        Self::Carrier
-    }
 }
 
 impl std::fmt::Display for ConversationType {
@@ -58,19 +53,14 @@ impl std::str::FromStr for ConversationType {
 }
 
 /// Chat type (scenario)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChatType {
     /// Direct message (1-on-1)
+    #[default]
     Direct,
     /// Group chat
     Group,
-}
-
-impl Default for ChatType {
-    fn default() -> Self {
-        Self::Direct
-    }
 }
 
 impl std::fmt::Display for ChatType {
@@ -477,10 +467,11 @@ pub struct StreamEnd {
 }
 
 /// Tool permission levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolPermissionLevel {
     /// All tools
+    #[default]
     All,
     /// Standard tools (Plugin mode default)
     Standard,
@@ -488,12 +479,6 @@ pub enum ToolPermissionLevel {
     Restricted,
     /// No tools
     None,
-}
-
-impl Default for ToolPermissionLevel {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 /// Get default tool permission for conversation type
