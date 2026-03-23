@@ -464,11 +464,10 @@ fn handle_get_agent_card(
 
     // Try to get agent manifest
     let card = if let Ok(agent_id) = agent_id_str.parse::<AgentId>() {
-        if let Some(entry) = kernel.registry.get(agent_id) {
-            Some(build_agent_card_from_entry(&entry))
-        } else {
-            None
-        }
+        kernel
+            .registry
+            .get(agent_id)
+            .map(|entry| build_agent_card_from_entry(&entry))
     } else {
         // Find by name (blocking, need runtime)
         None
@@ -695,7 +694,7 @@ fn init_session_manager(kernel: &OpenCarrierKernel) -> YingheSessionManager {
         .list()
         .first()
         .map(|e| e.id)
-        .unwrap_or_else(opencarrier_types::agent::AgentId::new);
+        .unwrap_or_default();
 
     match YingheSessionManager::new(Arc::new(Mutex::new(conn)), default_agent_id) {
         Ok(mgr) => {

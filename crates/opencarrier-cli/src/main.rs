@@ -917,8 +917,8 @@ fn main() {
         init_tracing_stderr();
     }
 
-    // 使用 unwrap_or_else 处理默认命令
-    let command = cli.command.unwrap_or_else(|| Commands::Start {
+    // 使用 unwrap_or 处理默认命令
+    let command = cli.command.unwrap_or(Commands::Start {
         yolo: false,
         cloud_url: None,
         no_bind: false,
@@ -1656,10 +1656,8 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool, cloud_url: Option<String>, no_
     ui::blank();
 
     // 检查绑定状态（除非使用 --no-bind 跳过）
-    if !no_bind {
-        if !ensure_binding(cloud_url) {
-            std::process::exit(1);
-        }
+    if !no_bind && !ensure_binding(cloud_url) {
+        std::process::exit(1);
     }
 
     println!("  启动服务中...");
