@@ -15,6 +15,7 @@ opencarrier-kernel = { path = "../opencarrier-kernel" }
 opencarrier-api = { path = "../opencarrier-api" }
 opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-extensions = { path = "../opencarrier-extensions" }
+opencarrier-memory = { path = "../opencarrier-memory" }
 # Stub crates (to be removed)
 zeroize = { workspace = true }
 tokio = { workspace = true }
@@ -31,3 +32,4 @@ opencarrier-runtime = { path = "../opencarrier-runtime" }
 uuid = { workspace = true }
 ratatui = { workspace = true }
 colored = { workspace = true }
+rusqlite = { workspace = true }

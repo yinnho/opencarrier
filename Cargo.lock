@@ -2425,11 +2425,13 @@ dependencies = [
  "opencarrier-api",
  "opencarrier-extensions",
  "opencarrier-kernel",
+ "opencarrier-memory",
  "opencarrier-runtime",
  "opencarrier-skills",
  "opencarrier-types",
  "ratatui",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
@@ -2582,6 +2584,7 @@ name = "opencarrier-skills"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dirs",
  "hex",
  "opencarrier-types",
  "reqwest",
