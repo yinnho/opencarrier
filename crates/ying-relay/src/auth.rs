@@ -75,13 +75,17 @@ impl SigningKeyPair {
 
     /// 获取 Base64 编码的私钥
     pub fn private_key_base64(&self) -> String {
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.private_key)
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            &self.private_key,
+        )
     }
 }
 
 /// 对消息进行签名
 pub fn sign_message(message: &str, private_key: &[u8]) -> Vec<u8> {
-    let signing_key = SigningKey::from_bytes(private_key.try_into().expect("Invalid private key length"));
+    let signing_key =
+        SigningKey::from_bytes(private_key.try_into().expect("Invalid private key length"));
     let signature: Signature = signing_key.sign(message.as_bytes());
     signature.to_bytes().to_vec()
 }
@@ -92,7 +96,8 @@ pub fn verify_signature(message: &str, signature: &[u8], public_key: &[u8]) -> b
     use ed25519_dalek::VerifyingKey;
 
     // Convert public_key to VerifyingKey
-    let verifying_key = match VerifyingKey::from_bytes(public_key.try_into().unwrap_or(&[0u8; 32])) {
+    let verifying_key = match VerifyingKey::from_bytes(public_key.try_into().unwrap_or(&[0u8; 32]))
+    {
         Ok(vk) => vk,
         Err(_) => return false,
     };
@@ -161,7 +166,10 @@ impl AuthMessageData {
             carrier_id,
             role,
             timestamp,
-            signature: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &signature),
+            signature: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &signature,
+            ),
             jwt,
             device_id,
         }
@@ -179,16 +187,21 @@ pub fn verify_auth_message(
     // 验证时间戳（30秒内有效）
     let now = chrono::Utc::now().timestamp_millis();
     if (now - timestamp).abs() > 30000 {
-        tracing::warn!("Auth message timestamp out of range: {} vs {}", now, timestamp);
+        tracing::warn!(
+            "Auth message timestamp out of range: {} vs {}",
+            now,
+            timestamp
+        );
         return false;
     }
 
     // 验证签名
     let message = format!("{carrier_id}:{role}:{timestamp}");
-    let sig_bytes = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, signature) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
+    let sig_bytes =
+        match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, signature) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
 
     verify_signature(&message, &sig_bytes, public_key)
 }

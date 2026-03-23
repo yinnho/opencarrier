@@ -34,8 +34,7 @@ fn test_chat_request_deserialize() {
         "content": "Hello, agent!"
     });
 
-    let request: opencarrier_types::yinghe::ChatRequest =
-        serde_json::from_value(json).unwrap();
+    let request: opencarrier_types::yinghe::ChatRequest = serde_json::from_value(json).unwrap();
 
     assert_eq!(request.msg_type, "chat");
     assert_eq!(request.conversation_id, "conv-002");
@@ -62,8 +61,7 @@ fn test_chat_request_plugin_mode() {
         "content": "What's the weather?"
     });
 
-    let request: opencarrier_types::yinghe::ChatRequest =
-        serde_json::from_value(json).unwrap();
+    let request: opencarrier_types::yinghe::ChatRequest = serde_json::from_value(json).unwrap();
 
     assert_eq!(
         request.conversation_type,
@@ -87,8 +85,7 @@ fn test_chat_request_group_chat() {
         "mentioned": true
     });
 
-    let request: opencarrier_types::yinghe::ChatRequest =
-        serde_json::from_value(json).unwrap();
+    let request: opencarrier_types::yinghe::ChatRequest = serde_json::from_value(json).unwrap();
 
     assert!(request.is_group());
     assert!(request.mentioned);

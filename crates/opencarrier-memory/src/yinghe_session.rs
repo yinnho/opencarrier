@@ -179,7 +179,11 @@ impl YingheSessionManager {
     }
 
     /// Add assistant message from ChatResponse.
-    pub fn add_assistant_message(&self, request: &ChatRequest, response: &ChatResponse) -> Result<(), String> {
+    pub fn add_assistant_message(
+        &self,
+        request: &ChatRequest,
+        response: &ChatResponse,
+    ) -> Result<(), String> {
         let key = request.session_key();
         let content = response
             .response
@@ -201,7 +205,11 @@ impl YingheSessionManager {
     }
 
     /// Get conversation history with limit.
-    pub fn get_history_with_limit(&self, key: &SessionKey, limit: usize) -> Result<Vec<Message>, String> {
+    pub fn get_history_with_limit(
+        &self,
+        key: &SessionKey,
+        limit: usize,
+    ) -> Result<Vec<Message>, String> {
         let messages = self.get_history(key)?;
         if messages.len() <= limit {
             return Ok(messages);
@@ -299,10 +307,7 @@ mod tests {
     fn setup() -> YingheSessionManager {
         let conn = Connection::open_in_memory().unwrap();
         crate::migration::run_migrations(&conn).unwrap();
-        YingheSessionManager::new(
-            Arc::new(Mutex::new(conn)),
-            AgentId::new(),
-        ).unwrap()
+        YingheSessionManager::new(Arc::new(Mutex::new(conn)), AgentId::new()).unwrap()
     }
 
     #[test]
@@ -317,7 +322,11 @@ mod tests {
 
         let session = manager.get_or_create_session(&key).unwrap();
         assert!(session.messages.is_empty());
-        assert!(session.label.as_ref().unwrap().contains("carrier:direct:main:conv-001"));
+        assert!(session
+            .label
+            .as_ref()
+            .unwrap()
+            .contains("carrier:direct:main:conv-001"));
     }
 
     #[test]
@@ -331,7 +340,9 @@ mod tests {
         );
 
         manager.add_message(&key, Message::user("Hello")).unwrap();
-        manager.add_message(&key, Message::assistant("Hi there!")).unwrap();
+        manager
+            .add_message(&key, Message::assistant("Hi there!"))
+            .unwrap();
 
         let history = manager.get_history(&key).unwrap();
         assert_eq!(history.len(), 2);
@@ -349,7 +360,9 @@ mod tests {
             "group-001",
         );
 
-        manager.add_message(&key, Message::user("What's the weather?")).unwrap();
+        manager
+            .add_message(&key, Message::user("What's the weather?"))
+            .unwrap();
 
         // Get session again - should have the message
         let history = manager.get_history(&key).unwrap();
@@ -368,7 +381,9 @@ mod tests {
 
         // Add 10 messages
         for i in 0..10 {
-            manager.add_message(&key, Message::user(format!("Message {}", i))).unwrap();
+            manager
+                .add_message(&key, Message::user(format!("Message {}", i)))
+                .unwrap();
         }
 
         // Get last 5

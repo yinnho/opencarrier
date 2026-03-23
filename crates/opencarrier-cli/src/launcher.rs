@@ -3,6 +3,8 @@
 //! Shown when `opencarrier` is run with no subcommand in a TTY.
 //! Full-width left-aligned layout, adapts for first-time vs returning users.
 
+#![allow(dead_code)]
+
 use ratatui::crossterm::event::{self, Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};

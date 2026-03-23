@@ -181,8 +181,12 @@ impl ChatRequest {
     /// Get instance ID (pluginId, avatarId, or "main")
     pub fn instance_id(&self) -> String {
         match self.conversation_type {
-            ConversationType::Plugin => self.plugin_id.clone().unwrap_or_else(|| "main".to_string()),
-            ConversationType::Avatar => self.avatar_id.clone().unwrap_or_else(|| "main".to_string()),
+            ConversationType::Plugin => {
+                self.plugin_id.clone().unwrap_or_else(|| "main".to_string())
+            }
+            ConversationType::Avatar => {
+                self.avatar_id.clone().unwrap_or_else(|| "main".to_string())
+            }
             _ => "main".to_string(),
         }
     }

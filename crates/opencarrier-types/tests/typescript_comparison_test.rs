@@ -176,7 +176,7 @@ fn test_chat_response_fields_match() {
 /// Test ChatResponse serialization produces camelCase (TypeScript compatible)
 #[test]
 fn test_chat_response_camel_case() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatType, ConversationType, ChatResponse};
+    use opencarrier_types::yinghe::{ChatRequest, ChatResponse, ChatType, ConversationType};
 
     let request = ChatRequest {
         msg_type: "chat".to_string(),
@@ -202,14 +202,29 @@ fn test_chat_response_camel_case() {
     let json = serde_json::to_value(&response).unwrap();
 
     // Verify camelCase field names for always-present fields
-    assert!(json.get("conversationId").is_some(), "Should use camelCase for conversationId");
-    assert!(json.get("conversationType").is_some(), "Should use camelCase for conversationType");
-    assert!(json.get("chatType").is_some(), "Should use camelCase for chatType");
+    assert!(
+        json.get("conversationId").is_some(),
+        "Should use camelCase for conversationId"
+    );
+    assert!(
+        json.get("conversationType").is_some(),
+        "Should use camelCase for conversationType"
+    );
+    assert!(
+        json.get("chatType").is_some(),
+        "Should use camelCase for chatType"
+    );
     // Note: pluginId is None, so it won't be serialized (skip_serializing_if)
 
     // Verify snake_case fields are NOT present
-    assert!(json.get("conversation_id").is_none(), "Should NOT use snake_case");
-    assert!(json.get("conversation_type").is_none(), "Should NOT use snake_case");
+    assert!(
+        json.get("conversation_id").is_none(),
+        "Should NOT use snake_case"
+    );
+    assert!(
+        json.get("conversation_type").is_none(),
+        "Should NOT use snake_case"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +284,12 @@ fn test_session_key_format_matches() {
     assert_eq!(format!("{}", key1), "carrier:direct:main:c001");
 
     // Test plugin:direct:weather:c002
-    let key2 = SessionKey::new(ConversationType::Plugin, ChatType::Direct, "weather", "c002");
+    let key2 = SessionKey::new(
+        ConversationType::Plugin,
+        ChatType::Direct,
+        "weather",
+        "c002",
+    );
     assert_eq!(format!("{}", key2), "plugin:direct:weather:c002");
 
     // Test plugin:group:weather:g001
@@ -347,9 +367,7 @@ fn test_is_chat_request_equivalent() {
     });
 
     // Valid 'chat' type should parse
-    assert!(
-        serde_json::from_value::<opencarrier_types::yinghe::ChatRequest>(valid_chat).is_ok()
-    );
+    assert!(serde_json::from_value::<opencarrier_types::yinghe::ChatRequest>(valid_chat).is_ok());
 
     // Valid 'message' type should parse
     assert!(
@@ -481,7 +499,10 @@ fn test_response_metadata_fields_match() {
 
     assert_eq!(parsed.rounds, Some(2));
     assert_eq!(parsed.tool_calls, Some(3));
-    assert_eq!(parsed.matched_skills, Some(vec!["skill1".to_string(), "skill2".to_string()]));
+    assert_eq!(
+        parsed.matched_skills,
+        Some(vec!["skill1".to_string(), "skill2".to_string()])
+    );
 }
 
 // ---------------------------------------------------------------------------

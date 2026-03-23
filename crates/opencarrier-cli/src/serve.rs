@@ -144,7 +144,11 @@ pub fn run_serve_mode(config_path: Option<std::path::PathBuf>) {
                         Err(e) => {
                             // Parse error
                             error!("[serve] Parse error: {e}");
-                            Some(jsonrpc_error(None, PARSE_ERROR, &format!("Parse error: {e}")))
+                            Some(jsonrpc_error(
+                                None,
+                                PARSE_ERROR,
+                                &format!("Parse error: {e}"),
+                            ))
                         }
                     }
                 };
@@ -231,7 +235,9 @@ fn handle_yingheclient_message(
             let message = request.text_content();
             if message.is_empty() {
                 let error = ErrorResponse::for_request(&request, "Empty message");
-                return Some(Response::Yingheclient(serde_json::to_value(error).unwrap_or_default()));
+                return Some(Response::Yingheclient(
+                    serde_json::to_value(error).unwrap_or_default(),
+                ));
             }
 
             // Group chat: check for @ mention or implicit mention
@@ -292,14 +298,18 @@ fn handle_yingheclient_message(
                 Err(e) => {
                     error!("[serve] yingheclient send_message error: {e}");
                     let error = ErrorResponse::for_request(&request, format!("Error: {e}"));
-                    Some(Response::Yingheclient(serde_json::to_value(error).unwrap_or_default()))
+                    Some(Response::Yingheclient(
+                        serde_json::to_value(error).unwrap_or_default(),
+                    ))
                 }
             }
         }
         Err(e) => {
             error!("[serve] yingheclient parse error: {e}");
             let error = ErrorResponse::new(format!("Parse error: {e}"));
-            Some(Response::Yingheclient(serde_json::to_value(error).unwrap_or_default()))
+            Some(Response::Yingheclient(
+                serde_json::to_value(error).unwrap_or_default(),
+            ))
         }
     }
 }
@@ -316,7 +326,11 @@ fn handle_request(
 ) -> Option<Response> {
     // Validate jsonrpc version
     if req.jsonrpc != "2.0" {
-        return Some(jsonrpc_error(req.id.clone(), INVALID_REQUEST, "Invalid jsonrpc version"));
+        return Some(jsonrpc_error(
+            req.id.clone(),
+            INVALID_REQUEST,
+            "Invalid jsonrpc version",
+        ));
     }
 
     match req.method.as_str() {
@@ -330,7 +344,11 @@ fn handle_request(
             info!("[serve] Received bye, connection closing");
             None
         }
-        _ => Some(jsonrpc_error(req.id.clone(), METHOD_NOT_FOUND, &format!("Method not found: {}", req.method))),
+        _ => Some(jsonrpc_error(
+            req.id.clone(),
+            METHOD_NOT_FOUND,
+            &format!("Method not found: {}", req.method),
+        )),
     }
 }
 
@@ -368,7 +386,13 @@ fn handle_send_message(
 ) -> Option<Response> {
     let params = match req.params.as_ref() {
         Some(p) => p,
-        None => return Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, "Missing params")),
+        None => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Missing params",
+            ))
+        }
     };
 
     let agent_id_str = params
@@ -378,7 +402,13 @@ fn handle_send_message(
 
     let message = match params.get("message").and_then(|v| v.as_str()) {
         Some(m) => m,
-        None => return Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, "Missing message")),
+        None => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Missing message",
+            ))
+        }
     };
 
     // Parse agent ID
@@ -388,7 +418,13 @@ fn handle_send_message(
             // Try to find agent by name
             match kernel.registry.find_by_name(agent_id_str) {
                 Some(entry) => entry.id,
-                None => return Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, &format!("Agent not found: {}", agent_id_str))),
+                None => {
+                    return Some(jsonrpc_error(
+                        req.id.clone(),
+                        INVALID_PARAMS,
+                        &format!("Agent not found: {}", agent_id_str),
+                    ))
+                }
             }
         }
     };
@@ -405,13 +441,20 @@ fn handle_send_message(
         )),
         Err(e) => {
             error!("[serve] send_message error: {e}");
-            Some(jsonrpc_error(req.id.clone(), INTERNAL_ERROR, &format!("Error: {e}")))
+            Some(jsonrpc_error(
+                req.id.clone(),
+                INTERNAL_ERROR,
+                &format!("Error: {e}"),
+            ))
         }
     }
 }
 
 /// Handle getAgentCard method
-fn handle_get_agent_card(kernel: &Arc<OpenCarrierKernel>, req: &JsonRpcRequest) -> Option<Response> {
+fn handle_get_agent_card(
+    kernel: &Arc<OpenCarrierKernel>,
+    req: &JsonRpcRequest,
+) -> Option<Response> {
     let params = req.params.as_ref().and_then(|p| p.as_object());
 
     let agent_id_str = params
@@ -432,8 +475,15 @@ fn handle_get_agent_card(kernel: &Arc<OpenCarrierKernel>, req: &JsonRpcRequest) 
     };
 
     match card {
-        Some(c) => Some(jsonrpc_success(req.id.clone(), serde_json::to_value(c).unwrap_or_default())),
-        None => Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, &format!("Agent not found: {}", agent_id_str))),
+        Some(c) => Some(jsonrpc_success(
+            req.id.clone(),
+            serde_json::to_value(c).unwrap_or_default(),
+        )),
+        None => Some(jsonrpc_error(
+            req.id.clone(),
+            INVALID_PARAMS,
+            &format!("Agent not found: {}", agent_id_str),
+        )),
     }
 }
 
@@ -467,13 +517,25 @@ fn handle_compact_memory(
 ) -> Option<Response> {
     let params = match req.params.as_ref() {
         Some(p) => p,
-        None => return Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, "Missing params")),
+        None => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Missing params",
+            ))
+        }
     };
 
     // Get messages to compact
     let messages = match params.get("messages") {
         Some(Value::Array(arr)) => arr,
-        _ => return Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, "Missing or invalid messages array")),
+        _ => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Missing or invalid messages array",
+            ))
+        }
     };
 
     // Get keep recent count
@@ -483,11 +545,14 @@ fn handle_compact_memory(
         .unwrap_or(50) as usize;
 
     if messages.is_empty() {
-        return Some(jsonrpc_success(req.id.clone(), json!({
-            "summary": "",
-            "recentMessages": [],
-            "compactedCount": 0
-        })));
+        return Some(jsonrpc_success(
+            req.id.clone(),
+            json!({
+                "summary": "",
+                "recentMessages": [],
+                "compactedCount": 0
+            }),
+        ));
     }
 
     // Split messages: older ones to compact, recent ones to keep
@@ -520,7 +585,11 @@ fn handle_compact_memory(
         )),
         Err(e) => {
             error!("[serve] compactMemory error: {e}");
-            Some(jsonrpc_error(req.id.clone(), INTERNAL_ERROR, &format!("Compaction failed: {e}")))
+            Some(jsonrpc_error(
+                req.id.clone(),
+                INTERNAL_ERROR,
+                &format!("Compaction failed: {e}"),
+            ))
         }
     }
 }
@@ -606,7 +675,10 @@ fn init_session_manager(kernel: &OpenCarrierKernel) -> YingheSessionManager {
     let conn = match Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
-            error!("[serve] Failed to open session database at {:?}: {e}", db_path);
+            error!(
+                "[serve] Failed to open session database at {:?}: {e}",
+                db_path
+            );
             // Fall back to in-memory database
             Connection::open_in_memory().expect("Failed to create in-memory database")
         }
@@ -627,13 +699,17 @@ fn init_session_manager(kernel: &OpenCarrierKernel) -> YingheSessionManager {
 
     match YingheSessionManager::new(Arc::new(Mutex::new(conn)), default_agent_id) {
         Ok(mgr) => {
-            info!("[serve] yingheclient session manager initialized at {:?}", db_path);
+            info!(
+                "[serve] yingheclient session manager initialized at {:?}",
+                db_path
+            );
             mgr
         }
         Err(e) => {
             error!("[serve] Failed to initialize session manager: {e}");
             // Create with in-memory fallback
-            let mem_conn = Connection::open_in_memory().expect("Failed to create in-memory database");
+            let mem_conn =
+                Connection::open_in_memory().expect("Failed to create in-memory database");
             opencarrier_memory::migration::run_migrations(&mem_conn).ok();
             YingheSessionManager::new(Arc::new(Mutex::new(mem_conn)), default_agent_id)
                 .expect("Failed to create fallback session manager")
