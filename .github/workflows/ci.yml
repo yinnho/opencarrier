@@ -11,14 +11,14 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
-  # ── Rust library crates (all 3 platforms) ──────────────────────────────────
+  # ── Rust library crates (Linux only to save GitHub Actions minutes) ─────────
   check:
     name: Check / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-latest, windows-latest]
+        os: [ubuntu-22.04]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -37,24 +37,26 @@ jobs:
             patchelf
       - run: cargo check --workspace
 
-  # 只在 PR 时运行完整测试，push 到 main 时跳过（避免 GitHub Actions runner 不稳定问题）
+  # ── Tests (Linux only to save GitHub Actions minutes) ──────────────────────
   test:
-    name: Test / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Test / ubuntu-22.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
-    if: github.event_name == 'pull_request'  # 只在 PR 时运行
-    strategy:
-      fail-fast: false
-      matrix:
-        # 移除 ubuntu，只测试 macOS 和 Windows（避免 runner 被 shutdown）
-        os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: test-${{ matrix.os }}
-      # Tests that need a display (Tauri) are skipped in headless CI via cfg
+          key: test-ubuntu
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
       - name: Run tests
         run: cargo test --workspace
         timeout-minutes: 15
