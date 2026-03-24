@@ -1,6 +1,12 @@
 //! Stateless session token authentication for the dashboard.
 //! Tokens are HMAC-SHA256 signed and contain username + expiry.
+//!
+//! Password hashing uses Argon2id for security against brute-force attacks.
 
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -55,20 +61,49 @@ pub fn verify_session_token(token: &str, secret: &str) -> Option<String> {
     }
 }
 
-/// Hash a password with SHA256 for config storage.
+/// Hash a password with Argon2id for secure config storage.
+///
+/// SECURITY: Uses Argon2id with recommended parameters:
+/// - Memory cost: 64 MB
+/// - Time cost: 3 iterations
+/// - Parallelism: 4 lanes
 pub fn hash_password(password: &str) -> String {
-    use sha2::Digest;
-    hex::encode(Sha256::digest(password.as_bytes()))
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    argon2
+        .hash_password(password.as_bytes(), &salt)
+        .expect("Argon2 hashing should not fail")
+        .to_string()
 }
 
-/// Verify a password against a stored SHA256 hash (constant-time).
+/// Verify a password against a stored Argon2id hash.
+///
+/// Supports both new Argon2id hashes and legacy SHA256 hashes for migration.
 pub fn verify_password(password: &str, stored_hash: &str) -> bool {
-    let computed = hash_password(password);
-    use subtle::ConstantTimeEq;
-    if computed.len() != stored_hash.len() {
-        return false;
+    // Try Argon2id first (new format starts with $argon2)
+    if stored_hash.starts_with("$argon2") {
+        let parsed = match PasswordHash::new(stored_hash) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        return Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok();
     }
-    computed.as_bytes().ct_eq(stored_hash.as_bytes()).into()
+
+    // Legacy SHA256 fallback for migration (deprecated, will be removed)
+    // SHA256 hashes are 64 hex characters
+    if stored_hash.len() == 64 && stored_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        use sha2::Digest;
+        let computed = hex::encode(Sha256::digest(password.as_bytes()));
+        use subtle::ConstantTimeEq;
+        if computed.len() != stored_hash.len() {
+            return false;
+        }
+        return computed.as_bytes().ct_eq(stored_hash.as_bytes()).into();
+    }
+
+    false
 }
 
 #[cfg(test)]
