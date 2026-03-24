@@ -1,5 +1,6 @@
 //! Route handlers for the OpenCarrier API.
 
+use crate::command_security::{validate_install_command, CommandValidation};
 use crate::types::*;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -4192,6 +4193,34 @@ pub async fn install_hand_deps(
         } else {
             cmd.to_string()
         };
+
+        // SECURITY: Validate command against whitelist to prevent command injection
+        match validate_install_command(&final_cmd) {
+            CommandValidation::Blocked { reason } => {
+                tracing::warn!(
+                    hand = %hand_id,
+                    dep = %req.key,
+                    cmd = %final_cmd,
+                    reason = %reason,
+                    "Blocked potentially dangerous install command"
+                );
+                results.push(serde_json::json!({
+                    "key": req.key,
+                    "status": "blocked",
+                    "command": final_cmd,
+                    "message": format!("Security: {}", reason),
+                }));
+                continue;
+            }
+            CommandValidation::Allowed { base_command, .. } => {
+                tracing::debug!(
+                    hand = %hand_id,
+                    dep = %req.key,
+                    base_command = %base_command,
+                    "Install command validated"
+                );
+            }
+        }
 
         tracing::info!(hand = %hand_id, dep = %req.key, cmd = %final_cmd, "Auto-installing dependency");
 
