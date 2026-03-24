@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
     match (method, path) {
+        // Low-cost read endpoints
         (_, "/api/health") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/status") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/version") => NonZeroU32::new(1).unwrap(),
@@ -24,6 +25,8 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         ("GET", "/api/usage") => NonZeroU32::new(3).unwrap(),
         ("GET", p) if p.starts_with("/api/audit") => NonZeroU32::new(5).unwrap(),
         ("GET", p) if p.starts_with("/api/marketplace") => NonZeroU32::new(10).unwrap(),
+
+        // High-cost write endpoints
         ("POST", "/api/agents") => NonZeroU32::new(50).unwrap(),
         ("POST", p) if p.contains("/message") => NonZeroU32::new(30).unwrap(),
         ("POST", p) if p.contains("/run") => NonZeroU32::new(100).unwrap(),
@@ -31,6 +34,14 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         ("POST", "/api/skills/uninstall") => NonZeroU32::new(10).unwrap(),
         ("POST", "/api/migrate") => NonZeroU32::new(100).unwrap(),
         ("PUT", p) if p.contains("/update") => NonZeroU32::new(10).unwrap(),
+
+        // SECURITY: Sensitive endpoints with higher cost to prevent abuse
+        ("POST", p) if p.contains("/install-deps") => NonZeroU32::new(100).unwrap(), // Shell execution
+        ("POST", p) if p.contains("/install") && !p.contains("/install-deps") => {
+            NonZeroU32::new(50).unwrap()
+        } // Package install
+        ("POST", p) if p.contains("/check-deps") => NonZeroU32::new(20).unwrap(), // Dependency check
+
         _ => NonZeroU32::new(5).unwrap(),
     }
 }
@@ -95,5 +106,26 @@ mod tests {
         assert_eq!(operation_cost("GET", "/api/audit/recent").get(), 5);
         assert_eq!(operation_cost("POST", "/api/skills/install").get(), 50);
         assert_eq!(operation_cost("POST", "/api/migrate").get(), 100);
+    }
+
+    #[test]
+    fn test_sensitive_endpoint_costs() {
+        // SECURITY: Install-deps should have high cost to prevent abuse
+        assert_eq!(
+            operation_cost("POST", "/api/hands/browser/install-deps").get(),
+            100
+        );
+        assert_eq!(
+            operation_cost("POST", "/api/hands/ffmpeg/install-deps").get(),
+            100
+        );
+        // Check-deps should also have elevated cost
+        assert_eq!(
+            operation_cost("POST", "/api/hands/browser/check-deps").get(),
+            20
+        );
+        // Regular install endpoints
+        assert_eq!(operation_cost("POST", "/api/skills/install").get(), 50);
+        assert_eq!(operation_cost("POST", "/api/hands/install").get(), 50);
     }
 }
