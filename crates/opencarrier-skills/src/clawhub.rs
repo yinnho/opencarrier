@@ -548,11 +548,70 @@ impl ClawHubClient {
                                 continue;
                             }
                         };
+                        // SECURITY: enclosed_name() prevents path traversal (Zip Slip) attacks
+                        // by rejecting paths containing ".." or starting with "/"
                         let Some(enclosed_name) = file.enclosed_name() else {
-                            warn!("Skipping zip entry with unsafe path");
+                            // Log the suspicious path for security monitoring
+                            let raw_name = file.name();
+                            warn!(
+                                raw_path = %raw_name,
+                                reason = "path_traversal_attempt",
+                                "SECURITY: Skipping zip entry with unsafe path"
+                            );
                             continue;
                         };
-                        let out_path = skill_dir.join(enclosed_name);
+
+                        // Clone the path to avoid borrow issues
+                        let enclosed_path = enclosed_name.to_path_buf();
+                        let name_str = enclosed_path.to_string_lossy();
+
+                        // SECURITY: Additional validation for suspicious filenames
+                        if name_str.contains("..")
+                            || name_str.starts_with('/')
+                            || name_str.starts_with('\\')
+                        {
+                            warn!(
+                                path = %name_str,
+                                reason = "suspicious_path_chars",
+                                "SECURITY: Skipping zip entry with suspicious characters"
+                            );
+                            continue;
+                        }
+
+                        // Warn about potentially dangerous file types
+                        let lower_name = name_str.to_lowercase();
+                        if lower_name.ends_with(".exe")
+                            || lower_name.ends_with(".bat")
+                            || lower_name.ends_with(".sh")
+                            || lower_name.ends_with(".cmd")
+                        {
+                            warn!(
+                                path = %name_str,
+                                "SECURITY: Zip contains executable file - user discretion advised"
+                            );
+                        }
+
+                        let out_path = skill_dir.join(&enclosed_path);
+
+                        // SECURITY: Verify the resolved path is still within skill_dir (defense in depth)
+                        let canonical_skill_dir = match skill_dir.canonicalize() {
+                            Ok(p) => p,
+                            Err(_) => skill_dir.clone(),
+                        };
+                        let parent_dir = out_path.parent().unwrap_or(&out_path);
+                        if let Ok(canonical_parent) = parent_dir.canonicalize() {
+                            if !canonical_parent.starts_with(&canonical_skill_dir)
+                                && canonical_parent != canonical_skill_dir
+                            {
+                                warn!(
+                                    path = %name_str,
+                                    resolved = ?out_path,
+                                    "SECURITY: Path escapes target directory - blocking"
+                                );
+                                continue;
+                            }
+                        }
+
                         if file.is_dir() {
                             std::fs::create_dir_all(&out_path)?;
                         } else {
@@ -906,5 +965,59 @@ mod tests {
             }),
         };
         assert_eq!(ClawHubClient::entry_version(&entry), "2.0.0");
+    }
+
+    #[test]
+    fn test_zip_path_validation() {
+        use std::io::Write;
+        use tempfile::TempDir;
+        use zip::write::FileOptions;
+
+        // Create a test zip with a malicious path traversal entry
+        let temp_dir = TempDir::new().unwrap();
+        let zip_path = temp_dir.path().join("test.zip");
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = FileOptions::<()>::default()
+                .compression_method(zip::CompressionMethod::Stored);
+
+            // Normal file - should be allowed
+            zip.start_file("normal.txt", options).unwrap();
+            zip.write_all(b"normal content").unwrap();
+
+            // Path traversal attempt - should be blocked by enclosed_name()
+            zip.start_file("../escape.txt", options).unwrap();
+            zip.write_all(b"escape content").unwrap();
+
+            // Another path traversal pattern
+            zip.start_file("subdir/../../escape2.txt", options).unwrap();
+            zip.write_all(b"escape2 content").unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        // Read the zip and verify enclosed_name() behavior
+        let bytes = std::fs::read(&zip_path).unwrap();
+        let cursor = std::io::Cursor::new(&*bytes);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+
+        let mut safe_count = 0;
+        let mut blocked_count = 0;
+
+        for i in 0..archive.len() {
+            let file = archive.by_index(i).unwrap();
+            if file.enclosed_name().is_some() {
+                safe_count += 1;
+            } else {
+                blocked_count += 1;
+            }
+        }
+
+        // Only the normal.txt should be safe
+        assert_eq!(safe_count, 1);
+        // Both path traversal attempts should be blocked
+        assert_eq!(blocked_count, 2);
     }
 }
