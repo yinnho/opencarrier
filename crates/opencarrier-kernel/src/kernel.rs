@@ -3363,11 +3363,11 @@ impl OpenCarrierKernel {
         let agent_id = self.spawn_agent_with_parent(manifest, None, Some(fixed_agent_id))?;
 
         // Restore triggers from the old agent under the new agent ID (#519).
-        if !saved_triggers.is_empty() {
+        if let Some(old_id) = old_agent_id {
             let restored = self.triggers.restore_triggers(agent_id, saved_triggers);
             if restored > 0 {
                 info!(
-                    old_agent = %old_agent_id.unwrap(),
+                    old_agent = %old_id,
                     new_agent = %agent_id,
                     restored,
                     "Reassigned triggers after hand reactivation"
