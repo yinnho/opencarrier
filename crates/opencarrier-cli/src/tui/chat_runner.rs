@@ -450,15 +450,15 @@ impl StandaloneChat {
                         .send()
                     {
                         Ok(r) if r.status().is_success() => {
-                            // Re-fetch agent to get updated provider/model
+                            // Re-fetch agent to get updated modality/model
                             if let Ok(resp) = client
                                 .get(format!("{base_url}/api/agents/{agent_id}"))
                                 .send()
                             {
                                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                                    let provider = body["model_provider"].as_str().unwrap_or("?");
+                                    let modality = body["modality"].as_str().unwrap_or("?");
                                     let model = body["model_name"].as_str().unwrap_or("?");
-                                    self.chat.model_label = format!("{provider}/{model}");
+                                    self.chat.model_label = format!("{modality}/{model}");
                                 }
                             }
                             self.chat
@@ -475,33 +475,12 @@ impl StandaloneChat {
             }
             Backend::InProcess { kernel } => {
                 if let Some(id) = self.agent_id_inprocess {
-                    let provider = kernel
-                        .model_catalog
-                        .read()
-                        .unwrap()
-                        .find_model(model_id)
-                        .map(|e| e.provider.clone());
-                    let result = if let Some(ref prov) = provider {
-                        kernel.registry.update_model_and_provider(
-                            id,
-                            model_id.to_string(),
-                            prov.clone(),
-                        )
-                    } else {
-                        kernel.registry.update_model(id, model_id.to_string())
-                    };
+                    let result = kernel.registry.update_modality(id, model_id.to_string());
                     match result {
                         Ok(()) => {
-                            let prov_label = provider.unwrap_or_else(|| {
-                                kernel
-                                    .registry
-                                    .get(id)
-                                    .map(|e| e.manifest.model.provider.clone())
-                                    .unwrap_or_else(|| "?".to_string())
-                            });
-                            self.chat.model_label = format!("{prov_label}/{model_id}");
+                            self.chat.model_label = model_id.to_string();
                             self.chat
-                                .push_message(Role::System, format!("Switched to {model_id}"));
+                                .push_message(Role::System, format!("Switched modality to {model_id}"));
                         }
                         Err(e) => {
                             self.chat
@@ -530,9 +509,9 @@ impl StandaloneChat {
             let client = crate::daemon_client();
             if let Ok(resp) = client.get(format!("{base_url}/api/agents/{id}")).send() {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let provider = body["model_provider"].as_str().unwrap_or("?");
+                    let modality = body["modality"].as_str().unwrap_or("?");
                     let model = body["model_name"].as_str().unwrap_or("?");
-                    self.chat.model_label = format!("{provider}/{model}");
+                    self.chat.model_label = format!("{modality}/{model}");
                 }
             }
         }
@@ -551,10 +530,7 @@ impl StandaloneChat {
 
         if let Backend::InProcess { ref kernel } = self.backend {
             if let Some(entry) = kernel.registry.get(id) {
-                self.chat.model_label = format!(
-                    "{}/{}",
-                    entry.manifest.model.provider, entry.manifest.model.model
-                );
+                self.chat.model_label = entry.manifest.model.modality.clone();
             }
         }
 

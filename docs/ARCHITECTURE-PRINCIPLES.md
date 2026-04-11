@@ -1,267 +1,240 @@
 # OpenCarrier 架构原则
 
-> **版本**: v1.0
-> **日期**: 2026-03-20
+> **版本**: v3.0
+> **日期**: 2026-04-11
 > **状态**: 已确立
 
 ---
 
-## 1. 核心架构：App 是大脑，Carrier 是双手
+## 1. 核心架构：opencarrier 是分身操作系统
 
-### 1.1 职责划分
+### 1.1 一句话定义
+
+**opencarrier = 分身 OS**。每个用户自部署一个 opencarrier 实例，从 Hub 下载分身运行。
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         App 端                               │
-│                       (大脑/Brain)                           │
-│                                                              │
-│  • 记忆管理 (Memory Management)                               │
-│    - Session 会话持久化                                       │
-│    - 上下文管理                                               │
-│    - 记忆压缩 (发起方)                                        │
-│                                                              │
-│  • 协调调度 (Coordination)                                    │
-│    - 多 Agent 协调                                           │
-│    - 任务分发                                                 │
-│    - 状态监控                                                 │
-│                                                              │
-│  • 用户交互 (User Interaction)                                │
-│    - 消息收发                                                 │
-│    - 界面展示                                                 │
-│    - 通知推送                                                 │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              │ A2A Protocol (JSON-RPC over TCP)
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                       Carrier 端                              │
-│                       (双手/Hands)                            │
-│                                                              │
-│  • 任务执行 (Task Execution)                                  │
-│    - 任务分解 (Decomposition)                                 │
-│    - 工具调用 (Tool Invocation)                               │
-│    - 结果保证 (Guaranteed Results)                            │
-│                                                              │
-│  • 执行监控 (Execution Monitoring)                            │
-│    - 进度跟踪                                                 │
-│    - 错误检测                                                 │
-│    - 自动修复 (Auto-repair)                                   │
-│                                                              │
-│  • LLM 推理 (LLM Inference)                                   │
-│    - 上下文理解                                               │
-│    - 决策生成                                                 │
-│    - 响应构建                                                 │
-└─────────────────────────────────────────────────────────────┘
+用户自部署 opencarrier → 从 Hub 下载分身 → 分身自主运行、学习、进化
 ```
 
-### 1.2 关键原则
+### 1.2 分身 = 人格 + 指令 + 知识 + 技能
+
+分身不是静态的 agent，而是能学习、成长的数字实体。四个部分同级，共同定义分身是什么：
+
+| 组成 | 文件 | 定义 | 包含 | 不包含 |
+|------|------|------|------|--------|
+| 人格 | SOUL.md | 你是谁 | 性格、语气、说话方式、情绪模式、边界 | 工作规则、流程、参考资料 |
+| 指令 | system_prompt.md | 你怎么做事 | 能力、规则、工作方式、输出格式 | 人格描述、FAQ 条目、纯参考文档 |
+| 知识 | knowledge/*.md + MEMORY.md | 你知道什么 | 领域知识、FAQ、产品信息、流程指南 | 行为规则、人格描述 |
+| 技能 | skills/*.md | 你会做什么 | when_to_use + allowed_tools + 执行步骤 | 知识事实（放 knowledge/） |
+
+**工具是哑的，Skill 是聪明的。** 两个分身用同样的工具（file_write、web_fetch），但因为 Skill 不同，做的事完全不同。
+
+### 1.3 分身归 Hub 管理
+
+```
+Hub (hub.yinnho.cn)  ←→  opencarrier (本地)
+     │                        │
+     ├─ 发布/搜索/下载         ├─ 运行分身
+     ├─ 版本管理               ├─ 自动进化
+     ├─ 评分/反馈              ├─ 知识管理
+     └─ API Key + 设备绑定     └─ 经验回流
+```
+
+- 用户在 Hub 注册账号，创建 API Key
+- `opencarrier hub install <name>` 下载分身，绑定设备
+- 分身运行中产生的经验可以匿名化后推回 Hub
+
+### 1.4 关键原则
 
 | 原则 | 说明 |
 |------|------|
-| **App 拥有记忆** | 所有会话历史、用户偏好、上下文信息存储在 App 端 |
-| **Carrier 无状态** | Carrier 不持久化记忆，每次请求独立处理 |
-| **压缩由 App 发起** | 当记忆超过阈值时，App 发起压缩请求，Carrier 执行压缩 |
-| **执行结果保证** | Carrier 负责确保任务完成，包括重试和修复 |
+| **一户一备** | 每个用户自部署自己的 opencarrier，不需要多租户隔离 |
+| **分身绑定环境** | 企微分身就是企微分身，skill 写死调企微 API，不需要跨平台抽象 |
+| **通道 = 管道** | 企微/Telegram/Discord 只是消息通道，分身根据内容决定行为 |
+| **平台提供能力** | 学习、进化、维护是平台级能力，不是分身 skill |
+| **系统提供机制，分身提供智能** | 系统是身体（自动进化、清理、版本记录），分身是人格（决定行为） |
+| **Workspace 即分身** | workspace 里的文件就是分身的身份，不是附属数据 |
+| **文件是活的** | lifecycle 系统修改 workspace 文件，下次对话自动生效 |
+| **Manifest 是元数据** | AgentManifest 描述运行参数（模型、资源、能力），不含身份内容 |
+| **动态组装** | system prompt 每次对话从文件构建，不预存 |
+
+### 1.5 系统与分身的关系
+
+```
+系统（opencarrier）                       分身
+┌──────────────────────┐               ┌──────────────────────┐
+│ 自主功能（分身无感）    │               │ 身份（SOUL.md）        │
+│ · 对话后进化           │──自动触发──→  │ 指令（system_prompt）  │
+│ · 知识过期清理         │               │ 知识（knowledge/）     │
+│ · 版本记录            │               │ 技能（skills/）        │
+│                      │               │                      │
+│ 系统工具（按需调用）    │               │                      │
+│ · knowledge_import   │←─tool_call──│ 分身的 Skill 决定      │
+│ · knowledge_compile  │               │ 什么时候用、怎么用     │
+│ · knowledge_lint     │               │                      │
+│ · clone_evaluate     │               │                      │
+│ · feedback_push      │               │                      │
+└──────────────────────┘               └──────────────────────┘
+```
+
+- **系统 = 身体**（自主神经、代谢、免疫系统）— 进化、清理、版本记录自动运行
+- **分身 = 人格**（性格、知识、行为模式）— 四部分文件定义身份
+- **系统工具 = 器官**（可用但分身决定何时用）
+
+### 1.6 Workspace 即分身
+
+分身的 workspace 不只是工作目录——它就是分身本身：
+
+```
+~/.opencarrier/workspaces/<name>/
+├── SOUL.md              ← 人格（系统 = 身体，这部分 = 性格）
+├── system_prompt.md     ← 行为指令（怎么做事情）
+├── MEMORY.md            ← 知识索引（始终加载）
+├── data/knowledge/      ← 知识库（按需加载）
+├── skills/              ← 技能（按需激活）
+├── agent.toml           ← 运行参数（模型、资源、能力）— 不是身份
+├── profile.md           ← 分身档案（名称、描述、来源）
+├── history/             ← 知识版本历史
+├── sessions/            ← 会话记录
+├── memory/              ← 运行时记忆
+├── output/              ← 工作产物
+└── logs/                ← 运行日志
+```
+
+**关键**：lifecycle 系统直接操作这些文件。修改 knowledge/ 中的文件、更新 skills/ 中的技能、整理 MEMORY.md —— 这些操作不需要改 manifest，下次对话自动生效。
+
+### 1.7 动态 System Prompt 构建
+
+System prompt 不在 .agx 安装时预拼接，而是每次 agent loop 启动时从 workspace 文件动态构建：
+
+```
+SOUL.md（人格 — 最高优先级）
+  → 引导语："体现以上人格和语气"
+  → system_prompt.md（行为指令）
+  → Skill 目录（所有 skill 的 name + when_to_use，始终注入）
+  → Skill 完整 prompt（被激活的 skill 的 body + allowed_tools，按需注入）
+  → MEMORY.md（知识索引）
+  → 相关知识（LLM 按需选择的 knowledge/ 文件）
+```
+
+这样 lifecycle 系统修改 workspace 文件后，不需要重新安装分身，下次对话自动生效。
 
 ---
 
-## 2. 记忆管理原则
+## 2. 三层能力架构
 
-### 2.1 记忆归属
+### 2.1 系统能力（内核自动运行）
 
+平台内置，分身无感，自动触发：
+
+- **对话后自动进化** — 每次对话后台提取新知识、发现知识缺口
+- **知识生命周期** — 过期清理、膨胀控制、重复合并
+- **知识版本管理** — 变更自动记录，支持回滚和审计
+- **反馈回流** — 匿名化经验推送回 Hub
+
+### 2.2 系统工具（内核提供，分身可调用）
+
+平台提供，所有分身通过 tool_call 使用：
+
+| 工具 | 功能 |
+|------|------|
+| `knowledge_import` | 导入数据（聊天记录/FAQ/文档/URL） |
+| `knowledge_compile` | 编译知识（生成 description/tags） |
+| `knowledge_lint` | 知识健康检查 |
+| `knowledge_heal` | 自动修复知识问题 |
+| `clone_evaluate` | 分身质量评估 |
+| `clone_export` | 导出为 .agx |
+| `clone_list` | 列出已安装分身 |
+| `feedback_push` | 推送经验反馈到 Hub |
+
+### 2.3 分身 Skill（分身特有）
+
+Skill 是分身的行为智能，定义在 skills/ 目录中，是分身身份的一部分。格式为 Markdown + YAML frontmatter：
+
+```yaml
+---
+name: customer-support
+when_to_use: 用户咨询退货、换货、售后问题时激活
+allowed_tools: [knowledge_search, web_fetch]
+version: 1
+usage_count: 15
+---
+
+# 客户支持流程
+
+当用户咨询售后问题时，按以下流程操作：
+1. 确认用户的问题类型（退货/换货/投诉）
+2. 搜索知识库中的相关政策
+3. 根据政策给出解决方案
+4. 记录处理结果
 ```
-记忆存储位置：App 端
 
-原因：
-1. App 是用户入口，需要维护完整的对话上下文
-2. 一个用户可能连接多个 Carrier，统一在 App 管理
-3. Carrier 可能随时下线，记忆不能丢失
-4. 压缩策略由 App 根据实际需求决定
-```
+一个 Skill = **什么时候激活** + **能用什么工具** + **怎么做**。
 
-### 2.2 记忆压缩流程
-
-```
-┌─────────┐                    ┌───────────┐
-│   App   │                    │  Carrier  │
-└────┬────┘                    └─────┬─────┘
-     │                               │
-     │ 1. 检测记忆大小 > 阈值         │
-     │                               │
-     │ 2. 发送压缩请求               │
-     │   {                          │
-     │     method: "compactMemory", │
-     │     messages: [...],         │
-     │     keepRecent: 50           │
-     │   }                          │
-     │──────────────────────────────▶│
-     │                               │
-     │                               │ 3. LLM 生成摘要
-     │                               │
-     │ 4. 返回压缩结果               │
-     │   {                          │
-     │     summary: "...",          │
-     │     recentMessages: [...]    │
-     │   }                          │
-     │◀──────────────────────────────│
-     │                               │
-     │ 5. 存储压缩后的记忆           │
-     │                               │
-```
-
-### 2.3 压缩策略
-
-```typescript
-// App 端的压缩配置
-interface MemoryConfig {
-  // 触发压缩的消息数量阈值
-  compactThreshold: number;  // 默认 100
-
-  // 保留的最近消息数量
-  keepRecentWindow: number;  // 默认 50
-
-  // 压缩后格式
-  // summary: LLM 生成的摘要
-  // recentMessages: 最近 N 条原始消息
-}
-```
+Skill 有完整的进化生命周期：从对话模式中诞生（同类请求 3+ 次 → 自动生成），通过 compile 优化，重叠时合并，30 天未激活过期，60 天后删除。
 
 ---
 
-## 3. 任务执行原则
-
-### 3.1 Carrier 的职责
-
-```rust
-/// Carrier 的核心能力
-trait CarrierCapabilities {
-    /// 1. 任务分解：将大任务拆分成可执行的小任务
-    fn decompose(&self, task: Task) -> Vec<SubTask>;
-
-    /// 2. 工具执行：调用工具完成任务
-    fn execute(&self, subtask: SubTask) -> Result<Output>;
-
-    /// 3. 执行监控：跟踪任务进度，检测异常
-    fn monitor(&self, execution: Execution) -> Status;
-
-    /// 4. 自动修复：遇到错误时自动重试或调整策略
-    fn repair(&self, error: Error) -> RecoveryPlan;
-
-    /// 5. 结果保证：确保最终返回有效结果
-    fn guarantee(&self, result: Result) -> GuaranteedResult;
-}
-```
-
-### 3.2 执行保证机制
+## 3. 实现分层原则
 
 ```
-任务执行流程：
-
-输入任务
-    │
-    ▼
-┌─────────────────┐
-│  任务分解       │ ← 拆分成可并行的子任务
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  并行执行       │ ← 调用工具，执行子任务
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐     ┌─────────────────┐
-│  结果检查       │────▶│  成功？          │
-└─────────────────┘     └────────┬────────┘
-                                 │
-                    ┌────────────┼────────────┐
-                    │ No         │            │ Yes
-                    ▼            │            ▼
-           ┌─────────────────┐   │   ┌─────────────────┐
-           │  错误分析       │   │   │  汇总结果       │
-           └────────┬────────┘   │   └────────┬────────┘
-                    │            │            │
-                    ▼            │            │
-           ┌─────────────────┐   │            │
-           │  自动修复       │   │            │
-           │  (重试/调整)    │───┘            │
-           └─────────────────┘                │
-                                               ▼
-                                      ┌─────────────────┐
-                                      │  返回保证结果   │
-                                      └─────────────────┘
+┌─────────────────────────────────┐
+│     Skill（LLM 编排层）          │  需要理解上下文、多步决策
+│     clone-import / clone-heal    │  调用 Tool + Script
+├─────────────────────────────────┤
+│     Tool（原子操作层）            │  单步、确定性
+│     knowledge_import / lint     │  内核注册，分身可调用
+├─────────────────────────────────┤
+│     Script（纯计算层）           │  数据转换，不需要 LLM
+│     chat_parser / faq_parser    │  通过 shell_exec 或 Tool 调用
+└─────────────────────────────────┘
 ```
+
+**原则**：
+- LLM 只做需要判断的事
+- 机械操作都是脚本
+- Skill 是编排层
 
 ---
 
-## 4. 通信协议
+## 4. Crate 结构
 
-### 4.1 A2A 协议
-
-- **传输层**: JSON-RPC 2.0 over TCP
-- **默认端口**: 86
-- **消息格式**: 每行一个 JSON 对象，以 `\n` 结尾
-
-### 4.2 主要方法
-
-| 方法 | 发起方 | 说明 |
-|------|--------|------|
-| `sendMessage` | App → Carrier | 发送消息给 Agent |
-| `compactMemory` | App → Carrier | 发起记忆压缩 |
-| `getAgentCard` | App → Carrier | 获取 Agent 能力 |
-| `executeTask` | App → Carrier | 执行任务 |
-| `taskStatus` | Carrier → App | 任务状态更新 |
-| `taskResult` | Carrier → App | 任务执行结果 |
-
----
-
-## 5. 开发规范
-
-### 5.1 App 端开发
-
-```kotlin
-// App 端职责清单
-class AppResponsibilities {
-    // ✅ 应该做
-    - 管理会话历史和上下文
-    - 决定何时压缩记忆
-    - 协调多个 Carrier
-    - 处理用户界面
-
-    // ❌ 不应该做
-    - 直接执行复杂任务逻辑
-    - 存储业务数据（交给 Carrier 或后端）
-    - 长时间阻塞等待
-}
 ```
-
-### 5.2 Carrier 端开发
-
-```rust
-// Carrier 端职责清单
-struct CarrierResponsibilities {
-    // ✅ 应该做
-    - 任务分解和执行
-    - 工具调用和管理
-    - 错误检测和自动修复
-    - 保证返回有效结果
-
-    // ❌ 不应该做
-    - 持久化用户会话记忆
-    - 决定压缩策略
-    - 跨会话保持状态（除非明确要求）
-}
+opencarrier-cli            CLI (二进制名: opencarrier)
+    |
+opencarrier-api            REST/WS/SSE API (Axum 0.8, 76 endpoints)
+    |
+opencarrier-kernel         内核：组装所有子系统
+    |
+    +-- opencarrier-runtime     Agent loop, 3 LLM drivers, 23 tools
+    +-- opencarrier-channels    40 channel adapters
+    +-- opencarrier-clone       .agx 分身管理：Hub 下载、安装、转换
+    +-- opencarrier-lifecycle   分身生命周期：进化、编译、健康、评估  ← NEW
+    +-- opencarrier-skills      60 bundled skills
+    +-- opencarrier-extensions  MCP 扩展系统
+    +-- opencarrier-hands       Hands 系统
+    +-- opencarrier-wire        OFP P2P 网络
+    +-- opencarrier-migrate     迁移工具
+    |
+opencarrier-memory         SQLite 存储、语义搜索、会话管理
+    |
+opencarrier-types          共享类型
 ```
 
 ---
 
-## 6. 参考文档
+## 5. 设计文档索引
 
-- [A2A 协议应用及开发计划](./A2A-PROTOCOL-PLAN.md)
-- [Agent Protocol 规范](../../agent-cli/docs/PROTOCOL.md)
-- [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification)
+| 文档 | 内容 |
+|------|------|
+| [architecture.md](./architecture.md) | 技术架构：crate 结构、内核启动、agent 生命周期、安全模型 |
+| [CLONE-LIFECYCLE-SYSTEM.md](./CLONE-LIFECYCLE-SYSTEM.md) | 分身生命周期系统：进化、编译、健康、评估的详细设计 |
+| [skill-development.md](./skill-development.md) | Skill 开发指南 |
+| [configuration.md](./configuration.md) | 配置参考 |
+| [api-reference.md](./api-reference.md) | API 文档 |
+| [channel-adapters.md](./channel-adapters.md) | 40 通道适配器 |
 
 ---
 
-**最后更新**: 2026-03-20
+**最后更新**: 2026-04-11
 **维护者**: 应合网络团队

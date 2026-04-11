@@ -53,12 +53,11 @@ impl SetupWizard {
     /// This maps the intent into a concrete agent manifest with appropriate
     /// model configuration, capabilities, and schedule.
     pub fn build_plan(intent: AgentIntent) -> SetupPlan {
-        // Map model tier to provider/model
-        // Use "default" so the kernel applies config.toml's [default_model].
-        // Only "complex" tier gets an explicit Anthropic override.
-        let (provider, model) = match intent.model_tier.as_str() {
-            "complex" => ("anthropic", "claude-sonnet-4-20250514"),
-            _ => ("default", "default"),
+        // Model tier maps to a modality — Brain handles endpoint selection
+        let modality = match intent.model_tier.as_str() {
+            "complex" => "reasoning",
+            "simple" => "fast",
+            _ => "chat",
         };
 
         // Build capabilities from intent
@@ -156,13 +155,10 @@ impl SetupWizard {
             module: "builtin:chat".to_string(),
             schedule,
             model: ModelConfig {
-                provider: provider.to_string(),
-                model: model.to_string(),
                 max_tokens: 4096,
                 temperature: 0.7,
                 system_prompt,
-                api_key_env: None,
-                base_url: None,
+                modality: modality.to_string(),
             },
             resources: ResourceQuota::default(),
             priority: Priority::default(),
@@ -172,16 +168,15 @@ impl SetupWizard {
             mcp_servers: vec![],
             metadata: HashMap::new(),
             tags: vec![],
-            routing: None,
             autonomous: None,
-            pinned_model: None,
             workspace: None,
             generate_identity_files: true,
             profile: None,
-            fallback_models: vec![],
             exec_policy: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
+            clone_source: None,
+            knowledge_files: vec![],
         };
 
         let skills_to_install: Vec<String> = intent
@@ -192,11 +187,10 @@ impl SetupWizard {
             .collect();
 
         let summary = format!(
-            "Agent '{}': {}\n  Model: {}/{}\n  Skills: {}\n  Schedule: {}",
+            "Agent '{}': {}\n  Modality: {}\n  Skills: {}\n  Schedule: {}",
             intent.name,
             intent.description,
-            provider,
-            model,
+            modality,
             if skills_to_install.is_empty() {
                 "none".to_string()
             } else {
@@ -286,7 +280,7 @@ mod tests {
         let plan = SetupWizard::build_plan(intent);
 
         assert_eq!(plan.manifest.name, "research-bot");
-        assert_eq!(plan.manifest.model.provider, "default");
+        assert_eq!(plan.manifest.model.modality, "chat");
         assert!(plan
             .manifest
             .capabilities
@@ -301,8 +295,7 @@ mod tests {
         intent.model_tier = "complex".to_string();
         let plan = SetupWizard::build_plan(intent);
 
-        assert_eq!(plan.manifest.model.provider, "anthropic");
-        assert!(plan.manifest.model.model.contains("sonnet"));
+        assert_eq!(plan.manifest.model.modality, "reasoning");
     }
 
     #[test]

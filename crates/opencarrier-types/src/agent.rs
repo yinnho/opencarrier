@@ -7,65 +7,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-/// Unique identifier for a user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct UserId(pub Uuid);
-
-impl UserId {
-    /// Generate a new random UserId.
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-}
-
-impl Default for UserId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for UserId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::str::FromStr for UserId {
-    type Err = uuid::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Uuid::parse_str(s)?))
-    }
-}
-
-/// Model routing configuration — auto-selects cheap/mid/expensive models by complexity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ModelRoutingConfig {
-    /// Model to use for simple queries.
-    pub simple_model: String,
-    /// Model to use for medium-complexity queries.
-    pub medium_model: String,
-    /// Model to use for complex queries.
-    pub complex_model: String,
-    /// Token count threshold: below this = simple.
-    pub simple_threshold: u32,
-    /// Token count threshold: above this = complex.
-    pub complex_threshold: u32,
-}
-
-impl Default for ModelRoutingConfig {
-    fn default() -> Self {
-        Self {
-            simple_model: "claude-haiku-4-5-20251001".to_string(),
-            medium_model: "claude-sonnet-4-20250514".to_string(),
-            complex_model: "claude-sonnet-4-20250514".to_string(),
-            simple_threshold: 100,
-            complex_threshold: 500,
-        }
-    }
-}
-
 /// Autonomous agent configuration — guardrails for 24/7 agents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -367,50 +308,38 @@ impl ToolProfile {
     }
 }
 
-/// LLM model configuration for an agent.
+/// LLM generation parameters for an agent.
+///
+/// The provider/model is managed by the carrier's Brain (brain.json),
+/// not by individual agents. Agents only configure generation params.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelConfig {
-    /// LLM provider name.
-    pub provider: String,
-    /// Model identifier.
-    #[serde(alias = "name")]
-    pub model: String,
     /// Maximum tokens for completion.
     pub max_tokens: u32,
     /// Sampling temperature.
     pub temperature: f32,
-    /// System prompt for the agent.
+    /// System prompt for the agent (built dynamically by prompt_builder).
+    #[serde(default)]
     pub system_prompt: String,
-    /// Optional API key environment variable name.
-    pub api_key_env: Option<String>,
-    /// Optional base URL override for the provider.
-    pub base_url: Option<String>,
+    /// Preferred modality (e.g., "chat", "vision", "code"). Default: "chat".
+    #[serde(default = "default_modality")]
+    pub modality: String,
+}
+
+fn default_modality() -> String {
+    "chat".to_string()
 }
 
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
-            provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             temperature: 0.7,
-            system_prompt: "You are a helpful AI agent.".to_string(),
-            api_key_env: None,
-            base_url: None,
+            system_prompt: String::new(),
+            modality: default_modality(),
         }
     }
-}
-
-/// A fallback model entry in a chain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FallbackModel {
-    pub provider: String,
-    pub model: String,
-    #[serde(default)]
-    pub api_key_env: Option<String>,
-    #[serde(default)]
-    pub base_url: Option<String>,
 }
 
 /// Tool configuration within an agent manifest.
@@ -436,11 +365,8 @@ pub struct AgentManifest {
     pub module: String,
     /// Scheduling mode.
     pub schedule: ScheduleMode,
-    /// LLM model configuration.
+    /// LLM generation parameters (provider/model managed by Brain).
     pub model: ModelConfig,
-    /// Fallback model chain — tried in order if the primary model fails.
-    #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
-    pub fallback_models: Vec<FallbackModel>,
     /// Resource quotas.
     pub resources: ResourceQuota,
     /// Priority level.
@@ -465,15 +391,9 @@ pub struct AgentManifest {
     /// Tags for agent discovery and categorization.
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub tags: Vec<String>,
-    /// Model routing configuration — auto-select models by complexity.
-    #[serde(default)]
-    pub routing: Option<ModelRoutingConfig>,
     /// Autonomous agent configuration — guardrails for 24/7 agents.
     #[serde(default)]
     pub autonomous: Option<AutonomousConfig>,
-    /// Pinned model override (used in Stable mode).
-    #[serde(default)]
-    pub pinned_model: Option<String>,
     /// Agent workspace directory. Auto-created on spawn.
     /// Default: `{workspaces_dir}/{agent_name}-{agent_id_prefix}/`
     #[serde(default)]
@@ -491,6 +411,31 @@ pub struct AgentManifest {
     /// Tool blocklist — these tools are excluded (applied after allowlist).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub tool_blocklist: Vec<String>,
+    /// Clone source metadata — populated when agent is loaded from .agx template.
+    #[serde(default)]
+    pub clone_source: Option<CloneSource>,
+    /// Knowledge file list — populated when agent is loaded from .agx template.
+    #[serde(default)]
+    pub knowledge_files: Vec<String>,
+}
+
+/// Metadata about the .agx template this agent was loaded from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloneSource {
+    /// Template name from the .agx archive.
+    pub template_name: String,
+    /// Template author (from Hub).
+    #[serde(default)]
+    pub template_author: String,
+    /// When this clone was installed (Unix timestamp).
+    #[serde(default)]
+    pub installed_at: String,
+    /// .agx format version (from template.json).
+    #[serde(default)]
+    pub agx_version: String,
+    /// Hub template ID (if installed from Hub).
+    #[serde(default)]
+    pub hub_template_id: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -507,7 +452,6 @@ impl Default for AgentManifest {
             module: "builtin:chat".to_string(),
             schedule: ScheduleMode::default(),
             model: ModelConfig::default(),
-            fallback_models: Vec::new(),
             resources: ResourceQuota::default(),
             priority: Priority::default(),
             capabilities: ManifestCapabilities::default(),
@@ -517,14 +461,14 @@ impl Default for AgentManifest {
             mcp_servers: Vec::new(),
             metadata: HashMap::new(),
             tags: Vec::new(),
-            routing: None,
             autonomous: None,
-            pinned_model: None,
             workspace: None,
             generate_identity_files: true,
             exec_policy: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
+            clone_source: None,
+            knowledge_files: Vec::new(),
         }
     }
 }
@@ -687,36 +631,6 @@ mod tests {
     }
 
     #[test]
-    fn test_user_id_uniqueness() {
-        let u1 = UserId::new();
-        let u2 = UserId::new();
-        assert_ne!(u1, u2);
-    }
-
-    #[test]
-    fn test_user_id_roundtrip() {
-        let u = UserId::new();
-        let json = serde_json::to_string(&u).unwrap();
-        let back: UserId = serde_json::from_str(&json).unwrap();
-        assert_eq!(u, back);
-    }
-
-    #[test]
-    fn test_model_routing_config_defaults() {
-        let cfg = ModelRoutingConfig::default();
-        assert!(!cfg.simple_model.is_empty());
-        assert!(cfg.simple_threshold < cfg.complex_threshold);
-    }
-
-    #[test]
-    fn test_model_routing_config_serde() {
-        let cfg = ModelRoutingConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: ModelRoutingConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.simple_model, cfg.simple_model);
-    }
-
-    #[test]
     fn test_autonomous_config_defaults() {
         let cfg = AutonomousConfig::default();
         assert_eq!(cfg.max_iterations, 50);
@@ -737,24 +651,6 @@ mod tests {
     }
 
     #[test]
-    fn test_manifest_with_routing_and_autonomous() {
-        let manifest = AgentManifest {
-            routing: Some(ModelRoutingConfig::default()),
-            autonomous: Some(AutonomousConfig::default()),
-            pinned_model: Some("claude-sonnet-4-20250514".into()),
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: AgentManifest = serde_json::from_str(&json).unwrap();
-        assert!(back.routing.is_some());
-        assert!(back.autonomous.is_some());
-        assert_eq!(
-            back.pinned_model,
-            Some("claude-sonnet-4-20250514".to_string())
-        );
-    }
-
-    #[test]
     fn test_agent_manifest_serialization() {
         let manifest = AgentManifest {
             name: "test-agent".to_string(),
@@ -764,7 +660,6 @@ mod tests {
             module: "test.wasm".to_string(),
             schedule: ScheduleMode::default(),
             model: ModelConfig::default(),
-            fallback_models: vec![],
             resources: ResourceQuota::default(),
             priority: Priority::default(),
             capabilities: ManifestCapabilities::default(),
@@ -774,14 +669,14 @@ mod tests {
             mcp_servers: vec![],
             metadata: HashMap::new(),
             tags: vec!["test".to_string()],
-            routing: None,
             autonomous: None,
-            pinned_model: None,
             workspace: None,
             generate_identity_files: true,
             exec_policy: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
+            clone_source: None,
+            knowledge_files: Vec::new(),
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let deserialized: AgentManifest = serde_json::from_str(&json).unwrap();
@@ -962,40 +857,7 @@ mod tests {
         assert_eq!(back, AgentMode::Assist);
     }
 
-    // ----- FallbackModel tests -----
-
-    #[test]
-    fn test_fallback_model_serde() {
-        let fb = FallbackModel {
-            provider: "groq".to_string(),
-            model: "llama-3.3-70b".to_string(),
-            api_key_env: Some("GROQ_API_KEY".to_string()),
-            base_url: None,
-        };
-        let json = serde_json::to_string(&fb).unwrap();
-        let back: FallbackModel = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.provider, "groq");
-        assert_eq!(back.model, "llama-3.3-70b");
-        assert_eq!(back.api_key_env, Some("GROQ_API_KEY".to_string()));
-    }
-
-    #[test]
-    fn test_manifest_with_new_fields() {
-        let manifest = AgentManifest {
-            profile: Some(ToolProfile::Coding),
-            fallback_models: vec![FallbackModel {
-                provider: "groq".to_string(),
-                model: "llama-3.3-70b".to_string(),
-                api_key_env: None,
-                base_url: None,
-            }],
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: AgentManifest = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.profile, Some(ToolProfile::Coding));
-        assert_eq!(back.fallback_models.len(), 1);
-    }
+    // ----- AgentEntry tests -----
 
     #[test]
     fn test_agent_entry_with_mode() {
@@ -1153,28 +1015,25 @@ mod tests {
         assert!(manifest.generate_identity_files);
     }
 
-    // ----- ModelConfig alias tests -----
+    // ----- ModelConfig modality tests -----
 
     #[test]
-    fn test_model_config_name_alias_toml() {
-        let toml_str = r#"
-name = "llama-3.3-70b-versatile"
-provider = "groq"
-"#;
-        let cfg: ModelConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.model, "llama-3.3-70b-versatile");
-        assert_eq!(cfg.provider, "groq");
+    fn test_model_config_default_modality() {
+        let cfg = ModelConfig::default();
+        assert_eq!(cfg.modality, "chat");
+        assert_eq!(cfg.max_tokens, 4096);
     }
 
     #[test]
-    fn test_model_config_model_field_still_works() {
+    fn test_model_config_toml() {
         let toml_str = r#"
-model = "gpt-4o"
-provider = "openai"
+modality = "code"
+max_tokens = 16384
+temperature = 0.3
 "#;
         let cfg: ModelConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.model, "gpt-4o");
-        assert_eq!(cfg.provider, "openai");
+        assert_eq!(cfg.modality, "code");
+        assert_eq!(cfg.max_tokens, 16384);
     }
 
     // ----- Multi-line system_prompt TOML tests (wizard generateToml output) -----
@@ -1187,8 +1046,7 @@ name = "brand-guardian"
 module = "builtin:chat"
 
 [model]
-provider = "google"
-model = "gemini-3-flash-preview"
+modality = "chat"
 system_prompt = """
 You are Brand Guardian, an expert brand strategist.
 
@@ -1204,8 +1062,7 @@ Critical Rules:
 "#;
         let manifest: AgentManifest = toml::from_str(toml_str).unwrap();
         assert_eq!(manifest.name, "brand-guardian");
-        assert_eq!(manifest.model.provider, "google");
-        assert_eq!(manifest.model.model, "gemini-3-flash-preview");
+        assert_eq!(manifest.model.modality, "chat");
         assert!(manifest.model.system_prompt.contains("Brand Guardian"));
         assert!(manifest.model.system_prompt.contains("Critical Rules:"));
         // Verify newlines are preserved
@@ -1219,8 +1076,6 @@ Critical Rules:
 name = "test-agent"
 
 [model]
-provider = "groq"
-model = "llama-3.3-70b-versatile"
 system_prompt = """
 You are a "helpful" assistant.
 When users say "hello", respond warmly.
@@ -1238,8 +1093,7 @@ When users say "hello", respond warmly.
 name = "coder"
 
 [model]
-provider = "deepseek"
-model = "deepseek-chat"
+modality = "code"
 system_prompt = """
 You are a coding assistant.
 
@@ -1264,8 +1118,6 @@ Always use proper indentation.
 name = "simple"
 
 [model]
-provider = "groq"
-model = "llama-3.3-70b-versatile"
 system_prompt = "You are a helpful assistant."
 "#;
         let manifest: AgentManifest = toml::from_str(toml_str).unwrap();
@@ -1280,8 +1132,7 @@ name = "brand-guardian"
 module = "builtin:chat"
 
 [model]
-provider = "google"
-model = "gemini-3-flash-preview"
+modality = "chat"
 system_prompt = """
 You are Brand Guardian.
 Protect brand consistency across all touchpoints.

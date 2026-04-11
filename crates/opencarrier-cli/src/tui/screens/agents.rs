@@ -103,7 +103,7 @@ pub struct DaemonAgent {
     pub id: String,
     pub name: String,
     pub state: String,
-    pub provider: String,
+    pub modality: String,
     pub model: String,
 }
 
@@ -112,7 +112,7 @@ pub struct InProcessAgent {
     pub id: opencarrier_types::agent::AgentId,
     pub name: String,
     pub state: String,
-    pub provider: String,
+    pub modality: String,
     pub model: String,
 }
 
@@ -122,7 +122,7 @@ pub struct AgentDetail {
     pub name: String,
     pub state: String,
     pub model: String,
-    pub provider: String,
+    pub modality: String,
     pub created: String,
     pub last_active: String,
     pub tags: Vec<String>,
@@ -219,7 +219,7 @@ impl AgentSelectState {
                             id: a["id"].as_str().unwrap_or("?").to_string(),
                             name: a["name"].as_str().unwrap_or("?").to_string(),
                             state: a["state"].as_str().unwrap_or("?").to_string(),
-                            provider: a["model_provider"].as_str().unwrap_or("?").to_string(),
+                            modality: a["modality"].as_str().unwrap_or("?").to_string(),
                             model: a["model_name"].as_str().unwrap_or("?").to_string(),
                         });
                     }
@@ -238,8 +238,8 @@ impl AgentSelectState {
                 id: entry.id,
                 name: entry.name.clone(),
                 state: format!("{:?}", entry.state),
-                provider: entry.manifest.model.provider.clone(),
-                model: entry.manifest.model.model.clone(),
+                modality: entry.manifest.model.modality.clone(),
+                model: String::new(),
             });
         }
         self.rebuild_filter();
@@ -284,7 +284,7 @@ impl AgentSelectState {
             let a = &self.daemon_agents[combined_idx];
             (
                 a.name.clone(),
-                format!("{}/{}", a.provider, a.model),
+                format!("{}/{}", a.modality, a.model),
                 String::new(),
             )
         } else {
@@ -293,7 +293,7 @@ impl AgentSelectState {
                 let a = &self.inprocess_agents[local_idx];
                 (
                     a.name.clone(),
-                    format!("{}/{}", a.provider, a.model),
+                    format!("{}/{}", a.modality, a.model),
                     String::new(),
                 )
             } else {
@@ -332,7 +332,7 @@ impl AgentSelectState {
             name: a.name.clone(),
             state: a.state.clone(),
             model: a.model.clone(),
-            provider: a.provider.clone(),
+            modality: a.modality.clone(),
             ..Default::default()
         }
     }
@@ -345,7 +345,7 @@ impl AgentSelectState {
             name: a.name.clone(),
             state: a.state.clone(),
             model: a.model.clone(),
-            provider: a.provider.clone(),
+            modality: a.modality.clone(),
             ..Default::default()
         }
     }
@@ -1046,7 +1046,7 @@ fn draw_agent_list_full(f: &mut Frame, area: Rect, state: &mut AgentSelectState)
                     Span::styled(
                         format!(
                             " {:<24}",
-                            truncate(&format!("{}/{}", a.provider, a.model), 23)
+                            truncate(&format!("{}/{}", a.modality, a.model), 23)
                         ),
                         Style::default().fg(theme::YELLOW),
                     ),
@@ -1065,7 +1065,7 @@ fn draw_agent_list_full(f: &mut Frame, area: Rect, state: &mut AgentSelectState)
                     Span::styled(
                         format!(
                             " {:<24}",
-                            truncate(&format!("{}/{}", a.provider, a.model), 23)
+                            truncate(&format!("{}/{}", a.modality, a.model), 23)
                         ),
                         Style::default().fg(theme::YELLOW),
                     ),
@@ -1164,8 +1164,8 @@ fn draw_detail(f: &mut Frame, area: Rect, state: &AgentSelectState) {
                     Span::styled(format!(" ({})", detail.state), theme::dim_style()),
                 ]),
                 Line::from(vec![
-                    Span::raw("  Provider: "),
-                    Span::styled(&detail.provider, Style::default().fg(theme::YELLOW)),
+                    Span::raw("  Modality: "),
+                    Span::styled(&detail.modality, Style::default().fg(theme::YELLOW)),
                 ]),
                 Line::from(vec![
                     Span::raw("  Model:    "),

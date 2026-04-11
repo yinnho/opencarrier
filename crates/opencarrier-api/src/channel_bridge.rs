@@ -491,132 +491,6 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         msg
     }
 
-    #[allow(dead_code)]
-    async fn manage_schedule_text(&self, action: &str, args: &[String]) -> String {
-        match action {
-            "add" => {
-                // Expected: <agent> <f1> <f2> <f3> <f4> <f5> <message...>
-                // 5 cron fields: min hour dom month dow
-                if args.len() < 7 {
-                    return "Usage: /schedule add <agent> <min> <hour> <dom> <month> <dow> <message>".to_string();
-                }
-                let agent_name = &args[0];
-                let agent = match self.kernel.registry.find_by_name(agent_name) {
-                    Some(e) => e,
-                    None => return format!("Agent '{agent_name}' not found."),
-                };
-                let cron_expr = args[1..6].join(" ");
-                let message = args[6..].join(" ");
-
-                let job = opencarrier_types::scheduler::CronJob {
-                    id: opencarrier_types::scheduler::CronJobId::new(),
-                    agent_id: agent.id,
-                    name: format!("chat-{}", &agent.name),
-                    enabled: true,
-                    schedule: opencarrier_types::scheduler::CronSchedule::Cron {
-                        expr: cron_expr.clone(),
-                        tz: None,
-                    },
-                    action: opencarrier_types::scheduler::CronAction::AgentTurn {
-                        message: message.clone(),
-                        model_override: None,
-                        timeout_secs: None,
-                    },
-                    delivery: opencarrier_types::scheduler::CronDelivery::None,
-                    created_at: chrono::Utc::now(),
-                    last_run: None,
-                    next_run: None,
-                };
-
-                match self.kernel.cron_scheduler.add_job(job, false) {
-                    Ok(id) => {
-                        let id_str = id.0.to_string();
-                        let id_short = safe_truncate_str(&id_str, 8);
-                        format!("Job [{id_short}] created: '{cron_expr}' -> {agent_name}: \"{message}\"")
-                    }
-                    Err(e) => format!("Failed to create job: {e}"),
-                }
-            }
-            "del" => {
-                if args.is_empty() {
-                    return "Usage: /schedule del <id-prefix>".to_string();
-                }
-                let prefix = &args[0];
-                let jobs = self.kernel.cron_scheduler.list_all_jobs();
-                let matched: Vec<_> = jobs
-                    .iter()
-                    .filter(|j| j.id.0.to_string().starts_with(prefix.as_str()))
-                    .collect();
-                match matched.len() {
-                    0 => format!("No job found matching '{prefix}'."),
-                    1 => {
-                        let j = matched[0];
-                        match self.kernel.cron_scheduler.remove_job(j.id) {
-                            Ok(_) => {
-                                let id_str = j.id.0.to_string();
-                                format!(
-                                    "Job [{}] '{}' removed.",
-                                    safe_truncate_str(&id_str, 8),
-                                    j.name
-                                )
-                            }
-                            Err(e) => format!("Failed to remove job: {e}"),
-                        }
-                    }
-                    n => format!("{n} jobs match '{prefix}'. Be more specific."),
-                }
-            }
-            "run" => {
-                if args.is_empty() {
-                    return "Usage: /schedule run <id-prefix>".to_string();
-                }
-                let prefix = &args[0];
-                let jobs = self.kernel.cron_scheduler.list_all_jobs();
-                let matched: Vec<_> = jobs
-                    .iter()
-                    .filter(|j| j.id.0.to_string().starts_with(prefix.as_str()))
-                    .collect();
-                match matched.len() {
-                    0 => format!("No job found matching '{prefix}'."),
-                    1 => {
-                        let j = matched[0];
-                        let message = match &j.action {
-                            opencarrier_types::scheduler::CronAction::AgentTurn {
-                                message, ..
-                            } => message.clone(),
-                            opencarrier_types::scheduler::CronAction::SystemEvent { text } => {
-                                text.clone()
-                            }
-                            opencarrier_types::scheduler::CronAction::WorkflowRun {
-                                workflow_id,
-                                input,
-                                ..
-                            } => {
-                                format!(
-                                    "Run workflow {workflow_id}{}",
-                                    input
-                                        .as_deref()
-                                        .map(|i| format!(" with input: {i}"))
-                                        .unwrap_or_default()
-                                )
-                            }
-                        };
-                        match self.kernel.send_message(j.agent_id, &message).await {
-                            Ok(result) => {
-                                let id_str = j.id.0.to_string();
-                                let id_short = safe_truncate_str(&id_str, 8);
-                                format!("Job [{id_short}] ran:\n{}", result.response)
-                            }
-                            Err(e) => format!("Failed to run job: {e}"),
-                        }
-                    }
-                    n => format!("{n} jobs match '{prefix}'. Be more specific."),
-                }
-            }
-            _ => "Unknown schedule action. Use: add, del, run".to_string(),
-        }
-    }
-
     async fn list_approvals_text(&self) -> String {
         let pending = self.kernel.approval_manager.list_pending();
         if pending.is_empty() {
@@ -705,22 +579,22 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                 .get(agent_id)
                 .ok_or_else(|| "Agent not found".to_string())?;
             return Ok(format!(
-                "Current model: {} (provider: {})",
-                entry.manifest.model.model, entry.manifest.model.provider
+                "Current model: {}",
+                entry.manifest.model.modality
             ));
         }
         self.kernel
-            .set_agent_model(agent_id, model, None)
+            .set_agent_model(agent_id, model)
             .map_err(|e| format!("{e}"))?;
-        // Read back resolved model+provider from registry
+        // Read back resolved model from registry
         let entry = self
             .kernel
             .registry
             .get(agent_id)
             .ok_or_else(|| "Agent not found after model switch".to_string())?;
         Ok(format!(
-            "Model switched to: {} (provider: {})",
-            entry.manifest.model.model, entry.manifest.model.provider
+            "Model switched to: {}",
+            entry.manifest.model.modality
         ))
     }
 
@@ -817,32 +691,11 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
 
     async fn authorize_channel_user(
         &self,
-        channel_type: &str,
-        platform_id: &str,
-        action: &str,
+        _channel_type: &str,
+        _platform_id: &str,
+        _action: &str,
     ) -> Result<(), String> {
-        if !self.kernel.auth.is_enabled() {
-            return Ok(()); // RBAC not configured — allow all
-        }
-
-        let user_id = self
-            .kernel
-            .auth
-            .identify(channel_type, platform_id)
-            .ok_or_else(|| "Unrecognized user. Contact an admin to get access.".to_string())?;
-
-        let auth_action = match action {
-            "chat" => opencarrier_kernel::auth::Action::ChatWithAgent,
-            "spawn" => opencarrier_kernel::auth::Action::SpawnAgent,
-            "kill" => opencarrier_kernel::auth::Action::KillAgent,
-            "install_skill" => opencarrier_kernel::auth::Action::InstallSkill,
-            _ => opencarrier_kernel::auth::Action::ChatWithAgent,
-        };
-
-        self.kernel
-            .auth
-            .authorize(user_id, &auth_action)
-            .map_err(|e| e.to_string())
+        Ok(()) // Single-user instance — allow all
     }
 
     async fn record_delivery(
@@ -1661,7 +1514,6 @@ pub async fn start_channel_bridge_with_config(
     let mut system_default_set = false;
     for (adapter, default_agent) in &adapters {
         if let Some(ref name) = default_agent {
-            // Resolve agent name to ID
             let agent_id = match handle.find_agent_by_name(name).await {
                 Ok(Some(id)) => Some(id),
                 _ => match handle.spawn_agent_by_name(name).await {
@@ -1695,11 +1547,11 @@ pub async fn start_channel_bridge_with_config(
 
     // Load bindings and broadcast config from kernel
     let bindings = kernel.list_bindings();
+    // Always register all known agents (even without bindings) for name resolution
+    for entry in kernel.registry.list() {
+        router.register_agent(entry.name.clone(), entry.id);
+    }
     if !bindings.is_empty() {
-        // Register all known agents in the router's name cache for binding resolution
-        for entry in kernel.registry.list() {
-            router.register_agent(entry.name.clone(), entry.id);
-        }
         router.load_bindings(&bindings);
         info!(count = bindings.len(), "Loaded agent bindings into router");
     }

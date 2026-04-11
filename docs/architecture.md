@@ -1,6 +1,40 @@
 # OpenCarrier Architecture
 
-This document describes the internal architecture of OpenCarrier, the open-source Agent Operating System built in Rust. It covers the crate structure, kernel boot sequence, agent lifecycle, memory substrate, LLM driver abstraction, capability-based security model, the OFP wire protocol, the security hardening stack, the channel and skill systems, and the agent stability subsystems.
+This document describes the internal architecture of OpenCarrier, the open-source Agent Operating System built in Rust. It covers the crate structure, kernel boot sequence, agent lifecycle, memory substrate, LLM driver abstraction, capability-based security model, the OFP wire protocol, the security hardening stack, the channel and skill systems, the agent stability subsystems, and the clone lifecycle system.
+
+> **See also**: [CLONE-LIFECYCLE-SYSTEM.md](./CLONE-LIFECYCLE-SYSTEM.md) for the detailed design of the clone learning, evolution, and maintenance system.
+
+## Core Concept: 分身 (Clone) = Agent
+
+OpenCarrier executes tasks exclusively through **分身** — pre-packaged agents downloaded from Hub. There are no "bare agents"; every task runs as a 分身.
+
+```
+用户要做事 → 从 Hub 下载分身 → opencarrier 运行分身 → 分身完成任务
+```
+
+A 分身 is just an agent in opencarrier's existing format, bundled as a `.agx` archive:
+
+| .agx Component | opencarrier Agent Field |
+|----------------|------------------------|
+| SOUL.md | system prompt (personality) |
+| system_prompt.md | system prompt (behavior) |
+| knowledge/ | memory / knowledge base |
+| skills/ | skill definitions |
+| MEMORY.md | memory index |
+
+Multiple 分身 can run concurrently — each is an independent agent managed by the kernel.
+
+## 分身 Lifecycle
+
+```
+Hub (.agx) → download with API Key → install as agent → spawn → run → evolve → push updates back to Hub
+```
+
+1. **Download**: `opencarrier hub install <name>` downloads .agx from Hub with API Key + device binding
+2. **Install**: .agx is extracted and converted to an opencarrier agent manifest
+3. **Run**: `opencarrier agent spawn <name>` starts the 分身
+4. **Evolve**: During use, knowledge grows, skills adapt
+5. **Sync**: Updates can be pushed back to Hub for version tracking
 
 ## Table of Contents
 
@@ -17,6 +51,7 @@ This document describes the internal architecture of OpenCarrier, the open-sourc
 - [Skill System](#skill-system)
 - [MCP and A2A Protocols](#mcp-and-a2a-protocols)
 - [Wire Protocol (OFP)](#wire-protocol-ofp)
+- [Clone Lifecycle System](#clone-lifecycle-system)
 - [Desktop Application](#desktop-application)
 - [Subsystem Diagram](#subsystem-diagram)
 
@@ -24,7 +59,7 @@ This document describes the internal architecture of OpenCarrier, the open-sourc
 
 ## Crate Structure
 
-OpenCarrier is organized as a Cargo workspace with 14 crates (13 code crates + xtask). Dependencies flow downward (lower crates depend on nothing above them).
+OpenCarrier is organized as a Cargo workspace with 15 crates (14 code crates + xtask). Dependencies flow downward (lower crates depend on nothing above them).
 
 ```
 opencarrier-cli            CLI interface, daemon auto-detect, MCP server
@@ -33,13 +68,15 @@ opencarrier-desktop        Tauri 2.0 desktop app (WebView + system tray)
     |
 opencarrier-api            REST/WS/SSE API server (Axum 0.8), 76 endpoints
     |
-opencarrier-kernel         Kernel: assembles all subsystems, workflow engine, RBAC, metering
+opencarrier-kernel         Kernel: assembles all subsystems, workflow engine, metering
     |
-    +-- opencarrier-runtime    Agent loop, 3 LLM drivers, 23 tools, WASM sandbox, MCP, A2A
-    +-- opencarrier-channels   40 channel adapters, bridge, formatter, rate limiter
-    +-- opencarrier-wire       OFP peer-to-peer networking with HMAC-SHA256 auth
-    +-- opencarrier-migrate    Migration engine (OpenClaw YAML->TOML)
-    +-- opencarrier-skills     60 bundled skills, FangHub marketplace, ClawHub client
+    +-- opencarrier-runtime     Agent loop, 3 LLM drivers, 23 tools, WASM sandbox, MCP, A2A
+    +-- opencarrier-channels    40 channel adapters, bridge, formatter, rate limiter
+    +-- opencarrier-wire        OFP peer-to-peer networking with HMAC-SHA256 auth
+    +-- opencarrier-migrate     Migration engine (OpenClaw YAML->TOML)
+    +-- opencarrier-skills      60 bundled skills, FangHub marketplace, ClawHub client
+    +-- opencarrier-clone       分身管理：Hub 下载、.agx 加载、workspace 安装（不拼接 system_prompt）
+    +-- opencarrier-lifecycle   分身 lifecycle: evolution, compile, health, evaluate, version, feedback
     |
 opencarrier-memory         SQLite memory substrate, sessions, semantic search, usage tracking
     |
@@ -53,8 +90,8 @@ opencarrier-types          Shared types: Agent, Capability, Event, Memory, Messa
 |-------|-------------|
 | **opencarrier-types** | Core type definitions used across all crates. Defines `AgentManifest`, `AgentId`, `Capability`, `Event`, `ToolDefinition`, `KernelConfig`, `OpenCarrierError`, taint tracking (`TaintLabel`, `TaintSet`), Ed25519 manifest signing, model catalog types (`ModelCatalogEntry`, `ProviderInfo`, `ModelTier`), tool compatibility mappings (21 OpenClaw-to-OpenCarrier), MCP/A2A config types, and web config types. All config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
 | **opencarrier-memory** | SQLite-backed memory substrate (schema v5). Uses `Arc<Mutex<Connection>>` with `spawn_blocking` for async bridge. Provides structured KV storage, semantic search with vector embeddings, knowledge graph (entities and relations), session management, task board, usage event persistence (`usage_events` table, `UsageStore`), and canonical sessions for cross-channel memory. Five schema versions: V1 core, V2 collab, V3 embeddings, V4 usage, V5 canonical_sessions. |
-| **opencarrier-runtime** | Agent execution engine. Contains the agent loop (`run_agent_loop`, `run_agent_loop_streaming`), 3 native LLM drivers (Anthropic, Gemini, OpenAI-compatible covering 20 providers), 23 built-in tools, WASM sandbox (Wasmtime with dual fuel+epoch metering), MCP client/server (JSON-RPC 2.0 over stdio/SSE), A2A protocol (AgentCard, task management), web search engine (4 providers: Tavily/Brave/Perplexity/DuckDuckGo), web fetch with SSRF protection, loop guard (SHA256-based tool loop detection), session repair (history validation), LLM session compactor (block-aware), Merkle hash chain audit trail, and embedding driver. Defines the `KernelHandle` trait that enables inter-agent tools without circular crate dependencies. |
-| **opencarrier-kernel** | The central coordinator. `OpenCarrierKernel` assembles all subsystems: `AgentRegistry`, `AgentScheduler`, `CapabilityManager`, `EventBus`, `Supervisor`, `WorkflowEngine`, `TriggerEngine`, `BackgroundExecutor`, `WasmSandbox`, `ModelCatalog`, `MeteringEngine`, `ModelRouter`, `AuthManager` (RBAC), `HeartbeatMonitor`, `SetupWizard`, `SkillRegistry`, MCP connections, and `WebToolsContext`. Implements `KernelHandle` for inter-agent operations. Handles agent spawn/kill, message dispatch, workflow execution, trigger evaluation, capability inheritance validation, and graceful shutdown with state persistence. |
+| **opencarrier-runtime** | Agent execution engine. Contains the agent loop (`run_agent_loop`, `run_agent_loop_streaming`), 3 native LLM drivers (Anthropic, Gemini, OpenAI-compatible covering 20 providers), 23 built-in tools, WASM sandbox (Wasmtime with dual fuel+epoch metering), MCP client/server (JSON-RPC 2.0 over stdio/SSE), A2A protocol (AgentCard, task management), web search engine (4 providers: Tavily/Brave/Perplexity/DuckDuckGo), web fetch with SSRF protection, loop guard (SHA256-based tool loop detection), session repair (history validation), LLM session compactor (block-aware), Merkle hash chain audit trail, and embedding driver. **Lifecycle system tools** registered in tool_runner: `knowledge_import`, `knowledge_compile`, `knowledge_lint`, `knowledge_heal`, `clone_evaluate`, `clone_export`, `clone_list`, `feedback_push`. **Skill two-step activation**: skill catalog (name + when_to_use) always injected; full skill prompt + allowed_tools injected on-demand when skill is activated. Defines the `KernelHandle` trait that enables inter-agent tools without circular crate dependencies. |
+| **opencarrier-kernel** | The central coordinator. `OpenCarrierKernel` assembles all subsystems: `AgentRegistry`, `AgentScheduler`, `CapabilityManager`, `EventBus`, `Supervisor`, `WorkflowEngine`, `TriggerEngine`, `BackgroundExecutor`, `WasmSandbox`, `ModelCatalog`, `MeteringEngine`, `ModelRouter`, `AuthManager` (RBAC), `HeartbeatMonitor`, `SetupWizard`, `SkillRegistry`, MCP connections, `WebToolsContext`, and `CloneLifecycle`. Implements `KernelHandle` for inter-agent operations. **Dynamic system prompt construction**: builds system prompts from workspace files (SOUL.md, system_prompt.md, skills/, MEMORY.md, knowledge/) at runtime rather than using pre-baked manifest strings. Handles agent spawn/kill, message dispatch, workflow execution, trigger evaluation, capability inheritance validation, post-conversation evolution triggering, and graceful shutdown with state persistence. |
 | **opencarrier-api** | HTTP API server built on Axum 0.8 with 76 endpoints. Routes for agents, workflows, triggers, memory, channels, templates, models, providers, skills, ClawHub, MCP, health, status, version, and shutdown. WebSocket handler for real-time agent chat with streaming. SSE endpoint for streaming responses. OpenAI-compatible endpoints (`POST /v1/chat/completions`, `GET /v1/models`). A2A endpoints (`/.well-known/agent.json`, `/a2a/*`). Middleware: Bearer token auth, request ID injection, structured request logging, GCRA rate limiter (cost-aware), security headers (CSP, X-Frame-Options, etc.), health endpoint redaction. |
 | **opencarrier-channels** | Channel bridge layer with 40 adapters. Each adapter implements the `ChannelAdapter` trait. Includes: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email, SMS, Webhook, Teams, Mattermost, IRC, Google Chat, Twitch, Rocket.Chat, Zulip, XMPP, LINE, Viber, Messenger, Reddit, Mastodon, Bluesky, Feishu, Revolt, Nextcloud, Guilded, Keybase, Threema, Nostr, Webex, Pumble, Flock, Twist, Mumble, DingTalk, Discourse, Gitter, Ntfy, Gotify, LinkedIn. Features: `AgentRouter` for message routing, `BridgeManager` for lifecycle coordination, `ChannelRateLimiter` (per-user DashMap tracking), `formatter.rs` (Markdown to TelegramHTML/SlackMrkdwn/PlainText), `ChannelOverrides` (model/system_prompt/dm_policy/group_policy/rate_limit/threading/output_format), DM/group policy enforcement. |
 | **opencarrier-wire** | OpenCarrier Protocol (OFP) for peer-to-peer agent communication. JSON-framed messages over TCP with HMAC-SHA256 mutual authentication (nonce + constant-time verify via `subtle`). `PeerNode` listens for connections and manages peers. `PeerRegistry` tracks known remote peers and their agents. |
@@ -62,6 +99,7 @@ opencarrier-types          Shared types: Agent, Capability, Event, Memory, Messa
 | **opencarrier-desktop** | Tauri 2.0 native desktop application. Boots the kernel in-process, runs the axum server on a background thread, and points a WebView at `http://127.0.0.1:{random_port}`. Features: system tray (Show/Browser/Status/Quit), single-instance enforcement, desktop notifications, hide-to-tray on close. IPC commands: `get_port`, `get_status`. Mobile-ready with `#[cfg(desktop)]` guards. |
 | **opencarrier-migrate** | Migration engine. Supports OpenClaw (`~/.openclaw/`). Converts YAML configs to TOML, maps tool names, maps provider names, imports agent manifests, copies memory files, converts channel configs. Produces a `MigrationReport` with imported items, skipped items, and warnings. |
 | **opencarrier-skills** | Skill system for pluggable tool bundles. 60 bundled skills compiled via `include_str!()`. Skills are `skill.toml` + Python/WASM/Node.js/PromptOnly code. `SkillManifest` defines metadata, runtime config, provided tools, and requirements. `SkillRegistry` manages installed and bundled skills. `FangHubClient` connects to FangHub marketplace. `ClawHubClient` connects to clawhub.ai for cross-ecosystem skill discovery. `SKILL.md` parser for OpenClaw compatibility (YAML frontmatter + Markdown body). `SkillVerifier` with SHA256 verification. Prompt injection scanner (`scan_prompt_content()`) detects override attempts, data exfiltration, and shell references. |
+| **opencarrier-lifecycle** | Clone lifecycle system. Platform-level capabilities for all agents: post-conversation evolution (knowledge extraction + gap detection), knowledge compilation (description/tags generation + bloat control), knowledge health (lint + heal), quality evaluation, version management (JSONL audit log), data import (multi-format parsers: chat/FAQ/document/URL), and feedback pipeline (anonymization + Hub push). See [CLONE-LIFECYCLE-SYSTEM.md](./CLONE-LIFECYCLE-SYSTEM.md) for full design. |
 | **xtask** | Build automation tasks (cargo-xtask pattern). |
 
 ---
@@ -185,11 +223,50 @@ When the daemon wraps the kernel in `Arc`, additional steps occur:
 4. Validate capability inheritance (`validate_capability_inheritance()` prevents privilege escalation).
 5. Grant capabilities via `CapabilityManager`.
 6. Register with the `AgentScheduler` (quota tracking).
-7. Create `AgentEntry` and register in `AgentRegistry`.
-8. Persist to SQLite via `memory.save_agent()`.
-9. If agent has a parent, update parent's children list.
-10. Register proactive triggers (if schedule mode is `Proactive`).
-11. Publish `Lifecycle::Spawned` event and evaluate triggers.
+7. Create workspace directory structure (`data/`, `data/knowledge/`, `output/`, `sessions/`, `skills/`, `logs/`, `memory/`, `history/`).
+8. Create `AgentEntry` and register in `AgentRegistry`.
+9. Persist to SQLite via `memory.save_agent()`.
+10. If agent has a parent, update parent's children list.
+11. Register proactive triggers (if schedule mode is `Proactive`).
+12. Publish `Lifecycle::Spawned` event and evaluate triggers.
+
+### Clone Workspace Structure
+
+For agents loaded from .agx archives, the workspace contains the clone's identity files:
+
+```
+~/.opencarrier/workspaces/<name>/
+├── agent.toml           # 运行参数（模型、资源、能力）— 不是身份
+├── profile.md           # 分身档案
+├── SOUL.md              # 人格 — "你是谁"
+├── system_prompt.md     # 行为指令 — "你怎么做事"
+├── MEMORY.md            # 知识索引（始终加载到上下文）
+├── data/knowledge/      # 知识库（按需加载）
+├── skills/              # 技能定义（按需激活）
+├── history/             # 知识版本历史 (versions.jsonl)
+├── sessions/            # 会话记录
+├── memory/              # 运行时记忆
+├── output/              # 工作产物
+└── logs/                # 运行日志
+```
+
+The workspace IS the clone's identity. Lifecycle system operations modify these files directly, and changes take effect on the next conversation without reinstalling.
+
+### Dynamic System Prompt Construction
+
+System prompts are **not** pre-built during .agx installation. Instead, they are dynamically assembled from workspace files on each agent loop invocation:
+
+1. Read `SOUL.md` → personality layer (highest priority)
+2. Append transition: "体现以上人格和语气"
+3. Read `system_prompt.md` → behavior instructions
+4. Scan `skills/` directory → inject skill catalog (name + when_to_use for all skills, always present, very short)
+5. Read `MEMORY.md` → knowledge index
+6. **At runtime**: When the LLM activates a skill, inject that skill's full prompt body + allowed_tools
+7. **At runtime**: When the LLM needs knowledge, inject relevant files from `data/knowledge/`
+
+This dynamic construction enables the lifecycle system to modify workspace files (knowledge, skills, MEMORY) and have changes take effect immediately.
+
+**Fallback for non-clone agents**: If the workspace lacks SOUL.md / system_prompt.md, the kernel uses `manifest.model.system_prompt` as before (backward compatible).
 
 ### Message Flow
 
@@ -203,15 +280,19 @@ When the daemon wraps the kernel in `Arc`, additional steps occur:
    - `python:path/to/script.py`: Python subprocess execution (env_clear() + selective vars)
 6. **LLM agent loop** (for `builtin:chat`):
    a. Load or create session from memory.
-   b. Load canonical context summary (cross-channel memory) into system prompt.
-   c. Append stability guidelines to system prompt.
-   d. Resolve LLM driver (per-agent override or kernel default).
-   e. Gather available tools (filtered by capabilities + skill tools + MCP tools).
-   f. Initialize loop guard (tool loop detection).
-   g. Run session repair (validate and fix message history).
-   h. Run iterative loop: send messages to LLM, execute tool calls, accumulate results.
-   i. Auto-compact session if threshold exceeded (block-aware compaction).
-   j. Save updated session and canonical session back to memory.
+   b. Build system prompt dynamically from workspace files (SOUL.md → system_prompt.md → skill catalog → MEMORY.md). Falls back to `manifest.model.system_prompt` for non-clone agents.
+   c. Load canonical context summary (cross-channel memory) into system prompt.
+   d. Append stability guidelines to system prompt.
+   e. Resolve LLM driver (per-agent override or kernel default).
+   f. Gather available tools (filtered by capabilities + system tools + skill tools + MCP tools).
+   g. Initialize loop guard (tool loop detection).
+   h. Run session repair (validate and fix message history).
+   i. Run iterative loop: send messages to LLM, execute tool calls, accumulate results.
+      - When LLM activates a skill: inject full skill prompt body + allowed_tools.
+      - When LLM needs knowledge: inject relevant knowledge/ files.
+   j. Auto-compact session if threshold exceeded (block-aware compaction).
+   k. Save updated session and canonical session back to memory.
+   l. Trigger post-conversation evolution (background task, extracts knowledge + detects gaps).
 7. **Cost estimation**: `MeteringEngine.estimate_cost_with_catalog()` computes cost in USD.
 8. **Record usage**: Update quota tracking with token counts; persist usage event.
 9. **Return result**: `AgentLoopResult` with response text, token usage, iteration count, and `cost_usd`.
@@ -642,6 +723,47 @@ All skills pass through a security pipeline before activation:
 
 ---
 
+## Clone Lifecycle System
+
+The clone lifecycle system (`opencarrier-lifecycle`) provides platform-level capabilities that every agent automatically possesses — learning from conversations, maintaining knowledge health, and feeding experience back to the Hub ecosystem.
+
+> **Full design document**: [CLONE-LIFECYCLE-SYSTEM.md](./CLONE-LIFECYCLE-SYSTEM.md)
+
+### System Capabilities (Automatic)
+
+These run automatically without agent involvement:
+
+- **Post-conversation evolution**: After each conversation, a background task extracts new knowledge and detects knowledge gaps. Uses a zero-cost local pre-filter (skips trivial inputs) before invoking LLM analysis.
+- **Knowledge lifecycle management**: Automatic stale/expired knowledge cleanup, Jaccard-based duplicate detection and merging, and auto-compilation of missing descriptions/tags.
+- **Knowledge versioning**: JSONL-based audit log of all knowledge changes with rollback support.
+
+### System Tools (On-Demand)
+
+Agents can invoke these via tool_call:
+
+| Tool | Description |
+|------|-------------|
+| `knowledge_import` | Import data (chat records, FAQ, documents, URLs) into knowledge base |
+| `knowledge_compile` | Generate descriptions and tags for knowledge files |
+| `knowledge_lint` | Rule-based health check for knowledge base |
+| `knowledge_heal` | Auto-fix knowledge base issues |
+| `clone_evaluate` | Quality assessment (deterministic metrics + LLM qualitative evaluation) |
+| `clone_export` | Export agent as .agx archive |
+| `clone_list` | List installed agents |
+| `feedback_push` | Push anonymized experience feedback to Hub |
+
+### Implementation Layering
+
+```
+Skill (LLM orchestration) → Tool (atomic operations) → Script (pure computation)
+```
+
+- **Scripts**: Chat parser, FAQ parser, document chunker, Jaccard calculator, AGX packer — deterministic, no LLM needed
+- **Tools**: Thin wrappers around scripts, or operations requiring workspace context
+- **LLM calls**: Managed by kernel for description generation, evolution analysis, evaluation, and anonymization
+
+---
+
 ## MCP and A2A Protocols
 
 ### Model Context Protocol (MCP)
@@ -832,19 +954,31 @@ The desktop app (`opencarrier-desktop`) wraps the full OpenCarrier stack in a na
 |  | HeartbeatMon   |  | SetupWizard      |  | SkillRegistry     |   |
 |  | (agent health) |  | (NL agent setup) |  | (60 bundled)      |   |
 |  +----------------+  +------------------+  +-------------------+   |
-|  +----------------+  +------------------+                          |
-|  | MCP Connections|  | WebToolsContext  |                          |
-|  | (stdio/SSE)   |  | (search+fetch)   |                          |
-|  +----------------+  +------------------+                          |
+|  +----------------+  +------------------+  +-------------------+   |
+|  | MCP Connections|  | WebToolsContext  |  | CloneLifecycle    |   |
+|  | (stdio/SSE)   |  | (search+fetch)   |  | (evolve+compile   |   |
+|  +----------------+  +------------------+  |  +health+evaluate) |   |
+|                                           +-------------------+   |
 +-------------------------------------------------------------------+
          |
-    +----+-------------------+------------------+---------+
-    |                        |                   |         |
-    v                        v                   v         v
-+------------------+  +--------------+  +--------+  +-----------+
-| opencarrier-runtime |  | opencarrier-    |  | open-  |  | opencarrier- |
-|                  |  | channels     |  | fang-  |  | skills    |
-| +------------+   |  |              |  | wire   |  |           |
+    +----+-------------------+------------------+---------+----------+
+    |                        |                   |         |          |
+    v                        v                   v         v          v
++------------------+  +--------------+  +--------+  +-----------+ +---------+
+| opencarrier-runtime |  | opencarrier-    |  | open-  |  | opencarrier- | |opencarrier|
+|                  |  | channels     |  | fang-  |  | skills    | | lifecycle |
+| +------------+   |  |              |  | wire   |  |           | |           |
+| | Agent Loop |   |  | +----------+|  |        |  | +-------+ | | +-------+ |
+| | +LoopGuard |   |  | | 40 Chan  ||  | +----+ |  | |60 Bun| | | |evolve | |
+| | +SessRepair|   |  | | Adapters ||  | |OFP | |  | |Skills | | | |compile| |
+| +------------+   |  | +----------+|  | |HMAC| |  | +-------+ | | |health | |
+| +------------+   |  | +----------+|  | +----+ |  | +-------+ | | |eval   | |
+| | 3 LLM Drv |   |  | |Formatter ||  | +----+ |  | |FangHub| | | |version| |
+| | (20 provs) |   |  | |Rate Lim ||  | |Peer| |  | |ClawHub| | | |import | |
+| +------------+   |  | |DM/Group ||  | |Reg | |  | +-------+ | | |feedback|
+| +------------+   |  | +----------+|  | +----+ |  | +-------+ | | +-------+ |
+| | 23 Tools   |   |  | +----------+|  +--------+  | |Verify | | |         |
+| +------------+   |  | |AgentRouter|               | |Inject | | |         |
 | | Agent Loop |   |  | +----------+|  |        |  | +-------+ |
 | | +LoopGuard |   |  | | 40 Chan  ||  | +----+ |  | |60 Bun| |
 | | +SessRepair|   |  | | Adapters ||  | |OFP | |  | |Skills | |

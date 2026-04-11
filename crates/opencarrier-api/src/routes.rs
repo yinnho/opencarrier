@@ -170,48 +170,14 @@ pub async fn spawn_agent(
 
 /// GET /api/agents — List all agents.
 pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Snapshot catalog once for enrichment
-    let catalog = state.kernel.model_catalog.read().ok();
-    let dm = &state.kernel.config.default_model;
-
     let agents: Vec<serde_json::Value> = state
         .kernel
         .registry
         .list()
         .into_iter()
         .map(|e| {
-            // Resolve "default" provider/model to actual kernel defaults
-            let provider =
-                if e.manifest.model.provider.is_empty() || e.manifest.model.provider == "default" {
-                    dm.provider.as_str()
-                } else {
-                    e.manifest.model.provider.as_str()
-                };
-            let model = if e.manifest.model.model.is_empty() || e.manifest.model.model == "default"
-            {
-                dm.model.as_str()
-            } else {
-                e.manifest.model.model.as_str()
-            };
-
-            // Enrich from catalog
-            let (tier, auth_status) = catalog
-                .as_ref()
-                .map(|cat| {
-                    let tier = cat
-                        .find_model(model)
-                        .map(|m| format!("{:?}", m.tier).to_lowercase())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let auth = cat
-                        .get_provider(provider)
-                        .map(|p| format!("{:?}", p.auth_status).to_lowercase())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    (tier, auth)
-                })
-                .unwrap_or(("unknown".to_string(), "unknown".to_string()));
-
-            let ready = matches!(e.state, opencarrier_types::agent::AgentState::Running)
-                && auth_status != "missing";
+            let (modality, model) = state.kernel.resolve_model_label(&e.manifest.model.modality);
+            let ready = matches!(e.state, opencarrier_types::agent::AgentState::Running);
 
             serde_json::json!({
                 "id": e.id.to_string(),
@@ -220,10 +186,8 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "mode": e.mode,
                 "created_at": e.created_at.to_rfc3339(),
                 "last_active": e.last_active.to_rfc3339(),
-                "model_provider": provider,
-                "model_name": model,
-                "model_tier": tier,
-                "auth_status": auth_status,
+                "modality": modality,
+                "model": model,
                 "ready": ready,
                 "profile": e.manifest.profile,
                 "identity": {
@@ -716,14 +680,15 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .list()
         .into_iter()
         .map(|e| {
+            let (modality, model) = state.kernel.resolve_model_label(&e.manifest.model.modality);
             serde_json::json!({
                 "id": e.id.to_string(),
                 "name": e.name,
                 "state": format!("{:?}", e.state),
                 "mode": e.mode,
                 "created_at": e.created_at.to_rfc3339(),
-                "model_provider": e.manifest.model.provider,
-                "model_name": e.manifest.model.model,
+                "modality": modality,
+                "model": model,
                 "profile": e.manifest.profile,
             })
         })
@@ -731,13 +696,14 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     let uptime = state.started_at.elapsed().as_secs();
     let agent_count = agents.len();
+    let (default_modality, default_model) = state.kernel.resolve_model_label("chat");
 
     Json(serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
         "agent_count": agent_count,
-        "default_provider": state.kernel.config.default_model.provider,
-        "default_model": state.kernel.config.default_model.model,
+        "default_modality": default_modality,
+        "default_model": default_model,
         "uptime_seconds": uptime,
         "api_listen": state.kernel.config.api_listen,
         "home_dir": state.kernel.config.home_dir.display().to_string(),
@@ -745,6 +711,54 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "network_enabled": state.kernel.config.network_enabled,
         "agents": agents,
     }))
+}
+
+/// GET /api/brain — Brain configuration and status.
+///
+/// Returns the Brain's modalities, endpoints, and which ones are ready.
+/// Returns `{ "loaded": false }` when running in legacy single-driver mode.
+pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.kernel.brain_info() {
+        Some(brain) => {
+            let config = brain.config();
+            let ready = brain.ready_endpoints();
+
+            let mut endpoints = serde_json::Map::new();
+            for (name, ep) in &config.endpoints {
+                endpoints.insert(name.clone(), serde_json::json!({
+                    "provider": ep.provider,
+                    "model": ep.model,
+                    "base_url": ep.base_url,
+                    "format": ep.format.to_string(),
+                    "ready": ready.contains(&name.as_str()),
+                }));
+            }
+
+            let mut modalities = serde_json::Map::new();
+            for (name, mc) in &config.modalities {
+                modalities.insert(name.clone(), serde_json::json!({
+                    "primary": mc.primary,
+                    "fallbacks": mc.fallbacks,
+                }));
+            }
+
+            Json(serde_json::json!({
+                "loaded": true,
+                "default_modality": config.default_modality,
+                "modalities": modalities,
+                "endpoints": endpoints,
+            }))
+        }
+        None => {
+            let (provider, model) = state.kernel.resolve_model_label("chat");
+            Json(serde_json::json!({
+                "loaded": false,
+                "default_modality": "chat",
+                "fallback_provider": provider,
+                "fallback_model": model,
+            }))
+        }
+    }
 }
 
 /// POST /api/shutdown — Graceful shutdown.
@@ -1345,8 +1359,7 @@ pub async fn get_agent(
             "created_at": entry.created_at.to_rfc3339(),
             "session_id": entry.session_id.0.to_string(),
             "model": {
-                "provider": entry.manifest.model.provider,
-                "model": entry.manifest.model.model,
+                "modality": entry.manifest.model.modality,
             },
             "capabilities": {
                 "tools": entry.manifest.capabilities.tools,
@@ -1363,7 +1376,6 @@ pub async fn get_agent(
             "skills_mode": if entry.manifest.skills.is_empty() { "all" } else { "allowlist" },
             "mcp_servers": entry.manifest.mcp_servers,
             "mcp_servers_mode": if entry.manifest.mcp_servers.is_empty() { "all" } else { "allowlist" },
-            "fallback_models": entry.manifest.fallback_models,
         })),
     )
 }
@@ -3128,8 +3140,7 @@ pub async fn get_template(Path(name): Path<String>) -> impl IntoResponse {
                         "module": manifest.module,
                         "tags": manifest.tags,
                         "model": {
-                            "provider": manifest.model.provider,
-                            "model": manifest.model.model,
+                            "modality": manifest.model.modality,
                         },
                         "capabilities": {
                             "tools": manifest.capabilities.tools,
@@ -3361,11 +3372,11 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
     out.push_str("# TYPE opencarrier_tool_calls_total gauge\n");
     for agent in &agents {
         let name = &agent.name;
-        let provider = &agent.manifest.model.provider;
-        let model = &agent.manifest.model.model;
+        let modality = &agent.manifest.model.modality;
+        let model = &agent.manifest.model.modality;
         if let Some((tokens, tools)) = state.kernel.scheduler.get_usage(agent.id) {
             out.push_str(&format!(
-                "opencarrier_tokens_total{{agent=\"{name}\",provider=\"{provider}\",model=\"{model}\"}} {tokens}\n"
+                "opencarrier_tokens_total{{agent=\"{name}\",modality=\"{modality}\",model=\"{model}\"}} {tokens}\n"
             ));
             out.push_str(&format!(
                 "opencarrier_tool_calls_total{{agent=\"{name}\"}} {tools}\n"
@@ -5122,16 +5133,16 @@ pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse
 
 /// GET /api/config — Get kernel configuration (secrets redacted).
 pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Return a redacted view of the kernel config
     let config = &state.kernel.config;
+    let (default_modality, default_model) = state.kernel.resolve_model_label("chat");
     Json(serde_json::json!({
         "home_dir": config.home_dir.to_string_lossy(),
         "data_dir": config.data_dir.to_string_lossy(),
         "api_key": if config.api_key.is_empty() { "not set" } else { "***" },
-        "default_model": {
-            "provider": config.default_model.provider,
-            "model": config.default_model.model,
-            "api_key_env": config.default_model.api_key_env,
+        "brain": {
+            "config_path": config.brain.config,
+            "default_modality": default_modality,
+            "default_model": default_model,
         },
         "memory": {
             "decay_rate": config.memory.decay_rate,
@@ -5697,10 +5708,9 @@ pub async fn patch_agent(
         }
     }
     if let Some(model) = body.get("model").and_then(|v| v.as_str()) {
-        let explicit_provider = body.get("provider").and_then(|v| v.as_str());
         if let Err(e) = state
             .kernel
-            .set_agent_model(agent_id, model, explicit_provider)
+            .set_agent_model(agent_id, model)
         {
             return (
                 StatusCode::BAD_REQUEST,
@@ -6874,30 +6884,24 @@ pub async fn set_model(
             )
         }
     };
-    let explicit_provider = body["provider"].as_str();
+    let _provider_hint = body["provider"].as_str(); // Ignored — Brain manages providers
     match state
         .kernel
-        .set_agent_model(agent_id, model, explicit_provider)
+        .set_agent_model(agent_id, model)
     {
         Ok(()) => {
-            // Return the resolved model+provider so frontend stays in sync.
-            // The model name may have been normalized (provider prefix stripped),
-            // so we read it back from the registry instead of echoing the raw input.
-            let (resolved_model, resolved_provider) = state
+            // Return the resolved modality so frontend stays in sync.
+            let resolved_modality = state
                 .kernel
                 .registry
                 .get(agent_id)
-                .map(|e| {
-                    (
-                        e.manifest.model.model.clone(),
-                        e.manifest.model.provider.clone(),
-                    )
-                })
-                .unwrap_or_else(|| (model.to_string(), String::new()));
+                .map(|e| e.manifest.model.modality.clone())
+                .unwrap_or_else(|| model.to_string());
+            let (_, resolved_model) = state.kernel.resolve_model_label(&resolved_modality);
             (
                 StatusCode::OK,
                 Json(
-                    serde_json::json!({"status": "ok", "model": resolved_model, "provider": resolved_provider}),
+                    serde_json::json!({"status": "ok", "modality": resolved_modality, "model": resolved_model}),
                 ),
             )
         }
@@ -8550,7 +8554,7 @@ pub async fn update_agent_identity(
 // Agent Config Hot-Update
 // ---------------------------------------------------------------------------
 
-/// Request body for patching agent config (name, description, prompt, identity, model).
+/// Request body for patching agent config (name, description, prompt, identity, modality).
 #[derive(serde::Deserialize)]
 pub struct PatchAgentConfigRequest {
     pub name: Option<String>,
@@ -8562,11 +8566,8 @@ pub struct PatchAgentConfigRequest {
     pub archetype: Option<String>,
     pub vibe: Option<String>,
     pub greeting_style: Option<String>,
+    #[serde(alias = "modality")]
     pub model: Option<String>,
-    pub provider: Option<String>,
-    pub api_key_env: Option<String>,
-    pub base_url: Option<String>,
-    pub fallback_models: Option<Vec<opencarrier_types::agent::FallbackModel>>,
 }
 
 /// PATCH /api/agents/{id}/config — Hot-update agent name, description, system prompt, and identity.
@@ -8728,63 +8729,20 @@ pub async fn patch_agent_config(
         }
     }
 
-    // Update model/provider — use set_agent_model for catalog-based provider
-    // resolution when provider is not explicitly provided (fixes #387/#466:
-    // changing model from another provider without specifying provider now
-    // auto-resolves the correct provider from the model catalog).
+    // Update modality (Brain resolves the actual provider/model at inference time)
     if let Some(ref new_model) = req.model {
         if !new_model.is_empty() {
-            if let Some(ref new_provider) = req.provider {
-                if !new_provider.is_empty() {
-                    // Explicit provider given — use it directly
-                    if state
-                        .kernel
-                        .registry
-                        .update_model_and_provider(
-                            agent_id,
-                            new_model.clone(),
-                            new_provider.clone(),
-                        )
-                        .is_err()
-                    {
-                        return (
-                            StatusCode::NOT_FOUND,
-                            Json(serde_json::json!({"error": "Agent not found"})),
-                        );
-                    }
-                } else {
-                    // Provider is empty string — resolve from catalog
-                    if let Err(e) = state.kernel.set_agent_model(agent_id, new_model, None) {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({"error": format!("{e}")})),
-                        );
-                    }
-                }
-            } else {
-                // No provider field at all — resolve from catalog
-                if let Err(e) = state.kernel.set_agent_model(agent_id, new_model, None) {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": format!("{e}")})),
-                    );
-                }
+            if state
+                .kernel
+                .registry
+                .update_modality(agent_id, new_model.clone())
+                .is_err()
+            {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": "Agent not found"})),
+                );
             }
-        }
-    }
-
-    // Update fallback model chain
-    if let Some(fallbacks) = req.fallback_models {
-        if state
-            .kernel
-            .registry
-            .update_fallback_models(agent_id, fallbacks)
-            .is_err()
-        {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
-            );
         }
     }
 
@@ -9616,23 +9574,12 @@ pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 /// GET /api/config/schema — Return a simplified JSON description of the config structure.
 pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Build provider/model options from model catalog for dropdowns
-    let catalog = state
+    // Build modality options from Brain config (or legacy model catalog)
+    let modalities: Vec<String> = state
         .kernel
-        .model_catalog
-        .read()
-        .unwrap_or_else(|e| e.into_inner());
-    let provider_options: Vec<String> = catalog
-        .list_providers()
-        .iter()
-        .map(|p| p.id.clone())
-        .collect();
-    let model_options: Vec<serde_json::Value> = catalog
-        .list_models()
-        .iter()
-        .map(|m| serde_json::json!({"id": m.id, "name": m.display_name, "provider": m.provider}))
-        .collect();
-    drop(catalog);
+        .brain_info()
+        .map(|b| b.config().modalities.keys().cloned().collect())
+        .unwrap_or_else(|| vec!["chat".to_string()]);
 
     Json(serde_json::json!({
         "sections": {
@@ -9644,13 +9591,11 @@ pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoRespo
                     "log_level": "string"
                 }
             },
-            "default_model": {
+            "brain": {
                 "hot_reloadable": true,
                 "fields": {
-                    "provider": { "type": "select", "options": provider_options },
-                    "model": { "type": "select", "options": model_options },
-                    "api_key_env": "string",
-                    "base_url": "string"
+                    "config": "string",
+                    "default_modality": { "type": "select", "options": modalities }
                 }
             },
             "memory": {
@@ -10619,7 +10564,7 @@ pub async fn comms_topology(State(state): State<Arc<AppState>>) -> impl IntoResp
             id: e.id.to_string(),
             name: e.name.clone(),
             state: format!("{:?}", e.state),
-            model: e.manifest.model.model.clone(),
+            model: e.manifest.model.modality.clone(),
         })
         .collect();
 
@@ -11191,6 +11136,237 @@ fn remove_toml_section(content: &str, section: &str) -> String {
     }
     result
 }
+
+// ========== Clone (.agx) endpoints ==========
+
+/// POST /api/clones/install — Install a .agx clone from uploaded bytes.
+pub async fn install_clone(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<InstallCloneRequest>,
+) -> impl IntoResponse {
+    use opencarrier_clone::{load_agx, install_clone_to_workspace, convert_to_manifest};
+
+    // Decode base64 data
+    let raw_data = match req.decode_data() {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e})),
+            );
+        }
+    };
+
+    // Write uploaded bytes to temp file
+    let tmp_dir = std::env::temp_dir().join(format!("opencarrier-clone-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+    let tmp_path = tmp_dir.join("clone.agx");
+    if let Err(e) = std::fs::write(&tmp_path, &raw_data) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to write temp file: {e}")})),
+        );
+    }
+
+    // Load and parse .agx
+    let clone_data = match load_agx(&tmp_path) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Failed to parse .agx: {e}")})),
+            );
+        }
+    };
+
+    // Clean up temp file
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    // Check for name collision
+    if state.kernel.registry.find_by_name(&clone_data.name).is_some() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": format!("Agent '{}' already exists", clone_data.name)})),
+        );
+    }
+
+    // Create workspace directory
+    let workspace_dir = state.kernel.config.effective_workspaces_dir().join(&clone_data.name);
+    if workspace_dir.exists() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": format!("Workspace for '{}' already exists", clone_data.name)})),
+        );
+    }
+
+    // Install clone files to workspace
+    if let Err(e) = install_clone_to_workspace(&clone_data, &workspace_dir) {
+        let _ = std::fs::remove_dir_all(&workspace_dir);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to install clone: {e}")})),
+        );
+    }
+
+    // Convert to AgentManifest
+    let mut manifest = convert_to_manifest(&clone_data);
+    manifest.workspace = Some(workspace_dir.clone());
+
+    // Spawn agent
+    let name = manifest.name.clone();
+    let warnings = clone_data.security_warnings.clone();
+
+    match state.kernel.spawn_agent(manifest) {
+        Ok(id) => {
+            // Register in channel router
+            if let Some(ref mgr) = *state.bridge_manager.lock().await {
+                mgr.router().register_agent(name.clone(), id);
+            }
+            tracing::info!("Clone '{}' installed and spawned: {}", name, id);
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "agent_id": id.to_string(),
+                    "name": name,
+                    "warnings": warnings,
+                })),
+            )
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&workspace_dir);
+            tracing::warn!("Clone spawn failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to spawn clone agent"})),
+            )
+        }
+    }
+}
+
+/// GET /api/clones — List installed clones (agents with clone_source).
+pub async fn list_clones(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let agents = state.kernel.registry.list();
+    let clones: Vec<serde_json::Value> = agents
+        .into_iter()
+        .filter(|e| e.manifest.clone_source.is_some())
+        .map(|e| {
+            let cs = e.manifest.clone_source.as_ref().unwrap();
+            serde_json::json!({
+                "id": e.id.to_string(),
+                "name": e.name,
+                "state": format!("{:?}", e.state),
+                "template_name": cs.template_name,
+                "template_author": cs.template_author,
+                "installed_at": cs.installed_at,
+                "knowledge_files": e.manifest.knowledge_files,
+                "skills": e.manifest.skills,
+            })
+        })
+        .collect();
+
+    (StatusCode::OK, Json(serde_json::json!(clones)))
+}
+
+/// POST /api/clones/{name}/start — Start a stopped clone.
+pub async fn start_clone(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let entry = match state.kernel.registry.find_by_name(&name) {
+        Some(e) => e,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"})));
+        }
+    };
+
+    if entry.manifest.clone_source.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
+    }
+
+    match state.kernel.registry.set_state(entry.id, opencarrier_types::agent::AgentState::Running) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "running"}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))),
+    }
+}
+
+/// POST /api/clones/{name}/stop — Stop a running clone.
+pub async fn stop_clone(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let entry = match state.kernel.registry.find_by_name(&name) {
+        Some(e) => e,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"})));
+        }
+    };
+
+    if entry.manifest.clone_source.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
+    }
+
+    match state.kernel.registry.set_state(entry.id, opencarrier_types::agent::AgentState::Suspended) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "suspended"}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))),
+    }
+}
+
+/// DELETE /api/clones/{name} — Uninstall a clone.
+pub async fn uninstall_clone(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let entry = match state.kernel.registry.find_by_name(&name) {
+        Some(e) => e,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"})));
+        }
+    };
+
+    if entry.manifest.clone_source.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
+    }
+
+    let agent_id = entry.id;
+    let workspace = entry.manifest.workspace.clone();
+
+    // Remove from registry and kill
+    match state.kernel.kill_agent(agent_id) {
+        Ok(()) => {
+            // Remove workspace directory
+            if let Some(ws) = workspace {
+                let _ = std::fs::remove_dir_all(&ws);
+            }
+            tracing::info!("Clone '{}' uninstalled", name);
+            (StatusCode::OK, Json(serde_json::json!({"status": "uninstalled"})))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to kill clone agent: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")})))
+        }
+    }
+}
+
+/// Request body for clone installation.
+#[derive(serde::Deserialize)]
+pub struct InstallCloneRequest {
+    /// Base64-encoded .agx file bytes.
+    pub data: String,
+}
+
+impl InstallCloneRequest {
+    /// Decode base64 data to raw bytes.
+    pub fn decode_data(&self) -> Result<Vec<u8>, String> {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(&self.data)
+            .map_err(|e| format!("Invalid base64 data: {e}"))
+    }
+}
+
 
 #[cfg(test)]
 mod channel_config_tests {

@@ -161,6 +161,27 @@ pub trait LlmDriver: Send + Sync {
     }
 }
 
+/// Brain trait — the carrier's independent LLM brain.
+///
+/// Routes completion requests by modality (chat, code, vision, etc.)
+/// to pre-configured endpoints with automatic fallback.
+/// Implemented by `opencarrier_kernel::brain::Brain`.
+#[async_trait]
+pub trait Brain: Send + Sync {
+    /// Think with a given modality. Tries primary endpoint, then fallbacks.
+    async fn think(
+        &self,
+        modality: &str,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, LlmError>;
+
+    /// Get the model name for a given modality's primary endpoint.
+    fn model_for(&self, modality: &str) -> &str;
+
+    /// Check if a modality is available.
+    fn has_modality(&self, modality: &str) -> bool;
+}
+
 /// Configuration for creating an LLM driver.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DriverConfig {

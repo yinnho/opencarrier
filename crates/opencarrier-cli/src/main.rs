@@ -315,6 +315,28 @@ enum Commands {
         #[arg(long)]
         keep_config: bool,
     },
+    /// Hub operations — search and install clones from openclone-hub.
+    Hub {
+        #[command(subcommand)]
+        sub: HubCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum HubCommands {
+    /// Search templates on Hub.
+    Search {
+        /// Search query (name, description, tags).
+        query: Option<String>,
+    },
+    /// Download and install a clone from Hub.
+    Install {
+        /// Template name to install.
+        name: String,
+        /// Specific version (default: latest).
+        #[arg(short, long)]
+        version: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1087,6 +1109,10 @@ fn main() {
             confirm,
             keep_config,
         } => cmd_uninstall(confirm, keep_config),
+        Commands::Hub { sub } => {
+            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+            rt.block_on(cmd_hub(sub));
+        }
     }
 }
 
@@ -1538,9 +1564,9 @@ fn check_ollama_available() -> bool {
 /// Write config.toml if it doesn't already exist.
 fn write_config_if_missing(
     opencarrier_dir: &std::path::Path,
-    provider: &str,
-    model: &str,
-    api_key_env: &str,
+    _provider: &str,
+    _model: &str,
+    _api_key_env: &str,
 ) {
     let config_path = opencarrier_dir.join("config.toml");
     if config_path.exists() {
@@ -1553,10 +1579,8 @@ fn write_config_if_missing(
 # For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
 api_listen = "127.0.0.1:4200"
 
-[default_model]
-provider = "{provider}"
-model = "{model}"
-api_key_env = "{api_key_env}"
+[brain]
+config = "brain.json"
 
 [memory]
 decay_rate = 0.05
@@ -1667,12 +1691,6 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool, cloud_url: Option<String>, no_
     rt.block_on(async {
         let mut kernel_config = opencarrier_kernel::config::load_config(config.as_deref());
 
-        // 如果没有指定 no_bind，设置默认 provider 为 proxy
-        if !no_bind {
-            kernel_config.default_model.provider = "proxy".to_string();
-            kernel_config.default_model.model = "default".to_string();
-            kernel_config.default_model.api_key_env = String::new();
-        }
         if yolo {
             kernel_config.approval.auto_approve = true;
             kernel_config.approval.apply_shorthands();
@@ -1706,7 +1724,7 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool, cloud_url: Option<String>, no_
         ui::blank();
         ui::kv("API", &format!("http://{listen_addr}"));
         ui::kv("Dashboard", &format!("http://{listen_addr}/"));
-        ui::kv("Provider", &provider);
+        ui::kv("Modality", &provider);
         ui::kv("Model", &model);
         ui::blank();
         ui::hint("Open the dashboard in your browser, or run `opencarrier chat`");
@@ -1908,7 +1926,7 @@ fn cmd_agent_list(config: Option<PathBuf>, json: bool) {
             Some(agents) => {
                 println!(
                     "{:<38} {:<16} {:<10} {:<12} MODEL",
-                    "ID", "NAME", "STATE", "PROVIDER"
+                    "ID", "NAME", "STATE", "MODALITY"
                 );
                 println!("{}", "-".repeat(95));
                 for a in agents {
@@ -1917,7 +1935,7 @@ fn cmd_agent_list(config: Option<PathBuf>, json: bool) {
                         a["id"].as_str().unwrap_or("?"),
                         a["name"].as_str().unwrap_or("?"),
                         a["state"].as_str().unwrap_or("?"),
-                        a["model_provider"].as_str().unwrap_or("?"),
+                        a["modality"].as_str().unwrap_or("?"),
                         a["model_name"].as_str().unwrap_or("?"),
                     );
                 }
@@ -2166,7 +2184,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
             "Agents",
             &body["agent_count"].as_u64().unwrap_or(0).to_string(),
         );
-        ui::kv("Provider", body["default_provider"].as_str().unwrap_or("?"));
+        ui::kv("Modality", body["default_modality"].as_str().unwrap_or("?"));
         ui::kv("Model", body["default_model"].as_str().unwrap_or("?"));
         ui::kv("API", &base);
         ui::kv("Dashboard", &format!("{base}/"));
@@ -2186,7 +2204,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
                         a["name"].as_str().unwrap_or("?"),
                         a["id"].as_str().unwrap_or("?"),
                         a["state"].as_str().unwrap_or("?"),
-                        a["model_provider"].as_str().unwrap_or("?"),
+                        a["modality"].as_str().unwrap_or("?"),
                         a["model_name"].as_str().unwrap_or("?"),
                     );
                 }
@@ -2215,7 +2233,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
         ui::section("OpenCarrier Status (in-process)");
         ui::blank();
         ui::kv("Agents", &agent_count.to_string());
-        ui::kv("Provider", &kernel.config.default_model.provider);
+        ui::kv("Modality", &kernel.config.default_model.provider);
         ui::kv("Model", &kernel.config.default_model.model);
         ui::kv("Data dir", &kernel.config.data_dir.display().to_string());
         ui::kv_warn("Daemon", "NOT RUNNING");
@@ -2365,7 +2383,7 @@ fn cmd_doctor(json: bool, repair: bool) {
             }
             let answer = prompt_input("    Create default config? [Y/n] ");
             if answer.is_empty() || answer.starts_with('y') || answer.starts_with('Y') {
-                let (provider, api_key_env, model) = detect_best_provider();
+                let (_provider, _api_key_env, _model) = detect_best_provider();
                 let default_config = format!(
                     r#"# OpenCarrier Agent OS configuration
 # See https://github.com/RightNow-AI/opencarrier for documentation
@@ -2373,10 +2391,8 @@ fn cmd_doctor(json: bool, repair: bool) {
 # For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
 api_listen = "127.0.0.1:4200"
 
-[default_model]
-provider = "{provider}"
-model = "{model}"
-api_key_env = "{api_key_env}"
+[brain]
+config = "brain.json"
 
 [memory]
 decay_rate = 0.05
@@ -6421,7 +6437,7 @@ fn cmd_system_info(json: bool) {
             "Agents",
             &body["agent_count"].as_u64().unwrap_or(0).to_string(),
         );
-        ui::kv("Provider", body["default_provider"].as_str().unwrap_or("?"));
+        ui::kv("Modality", body["default_modality"].as_str().unwrap_or("?"));
         ui::kv("Model", body["default_model"].as_str().unwrap_or("?"));
         ui::kv("API", &base);
         ui::kv("Data dir", body["data_dir"].as_str().unwrap_or("?"));
@@ -6492,6 +6508,70 @@ fn cmd_reset(confirm: bool) {
                 opencarrier_dir.display()
             ));
             std::process::exit(1);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hub
+// ---------------------------------------------------------------------------
+
+async fn cmd_hub(cmd: HubCommands) {
+    let config = opencarrier_kernel::config::load_config(None::<&std::path::Path>);
+
+    let hub_url = if config.hub.url.is_empty() {
+        eprintln!("Hub URL 未配置。请在 config.toml 中设置 [hub] url");
+        std::process::exit(1);
+    } else {
+        config.hub.url.clone()
+    };
+
+    let api_key = match opencarrier_clone::hub::read_api_key(&config.hub.api_key_env) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    match cmd {
+        HubCommands::Search { query } => {
+            let q = query.unwrap_or_default();
+            match opencarrier_clone::hub::search(&hub_url, &api_key, &q).await {
+                Ok(output) => println!("{output}"),
+                Err(e) => eprintln!("搜索失败: {e}"),
+            }
+        }
+        HubCommands::Install { name, version } => {
+            let home = cli_opencarrier_home();
+            let device_id = match opencarrier_clone::hub::get_or_create_device_id(&home) {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!("生成 Device ID 失败: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let workspace_dir = config.effective_workspaces_dir().join(&name);
+            if workspace_dir.exists() {
+                eprintln!("分身 '{}' 已存在: {}", name, workspace_dir.display());
+                std::process::exit(1);
+            }
+            match opencarrier_clone::hub::install(
+                &hub_url,
+                &api_key,
+                &name,
+                version.as_deref(),
+                &workspace_dir,
+                &device_id,
+            )
+            .await
+            {
+                Ok(clone_name) => {
+                    println!("分身 '{}' 已安装到: {}", clone_name, workspace_dir.display());
+                    println!("运行 'opencarrier agent spawn {}' 启动分身", clone_name);
+                }
+                Err(e) => eprintln!("安装失败: {e}"),
+            }
         }
     }
 }

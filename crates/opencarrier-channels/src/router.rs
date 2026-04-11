@@ -26,7 +26,7 @@ pub struct BindingContext {
 ///
 /// Routing priority: bindings (most specific first) > direct routes > user defaults > system default.
 pub struct AgentRouter {
-    /// Default agent per user (keyed by opencarrier_user or platform_id).
+    /// Default agent per user (keyed by platform_id).
     user_defaults: DashMap<String, AgentId>,
     /// Direct routes: (channel_type_key, platform_user_id) -> AgentId.
     direct_routes: DashMap<(String, String), AgentId>,
@@ -135,9 +135,14 @@ impl AgentRouter {
         self.agent_name_cache.insert(name, id);
     }
 
+    /// Resolve an agent name to its ID.
+    pub fn resolve_agent_name(&self, name: &str) -> Option<AgentId> {
+        self.agent_name_cache.get(name).map(|r| *r)
+    }
+
     /// Resolve which agent should handle a message.
     ///
-    /// Priority: bindings > direct route > user default > system default.
+    /// Priority: bindings > direct route > user default > channel default > system default.
     pub fn resolve(
         &self,
         channel_type: &ChannelType,
@@ -291,9 +296,8 @@ impl AgentRouter {
         let bindings = self.bindings.lock().unwrap_or_else(|e| e.into_inner());
         for (binding, _agent_name) in bindings.iter() {
             if self.binding_matches(binding, ctx) {
-                // Look up agent by name in cache
-                if let Some(id) = self.agent_name_cache.get(&binding.agent) {
-                    return Some(*id);
+                if let Some(id) = self.resolve_agent_name(&binding.agent) {
+                    return Some(id);
                 }
                 warn!(
                     agent = %binding.agent,

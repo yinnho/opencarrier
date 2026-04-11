@@ -59,6 +59,13 @@ pub struct PromptContext {
     pub sender_id: Option<String>,
     /// Sender display name.
     pub sender_name: Option<String>,
+    // --- Clone identity files (分身特有) ---
+    /// Clone's system_prompt.md — behavioral instructions ("你怎么做事").
+    /// Only present for agents loaded from .agx with a workspace system_prompt.md.
+    pub clone_system_prompt_md: Option<String>,
+    /// Clone's skill catalog — all skills' name + when_to_use (short summary).
+    /// Scanned from workspace/skills/ at prompt build time.
+    pub clone_skills_catalog: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -71,6 +78,45 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
 
     // Section 1 — Agent Identity (always present)
     sections.push(build_identity_section(ctx));
+
+    // Detect clone mode: base_system_prompt is empty + clone files present
+    let is_clone = ctx.base_system_prompt.is_empty()
+        && (ctx.clone_system_prompt_md.is_some() || ctx.clone_skills_catalog.is_some());
+
+    // Section 1.1 — Clone Identity (分身四部分: 人格 → 行为指令 → 技能目录 → 知识索引)
+    // Only for agents loaded from .agx with workspace identity files.
+    if is_clone {
+        // SOUL.md → 人格
+        if let Some(ref soul) = ctx.soul_md {
+            if !soul.trim().is_empty() {
+                sections.push(format!(
+                    "## 人格\n体现以下人格和语气。自然地融入对话，不要生硬或格式化。\n\n{}",
+                    cap_str(&strip_code_blocks(soul), 2000)
+                ));
+            }
+        }
+
+        // system_prompt.md → 行为指令
+        if let Some(ref sp) = ctx.clone_system_prompt_md {
+            if !sp.trim().is_empty() {
+                sections.push(format!("## 行为指令\n{}", cap_str(sp, 4000)));
+            }
+        }
+
+        // skills/ → 技能目录（name + when_to_use，始终注入，很短）
+        if let Some(ref catalog) = ctx.clone_skills_catalog {
+            if !catalog.trim().is_empty() {
+                sections.push(format!("## 技能目录\n当用户的请求匹配某个技能时，按该技能的流程执行。\n\n{}", catalog));
+            }
+        }
+
+        // MEMORY.md → 知识索引
+        if let Some(ref mem) = ctx.memory_md {
+            if !mem.trim().is_empty() {
+                sections.push(format!("## 知识索引\n{}", cap_str(mem, 1000)));
+            }
+        }
+    }
 
     // Section 1.5 — Current Date/Time (always present when set)
     if let Some(ref date) = ctx.current_date {
@@ -115,14 +161,26 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     }
 
     // Section 7 — Persona / Identity files (skip for subagents)
+    // For clones, SOUL.md and MEMORY.md are already in Section 1.1 — skip them here.
     if !ctx.is_subagent {
-        let persona = build_persona_section(
-            ctx.identity_md.as_deref(),
-            ctx.soul_md.as_deref(),
-            ctx.user_md.as_deref(),
-            ctx.memory_md.as_deref(),
-            ctx.workspace_path.as_deref(),
-        );
+        let persona = if is_clone {
+            // Clone mode: skip soul_md and memory_md (already in clone section)
+            build_persona_section(
+                ctx.identity_md.as_deref(),
+                None, // soul already in clone section
+                ctx.user_md.as_deref(),
+                None, // memory already in clone section
+                ctx.workspace_path.as_deref(),
+            )
+        } else {
+            build_persona_section(
+                ctx.identity_md.as_deref(),
+                ctx.soul_md.as_deref(),
+                ctx.user_md.as_deref(),
+                ctx.memory_md.as_deref(),
+                ctx.workspace_path.as_deref(),
+            )
+        };
         if !persona.is_empty() {
             sections.push(persona);
         }
@@ -210,7 +268,15 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
 // ---------------------------------------------------------------------------
 
 fn build_identity_section(ctx: &PromptContext) -> String {
-    if ctx.base_system_prompt.is_empty() {
+    // Clone mode: base_system_prompt is empty, identity built from workspace files
+    let is_clone = ctx.base_system_prompt.is_empty()
+        && (ctx.clone_system_prompt_md.is_some() || ctx.clone_skills_catalog.is_some());
+
+    if is_clone {
+        // For clones, just set the name. The four-part identity
+        // (SOUL → system_prompt → skills → MEMORY) is built in separate sections.
+        format!("You are {}.\n{}", ctx.agent_name, ctx.agent_description)
+    } else if ctx.base_system_prompt.is_empty() {
         format!(
             "You are {}, an AI agent running inside the OpenCarrier Agent OS.\n{}",
             ctx.agent_name, ctx.agent_description
@@ -969,5 +1035,73 @@ mod tests {
         assert_eq!(capitalize("files"), "Files");
         assert_eq!(capitalize(""), "");
         assert_eq!(capitalize("MCP"), "MCP");
+    }
+
+    #[test]
+    fn test_clone_mode_sections() {
+        let ctx = PromptContext {
+            agent_name: "customer-support".to_string(),
+            agent_description: "Customer support clone".to_string(),
+            base_system_prompt: String::new(), // empty = clone mode
+            soul_md: Some("你是专业客服，语气亲切。".to_string()),
+            clone_system_prompt_md: Some("处理客户问题，按步骤操作。".to_string()),
+            clone_skills_catalog: Some("1. **handle-refund** — 用户要求退货时激活\n2. **handle-complaint** — 用户投诉时激活".to_string()),
+            memory_md: Some("## 退货政策\n- [refund-policy](data/knowledge/refund.md)".to_string()),
+            granted_tools: vec!["web_fetch".to_string(), "memory_store".to_string()],
+            ..Default::default()
+        };
+        let prompt = build_system_prompt(&ctx);
+
+        // Clone sections present
+        assert!(prompt.contains("## 人格"));
+        assert!(prompt.contains("专业客服"));
+        assert!(prompt.contains("## 行为指令"));
+        assert!(prompt.contains("处理客户问题"));
+        assert!(prompt.contains("## 技能目录"));
+        assert!(prompt.contains("handle-refund"));
+        assert!(prompt.contains("## 知识索引"));
+        assert!(prompt.contains("退货政策"));
+
+        // Persona section should NOT contain soul or memory (already in clone sections)
+        let persona_start = prompt.find("## Persona").or(prompt.find("## Workspace"));
+        if let Some(start) = persona_start {
+            let persona_section = &prompt[start..];
+            assert!(!persona_section.contains("专业客服"));
+        }
+    }
+
+    #[test]
+    fn test_clone_mode_no_double_soul() {
+        let ctx = PromptContext {
+            agent_name: "test-clone".to_string(),
+            base_system_prompt: String::new(),
+            soul_md: Some("我是测试分身".to_string()),
+            clone_system_prompt_md: Some("做一些测试工作".to_string()),
+            granted_tools: vec![],
+            ..Default::default()
+        };
+        let prompt = build_system_prompt(&ctx);
+        // SOUL should appear exactly once (in clone section, not in persona)
+        let count = prompt.matches("我是测试分身").count();
+        assert_eq!(count, 1, "SOUL content should appear exactly once, found {count} times");
+    }
+
+    #[test]
+    fn test_regular_agent_unchanged_with_clone_fields() {
+        // Regular agent with non-empty base_system_prompt should NOT enter clone mode
+        let ctx = PromptContext {
+            agent_name: "researcher".to_string(),
+            agent_description: "Research agent".to_string(),
+            base_system_prompt: "You are a researcher.".to_string(),
+            clone_system_prompt_md: Some("This should be ignored".to_string()),
+            clone_skills_catalog: Some("This too".to_string()),
+            granted_tools: vec!["web_search".to_string()],
+            ..Default::default()
+        };
+        let prompt = build_system_prompt(&ctx);
+        // Should use base_system_prompt, not clone sections
+        assert!(prompt.contains("You are a researcher."));
+        assert!(!prompt.contains("## 人格"));
+        assert!(!prompt.contains("This should be ignored"));
     }
 }

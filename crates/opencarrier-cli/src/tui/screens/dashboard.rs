@@ -24,7 +24,7 @@ pub struct DashboardState {
     pub agent_count: u64,
     pub uptime_secs: u64,
     pub version: String,
-    pub provider: String,
+    pub modality: String,
     pub model: String,
     pub recent_audit: Vec<AuditRow>,
     pub loading: bool,
@@ -44,7 +44,7 @@ impl DashboardState {
             agent_count: 0,
             uptime_secs: 0,
             version: String::new(),
-            provider: String::new(),
+            modality: String::new(),
             model: String::new(),
             recent_audit: Vec::new(),
             loading: false,
@@ -178,15 +178,15 @@ fn draw_stat_cards(f: &mut Frame, area: Rect, state: &DashboardState) {
 
     // Provider card
     let provider_block = Block::default()
-        .title(Span::styled(" Provider ", Style::default().fg(theme::CYAN)))
+        .title(Span::styled(" Modality ", Style::default().fg(theme::CYAN)))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::DIM));
     let provider_inner = provider_block.inner(cols[2]);
     f.render_widget(provider_block, cols[2]);
-    let provider_text = if state.provider.is_empty() {
+    let provider_text = if state.modality.is_empty() {
         "not set".to_string()
     } else {
-        format!("{}/{}", state.provider, state.model)
+        format!("{}/{}", state.modality, state.model)
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(

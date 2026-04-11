@@ -8,7 +8,7 @@ use opencarrier_types::error::{OpenCarrierError, OpenCarrierResult};
 pub struct AgentRegistry {
     /// Primary index: agent ID → entry.
     agents: DashMap<AgentId, AgentEntry>,
-    /// Name index: human-readable name → agent ID.
+    /// Name index: agent_name → agent ID.
     name_index: DashMap<String, AgentId>,
     /// Tag index: tag → list of agent IDs.
     tag_index: DashMap<String, Vec<AgentId>>,
@@ -48,6 +48,15 @@ impl AgentRegistry {
         self.name_index
             .get(name)
             .and_then(|id| self.agents.get(id.value()).map(|e| e.value().clone()))
+            .or_else(|| {
+                // Fallback: linear scan
+                for entry in self.agents.iter() {
+                    if entry.name == name {
+                        return Some(entry.value().clone());
+                    }
+                }
+                None
+            })
     }
 
     /// Update agent state.
@@ -149,45 +158,13 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// Update an agent's model configuration.
-    pub fn update_model(&self, id: AgentId, new_model: String) -> OpenCarrierResult<()> {
+    /// Update an agent's modality.
+    pub fn update_modality(&self, id: AgentId, modality: String) -> OpenCarrierResult<()> {
         let mut entry = self
             .agents
             .get_mut(&id)
             .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
-        entry.manifest.model.model = new_model;
-        entry.last_active = chrono::Utc::now();
-        Ok(())
-    }
-
-    /// Update an agent's model AND provider together.
-    pub fn update_model_and_provider(
-        &self,
-        id: AgentId,
-        new_model: String,
-        new_provider: String,
-    ) -> OpenCarrierResult<()> {
-        let mut entry = self
-            .agents
-            .get_mut(&id)
-            .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
-        entry.manifest.model.model = new_model;
-        entry.manifest.model.provider = new_provider;
-        entry.last_active = chrono::Utc::now();
-        Ok(())
-    }
-
-    /// Update an agent's fallback model chain.
-    pub fn update_fallback_models(
-        &self,
-        id: AgentId,
-        fallback_models: Vec<opencarrier_types::agent::FallbackModel>,
-    ) -> OpenCarrierResult<()> {
-        let mut entry = self
-            .agents
-            .get_mut(&id)
-            .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
-        entry.manifest.fallback_models = fallback_models;
+        entry.manifest.model.modality = modality;
         entry.last_active = chrono::Utc::now();
         Ok(())
     }
@@ -248,22 +225,24 @@ impl AgentRegistry {
 
     /// Update an agent's name (also updates the name index).
     pub fn update_name(&self, id: AgentId, new_name: String) -> OpenCarrierResult<()> {
+        let entry = self.agents.get(&id)
+            .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
+        let old_name = entry.name.clone();
+        drop(entry);
+
         if let Some(existing_id) = self.name_index.get(&new_name).as_deref().copied() {
             if existing_id != id {
                 return Err(OpenCarrierError::AgentAlreadyExists(new_name));
             }
-            // Same agent owns this name — no-op
             return Ok(());
         }
         let mut entry = self
             .agents
             .get_mut(&id)
             .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
-        let old_name = entry.name.clone();
         entry.name = new_name.clone();
         entry.manifest.name = new_name.clone();
         entry.last_active = chrono::Utc::now();
-        // Update name index
         drop(entry);
         self.name_index.remove(&old_name);
         self.name_index.insert(new_name, id);
@@ -348,7 +327,6 @@ mod tests {
                 module: "test".to_string(),
                 schedule: ScheduleMode::default(),
                 model: ModelConfig::default(),
-                fallback_models: vec![],
                 resources: ResourceQuota::default(),
                 priority: Priority::default(),
                 capabilities: ManifestCapabilities::default(),
@@ -358,14 +336,14 @@ mod tests {
                 mcp_servers: vec![],
                 metadata: HashMap::new(),
                 tags: vec![],
-                routing: None,
                 autonomous: None,
-                pinned_model: None,
                 workspace: None,
                 generate_identity_files: true,
                 exec_policy: None,
                 tool_allowlist: vec![],
                 tool_blocklist: vec![],
+                clone_source: None,
+                knowledge_files: vec![],
             },
             state: AgentState::Created,
             mode: AgentMode::default(),

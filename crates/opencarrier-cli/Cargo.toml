@@ -6,7 +6,7 @@ license.workspace = true
 description = "CLI tool for the OpenCarrier Agent OS"
 
 [[bin]]
-name = "yinghe"
+name = "opencarrier"
 path = "src/main.rs"
 
 [dependencies]
@@ -16,6 +16,7 @@ opencarrier-api = { path = "../opencarrier-api" }
 opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-extensions = { path = "../opencarrier-extensions" }
 opencarrier-memory = { path = "../opencarrier-memory" }
+opencarrier-clone = { path = "../opencarrier-clone" }
 # Stub crates (to be removed)
 zeroize = { workspace = true }
 tokio = { workspace = true }

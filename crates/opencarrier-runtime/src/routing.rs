@@ -4,8 +4,40 @@
 //! tool availability, code markers, conversation depth) and picks the cheapest
 //! model that can handle the task.
 
+use serde::{Deserialize, Serialize};
+
 use crate::llm_driver::CompletionRequest;
-use opencarrier_types::agent::ModelRoutingConfig;
+
+/// Model routing configuration — auto-selects models by task complexity.
+///
+/// Note: In the Brain architecture, the Brain handles endpoint selection.
+/// This config is kept for complexity scoring, which can inform modality
+/// selection (e.g., simple → "fast", complex → "reasoning").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRoutingConfig {
+    /// Model for simple tasks.
+    pub simple_model: String,
+    /// Model for medium tasks.
+    pub medium_model: String,
+    /// Model for complex tasks.
+    pub complex_model: String,
+    /// Score threshold below which tasks are considered simple.
+    pub simple_threshold: u32,
+    /// Score threshold at or above which tasks are considered complex.
+    pub complex_threshold: u32,
+}
+
+impl Default for ModelRoutingConfig {
+    fn default() -> Self {
+        Self {
+            simple_model: "fast".to_string(),
+            medium_model: "chat".to_string(),
+            complex_model: "reasoning".to_string(),
+            simple_threshold: 200,
+            complex_threshold: 800,
+        }
+    }
+}
 
 /// Task complexity tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
