@@ -15,7 +15,7 @@ pub struct TemplateInfo {
     pub name: String,
     pub description: String,
     pub category: String,
-    pub provider: String,
+    pub modality: String,
     pub model: String,
 }
 
@@ -138,7 +138,7 @@ impl TemplatesState {
                 name: name.to_string(),
                 description: desc.to_string(),
                 category: cat.to_string(),
-                provider: prov.to_string(),
+                modality: prov.to_string(),
                 model: model.to_string(),
             })
             .collect();
@@ -212,10 +212,10 @@ impl TemplatesState {
                 if let Some(sel) = self.list_state.selected() {
                     if let Some(&idx) = self.filtered.get(sel) {
                         let t = &self.templates[idx];
-                        if !self.provider_configured(&t.provider) && !self.providers.is_empty() {
+                        if !self.provider_configured(&t.modality) && !self.providers.is_empty() {
                             self.status_msg = format!(
                                 "Provider '{}' not configured. Set API key in Settings first.",
-                                t.provider
+                                t.modality
                             );
                             return TemplatesAction::Continue;
                         }
@@ -280,7 +280,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut TemplatesState) {
             Line::from(vec![Span::styled(
                 format!(
                     "  {:<22} {:<14} {:<16} {}",
-                    "Template", "Category", "Provider/Model", "Description"
+                    "Template", "Category", "Modality/Model", "Description"
                 ),
                 theme::table_header(),
             )]),
@@ -312,7 +312,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut TemplatesState) {
             .iter()
             .map(|&idx| {
                 let t = &state.templates[idx];
-                let configured = state.provider_configured(&t.provider);
+                let configured = state.provider_configured(&t.modality);
                 let auth_badge = if state.providers.is_empty() {
                     Span::raw("")
                 } else if configured {
@@ -320,7 +320,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut TemplatesState) {
                 } else {
                     Span::styled(" \u{2718}", Style::default().fg(theme::RED))
                 };
-                let prov_model = format!("{}/{}", t.provider, truncate(&t.model, 12));
+                let prov_model = format!("{}/{}", t.modality, truncate(&t.model, 12));
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:<22}", truncate(&t.name, 21)),
@@ -366,7 +366,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut TemplatesState) {
                         Span::styled(&t.description, theme::dim_style()),
                     ]),
                     Line::from(vec![Span::styled(
-                        format!("  Provider: {}/{}  ", t.provider, t.model),
+                        format!("  Modality: {}/{}  ", t.modality, t.model),
                         Style::default().fg(theme::BLUE),
                     )]),
                 ]),

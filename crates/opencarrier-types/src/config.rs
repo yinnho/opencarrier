@@ -140,27 +140,6 @@ pub enum KernelMode {
     Dev,
 }
 
-/// User configuration for RBAC multi-user support.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserConfig {
-    /// User display name.
-    pub name: String,
-    /// User role (owner, admin, user, viewer).
-    #[serde(default = "default_role")]
-    pub role: String,
-    /// Channel bindings: maps channel platform IDs to this user.
-    /// e.g., {"telegram": "123456", "discord": "987654"}
-    #[serde(default)]
-    pub channel_bindings: HashMap<String, String>,
-    /// Optional API key hash for API authentication.
-    #[serde(default)]
-    pub api_key_hash: Option<String>,
-}
-
-fn default_role() -> String {
-    "user".to_string()
-}
-
 /// Web search provider selection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -959,6 +938,26 @@ impl Default for ThinkingConfig {
     }
 }
 
+/// Hub (openclone-hub) connection configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HubConfig {
+    /// Hub server URL. Default: "https://hub.yinnho.cn"
+    pub url: String,
+    /// Environment variable name holding the API key (e.g. "OPENCLONE_HUB_KEY").
+    /// The API key is read from this env var at runtime.
+    pub api_key_env: String,
+}
+
+impl Default for HubConfig {
+    fn default() -> Self {
+        Self {
+            url: "https://hub.yinnho.cn".to_string(),
+            api_key_env: "OPENCLONE_HUB_KEY".to_string(),
+        }
+    }
+}
+
 /// Top-level kernel configuration.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -974,8 +973,12 @@ pub struct KernelConfig {
     pub api_listen: String,
     /// Whether to enable the OFP network layer.
     pub network_enabled: bool,
-    /// Default LLM provider configuration.
+    /// Default LLM provider configuration (legacy — replaced by brain).
+    #[serde(default)]
     pub default_model: DefaultModelConfig,
+    /// Brain configuration — the carrier's independent LLM brain.
+    #[serde(default)]
+    pub brain: BrainSourceConfig,
     /// Memory substrate configuration.
     pub memory: MemoryConfig,
     /// Network configuration.
@@ -992,9 +995,6 @@ pub struct KernelConfig {
     /// Language/locale for CLI and messages (default: "en").
     #[serde(default = "default_language")]
     pub language: String,
-    /// User configurations for RBAC multi-user support.
-    #[serde(default)]
-    pub users: Vec<UserConfig>,
     /// MCP server configurations for external tool integration.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfigEntry>,
@@ -1023,6 +1023,9 @@ pub struct KernelConfig {
     /// Root directory for agent workspaces. Default: `~/.opencarrier/workspaces`
     #[serde(default)]
     pub workspaces_dir: Option<PathBuf>,
+    /// Hub (openclone-hub) connection settings.
+    #[serde(default)]
+    pub hub: HubConfig,
     /// Media understanding configuration.
     #[serde(default)]
     pub media: crate::media::MediaConfig,
@@ -1269,13 +1272,13 @@ impl Default for KernelConfig {
             api_listen: "127.0.0.1:50051".to_string(),
             network_enabled: false,
             default_model: DefaultModelConfig::default(),
+            brain: BrainSourceConfig::default(),
             memory: MemoryConfig::default(),
             network: NetworkConfig::default(),
             channels: ChannelsConfig::default(),
             api_key: String::new(),
             mode: KernelMode::default(),
             language: "en".to_string(),
-            users: Vec::new(),
             mcp_servers: Vec::new(),
             a2a: None,
             usage_footer: UsageFooterMode::default(),
@@ -1285,6 +1288,7 @@ impl Default for KernelConfig {
             extensions: ExtensionsConfig::default(),
             vault: VaultConfig::default(),
             workspaces_dir: None,
+            hub: HubConfig::default(),
             media: crate::media::MediaConfig::default(),
             links: crate::media::LinkConfig::default(),
             reload: ReloadConfig::default(),
@@ -1365,7 +1369,6 @@ impl std::fmt::Debug for KernelConfig {
             )
             .field("mode", &self.mode)
             .field("language", &self.language)
-            .field("users", &format!("{} user(s)", self.users.len()))
             .field(
                 "mcp_servers",
                 &format!("{} server(s)", self.mcp_servers.len()),
@@ -1381,6 +1384,7 @@ impl std::fmt::Debug for KernelConfig {
             .field("extensions", &self.extensions)
             .field("vault", &format!("enabled={}", self.vault.enabled))
             .field("workspaces_dir", &self.workspaces_dir)
+            .field("hub", &format!("url={}", self.hub.url))
             .field(
                 "media",
                 &format!(
@@ -1463,6 +1467,22 @@ impl Default for DefaultModelConfig {
             model: "claude-sonnet-4-20250514".to_string(),
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             base_url: None,
+        }
+    }
+}
+
+/// Brain source configuration — tells the carrier where to load brain.json from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrainSourceConfig {
+    /// Path to brain.json, relative to home_dir. Default: "brain.json".
+    pub config: String,
+}
+
+impl Default for BrainSourceConfig {
+    fn default() -> Self {
+        Self {
+            config: "brain.json".to_string(),
         }
     }
 }
@@ -2595,7 +2615,7 @@ impl Default for ThreemaConfig {
         Self {
             threema_id: String::new(),
             secret_env: "THREEMA_SECRET".to_string(),
-            webhook_port: 8454,
+            webhook_port: 8458,
             default_agent: None,
             overrides: ChannelOverrides::default(),
         }
@@ -3578,25 +3598,6 @@ mod tests {
         assert_eq!(json, "\"stable\"");
         let back: KernelMode = serde_json::from_str(&json).unwrap();
         assert_eq!(back, KernelMode::Stable);
-    }
-
-    #[test]
-    fn test_user_config_serde() {
-        let uc = UserConfig {
-            name: "Alice".to_string(),
-            role: "owner".to_string(),
-            channel_bindings: {
-                let mut m = std::collections::HashMap::new();
-                m.insert("telegram".to_string(), "123456".to_string());
-                m
-            },
-            api_key_hash: None,
-        };
-        let json = serde_json::to_string(&uc).unwrap();
-        let back: UserConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.name, "Alice");
-        assert_eq!(back.role, "owner");
-        assert_eq!(back.channel_bindings.get("telegram").unwrap(), "123456");
     }
 
     #[test]

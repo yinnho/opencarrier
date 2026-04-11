@@ -22,7 +22,7 @@ use opencarrier_types::model_catalog::{
     OPENAI_BASE_URL, OPENROUTER_BASE_URL, PERPLEXITY_BASE_URL, QIANFAN_BASE_URL, QWEN_BASE_URL,
     REPLICATE_BASE_URL, SAMBANOVA_BASE_URL, TOGETHER_BASE_URL, VENICE_BASE_URL, VLLM_BASE_URL,
     VOLCENGINE_BASE_URL, VOLCENGINE_CODING_BASE_URL, XAI_BASE_URL, ZAI_BASE_URL,
-    ZAI_CODING_BASE_URL, ZHIPU_BASE_URL, ZHIPU_CODING_BASE_URL,
+    ZAI_CODING_BASE_URL, ZHIPU_ANTHROPIC_BASE_URL, ZHIPU_BASE_URL, ZHIPU_CODING_BASE_URL,
 };
 use std::sync::Arc;
 
@@ -414,6 +414,26 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             .base_url
             .clone()
             .unwrap_or_else(|| KIMI_CODING_BASE_URL.to_string());
+        return Ok(Arc::new(anthropic::AnthropicDriver::new(api_key, base_url)));
+    }
+
+    // GLM / Zhipu — Anthropic-compatible endpoint
+    // Use this for GLM models (e.g., glm-5.1) via Anthropic Messages API format.
+    if provider == "glm_anthropic" || provider == "zhipu_anthropic" {
+        let api_key = config
+            .api_key
+            .clone()
+            .or_else(|| std::env::var("ZHIPU_API_KEY").ok())
+            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+            .ok_or_else(|| {
+                LlmError::MissingApiKey(
+                    "Set ZHIPU_API_KEY or ANTHROPIC_API_KEY environment variable".to_string(),
+                )
+            })?;
+        let base_url = config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| ZHIPU_ANTHROPIC_BASE_URL.to_string());
         return Ok(Arc::new(anthropic::AnthropicDriver::new(api_key, base_url)));
     }
 

@@ -253,12 +253,13 @@ async fn handle_agent_ws(
                 .list()
                 .into_iter()
                 .map(|e| {
+                    let (modality, model) = state_clone.kernel.resolve_model_label(&e.manifest.model.modality);
                     serde_json::json!({
                         "id": e.id.to_string(),
                         "name": e.name,
                         "state": format!("{:?}", e.state),
-                        "model_provider": e.manifest.model.provider,
-                        "model_name": e.manifest.model.model,
+                        "modality": modality,
+                        "model": model,
                     })
                 })
                 .collect();
@@ -463,7 +464,7 @@ async fn handle_text_message(
                     .kernel
                     .registry
                     .get(agent_id)
-                    .map(|e| e.manifest.model.model.clone())
+                    .map(|e| e.manifest.model.modality.clone())
                     .unwrap_or_default();
                 let supports_vision = state
                     .kernel
@@ -845,22 +846,21 @@ async fn handle_command(
         "model" => {
             if args.is_empty() {
                 if let Some(entry) = state.kernel.registry.get(agent_id) {
-                    serde_json::json!({"type": "command_result", "command": cmd, "message": format!("Current model: {} (provider: {})", entry.manifest.model.model, entry.manifest.model.provider)})
+                    let modality = &entry.manifest.model.modality;
+                    serde_json::json!({"type": "command_result", "command": cmd, "message": format!("Current model: {modality}")})
                 } else {
                     serde_json::json!({"type": "error", "content": "Agent not found"})
                 }
             } else {
-                match state.kernel.set_agent_model(agent_id, args, None) {
+                match state.kernel.set_agent_model(agent_id, args) {
                     Ok(()) => {
                         if let Some(entry) = state.kernel.registry.get(agent_id) {
-                            let model = &entry.manifest.model.model;
-                            let provider = &entry.manifest.model.provider;
+                            let modality = &entry.manifest.model.modality;
                             serde_json::json!({
                                 "type": "command_result",
                                 "command": cmd,
-                                "message": format!("Model switched to: {model} (provider: {provider})"),
-                                "model": model,
-                                "provider": provider
+                                "message": format!("Model switched to: {modality}"),
+                                "model": modality,
                             })
                         } else {
                             serde_json::json!({"type": "command_result", "command": cmd, "message": format!("Model switched to: {args}")})

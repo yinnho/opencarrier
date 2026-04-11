@@ -41,6 +41,8 @@ pub const QWEN_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/
 pub const MINIMAX_BASE_URL: &str = "https://api.minimax.io/v1";
 pub const ZHIPU_BASE_URL: &str = "https://open.bigmodel.cn/api/paas/v4";
 pub const ZHIPU_CODING_BASE_URL: &str = "https://open.bigmodel.cn/api/coding/paas/v4";
+/// Zhipu/GLM Anthropic-compatible endpoint (uses Anthropic Messages API format).
+pub const ZHIPU_ANTHROPIC_BASE_URL: &str = "https://open.bigmodel.cn/api/anthropic";
 /// Z.AI domain aliases (same API, different domain).
 pub const ZAI_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 pub const ZAI_CODING_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";

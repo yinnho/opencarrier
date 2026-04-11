@@ -12,6 +12,7 @@ opencarrier-runtime = { path = "../opencarrier-runtime" }
 opencarrier-memory = { path = "../opencarrier-memory" }
 opencarrier-channels = { path = "../opencarrier-channels" }
 opencarrier-skills = { path = "../opencarrier-skills" }
+opencarrier-clone = { path = "../opencarrier-clone" }
 # Stub crates (to be removed)
 opencarrier-hands = { path = "../opencarrier-hands" }
 opencarrier-extensions = { path = "../opencarrier-extensions" }

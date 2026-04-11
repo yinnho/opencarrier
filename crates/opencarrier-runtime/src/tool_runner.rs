@@ -1645,8 +1645,8 @@ fn tool_agent_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, Str
     let mut output = format!("Running agents ({}):\n", agents.len());
     for a in &agents {
         output.push_str(&format!(
-            "  - {} (id: {}, state: {}, model: {}:{})\n",
-            a.name, a.id, a.state, a.model_provider, a.model_name
+            "  - {} (id: {}, state: {}, modality: {}, model: {})\n",
+            a.name, a.id, a.state, a.modality, a.model
         ));
     }
     Ok(output)
@@ -1715,7 +1715,7 @@ fn tool_agent_find(
                 "description": a.description,
                 "tags": a.tags,
                 "tools": a.tools,
-                "model": format!("{}:{}", a.model_provider, a.model_name),
+                "model": format!("{}:{}", a.modality, a.model),
             })
         })
         .collect();

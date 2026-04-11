@@ -4,7 +4,7 @@
 //! and inter-agent communication.
 
 pub mod approval;
-pub mod auth;
+pub mod brain;
 pub mod auto_reply;
 pub mod background;
 pub mod capabilities;

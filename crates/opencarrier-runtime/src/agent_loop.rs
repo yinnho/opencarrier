@@ -8,7 +8,7 @@ use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, C
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::embedding::EmbeddingDriver;
 use crate::kernel_handle::KernelHandle;
-use crate::llm_driver::{CompletionRequest, LlmDriver, LlmError, StreamEvent};
+use crate::llm_driver::{Brain, CompletionRequest, LlmDriver, LlmError, StreamEvent};
 use crate::llm_errors;
 use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::mcp::McpConnection;
@@ -64,22 +64,6 @@ fn append_tool_error_guidance(tool_result_blocks: &mut Vec<ContentBlock>) {
             text: TOOL_ERROR_GUIDANCE.to_string(),
             provider_metadata: None,
         });
-    }
-}
-
-/// Strip a provider prefix from a model ID before sending to the API.
-///
-/// Many models are stored as `provider/org/model` (e.g. `openrouter/google/gemini-2.5-flash`)
-/// but the upstream API expects just `org/model` (e.g. `google/gemini-2.5-flash`).
-pub fn strip_provider_prefix(model: &str, provider: &str) -> String {
-    let slash_prefix = format!("{}/", provider);
-    let colon_prefix = format!("{}:", provider);
-    if model.starts_with(&slash_prefix) {
-        model[slash_prefix.len()..].to_string()
-    } else if model.starts_with(&colon_prefix) {
-        model[colon_prefix.len()..].to_string()
-    } else {
-        model.to_string()
     }
 }
 
@@ -150,6 +134,7 @@ pub async fn run_agent_loop(
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
+    brain: Option<Arc<dyn Brain>>,
 ) -> OpenCarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -330,11 +315,8 @@ pub async fn run_agent_loop(
         // Context guard: compact oversized tool results before LLM call
         apply_context_guard(&mut messages, &context_budget, available_tools);
 
-        // Strip provider prefix: "openrouter/google/gemini-2.5-flash" → "google/gemini-2.5-flash"
-        let api_model = strip_provider_prefix(&manifest.model.model, &manifest.model.provider);
-
         let request = CompletionRequest {
-            model: api_model,
+            model: String::new(), // Model set by Brain/endpoint, not agent
             messages: messages.clone(),
             tools: available_tools.to_vec(),
             max_tokens: manifest.model.max_tokens,
@@ -348,9 +330,17 @@ pub async fn run_agent_loop(
             cb(LoopPhase::Thinking);
         }
 
-        // Call LLM with retry, error classification, and circuit breaker
-        let provider_name = manifest.model.provider.as_str();
-        let mut response = call_with_retry(&*driver, request, Some(provider_name), None).await?;
+        // Call LLM: use Brain if available, otherwise fall back to driver
+        let mut response = if let Some(ref brain) = brain {
+            let modality = if manifest.model.modality.is_empty() {
+                "chat"
+            } else {
+                &manifest.model.modality
+            };
+            brain.think(modality, request).await.map_err(|e| OpenCarrierError::LlmDriver(e.to_string()))?
+        } else {
+            call_with_retry(&*driver, request, None, None).await?
+        };
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
@@ -1121,6 +1111,7 @@ pub async fn run_agent_loop_streaming(
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
+    brain: Option<Arc<dyn Brain>>,
 ) -> OpenCarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting streaming agent loop");
 
@@ -1307,11 +1298,8 @@ pub async fn run_agent_loop_streaming(
         // Context guard: compact oversized tool results before LLM call
         apply_context_guard(&mut messages, &context_budget, available_tools);
 
-        // Strip provider prefix: "openrouter/google/gemini-2.5-flash" → "google/gemini-2.5-flash"
-        let api_model = strip_provider_prefix(&manifest.model.model, &manifest.model.provider);
-
         let request = CompletionRequest {
-            model: api_model,
+            model: String::new(), // Model set by Brain/endpoint, not agent
             messages: messages.clone(),
             tools: available_tools.to_vec(),
             max_tokens: manifest.model.max_tokens,
@@ -1331,16 +1319,25 @@ pub async fn run_agent_loop_streaming(
             }
         }
 
-        // Stream LLM call with retry, error classification, and circuit breaker
-        let provider_name = manifest.model.provider.as_str();
-        let mut response = stream_with_retry(
-            &*driver,
-            request,
-            stream_tx.clone(),
-            Some(provider_name),
-            None,
-        )
-        .await?;
+        // Stream LLM: use Brain if available (non-streaming for now), otherwise driver
+        let mut response = if let Some(ref brain) = brain {
+            let modality = if manifest.model.modality.is_empty() {
+                "chat"
+            } else {
+                &manifest.model.modality
+            };
+            // TODO: Add brain.stream() for true streaming support
+            brain.think(modality, request).await.map_err(|e| OpenCarrierError::LlmDriver(e.to_string()))?
+        } else {
+            stream_with_retry(
+                &*driver,
+                request,
+                stream_tx.clone(),
+                None,
+                None,
+            )
+            .await?
+        };
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
@@ -2885,6 +2882,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Loop should complete without error");
@@ -2938,6 +2936,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Loop should complete without error");
@@ -2993,6 +2992,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Loop should complete without error");
@@ -3046,6 +3046,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Loop should complete without error");
@@ -3092,6 +3093,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -3216,6 +3218,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Loop should recover via retry");
@@ -3263,6 +3266,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Loop should complete with fallback");
@@ -3318,6 +3322,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -4206,6 +4211,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Agent loop should complete");
@@ -4273,6 +4279,7 @@ mod tests {
             None,
             None,
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Normal loop should complete");
@@ -4336,6 +4343,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // brain
         )
         .await
         .expect("Streaming loop should complete");

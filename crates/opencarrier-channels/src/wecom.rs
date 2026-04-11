@@ -531,7 +531,8 @@ impl ChannelAdapter for WeComAdapter {
             );
 
             let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let listener = tokio::net::TcpListener::bind(addr).await
+                .expect(&format!("WeCom webhook port {} bind failed — is another process using it?", port));
 
             info!("WeCom webhook server listening on http://0.0.0.0:{}", port);
 
@@ -664,9 +665,9 @@ mod tests {
         )
         .expect("echostr should decrypt");
 
-        // The test vector was generated for "opencarrier-wecom-check"
-        // Actual output depends on the AES key used
-        assert_eq!(plain, "opencarrier-wecom-check");
+        // The test vector was generated with an older project name.
+        // Actual output depends on the AES key used.
+        assert_eq!(plain, "openfang-wecom-check");
     }
 
     #[test]

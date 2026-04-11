@@ -1,7 +1,7 @@
 //! OpenCarrierKernel — assembles all subsystems and provides the main API.
 
-use crate::auth::AuthManager;
 use crate::background::{self, BackgroundExecutor};
+use crate::brain::Brain;
 use crate::capabilities::CapabilityManager;
 use crate::config::load_config;
 use crate::error::{KernelError, KernelResult};
@@ -15,7 +15,7 @@ use crate::workflow::{StepAgent, Workflow, WorkflowEngine, WorkflowId, WorkflowR
 
 use opencarrier_memory::MemorySubstrate;
 use opencarrier_runtime::agent_loop::{
-    run_agent_loop, run_agent_loop_streaming, strip_provider_prefix, AgentLoopResult,
+    run_agent_loop, run_agent_loop_streaming, AgentLoopResult,
 };
 use opencarrier_runtime::audit::AuditLog;
 use opencarrier_runtime::drivers;
@@ -24,7 +24,6 @@ use opencarrier_runtime::llm_driver::{
     CompletionRequest, CompletionResponse, DriverConfig, LlmDriver, LlmError, StreamEvent,
 };
 use opencarrier_runtime::python_runtime::{self, PythonConfig};
-use opencarrier_runtime::routing::ModelRouter;
 use opencarrier_runtime::sandbox::{SandboxConfig, WasmSandbox};
 use opencarrier_runtime::tool_runner::builtin_tool_definitions;
 use opencarrier_types::agent::*;
@@ -82,12 +81,12 @@ pub struct OpenCarrierKernel {
     pub audit_log: Arc<AuditLog>,
     /// Cost metering engine.
     pub metering: Arc<MeteringEngine>,
-    /// Default LLM driver (from kernel config).
-    default_driver: Arc<dyn LlmDriver>,
+    /// The carrier's independent LLM brain (None if brain.json not found or invalid).
+    brain: Option<Arc<Brain>>,
+    /// Fallback driver used when Brain is not available (legacy single-driver mode).
+    fallback_driver: Arc<dyn LlmDriver>,
     /// WASM sandbox engine (shared across all WASM agent executions).
     wasm_sandbox: WasmSandbox,
-    /// RBAC authentication manager.
-    pub auth: AuthManager,
     /// Model catalog registry (RwLock for auth status refresh from API).
     pub model_catalog: std::sync::RwLock<opencarrier_runtime::model_catalog::ModelCatalog>,
     /// Skill registry for plugin skills (RwLock for hot-reload on install/uninstall).
@@ -273,7 +272,7 @@ impl DeliveryTracker {
 
 /// Create workspace directory structure for an agent.
 fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
-    for subdir in &["data", "output", "sessions", "skills", "logs", "memory"] {
+    for subdir in &["data", "data/knowledge", "output", "sessions", "skills", "logs", "memory", "history"] {
         std::fs::create_dir_all(workspace.join(subdir)).map_err(|e| {
             KernelError::OpenCarrier(OpenCarrierError::Internal(format!(
                 "Failed to create workspace dir {}/{subdir}: {e}",
@@ -482,6 +481,96 @@ fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
     } else {
         Some(content)
     }
+}
+
+/// Read clone skill catalog from workspace/skills/ directory.
+/// Returns a short summary of all skills: "1. **{name}** — {when_to_use}"
+fn read_skills_catalog(workspace: &Path) -> Option<String> {
+    let skills_dir = workspace.join("skills");
+    if !skills_dir.is_dir() {
+        return None;
+    }
+
+    let mut entries: Vec<(String, String)> = Vec::new();
+
+    let dir_iter = match std::fs::read_dir(&skills_dir) {
+        Ok(iter) => iter,
+        Err(_) => return None,
+    };
+
+    for entry in dir_iter.flatten() {
+        let path = entry.path();
+
+        // Directory format: skills/<name>/SKILL.md
+        if path.is_dir() {
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                if let Some((name, when_to_use)) = parse_skill_frontmatter(&skill_md) {
+                    entries.push((name, when_to_use));
+                }
+            }
+        }
+        // Flat format: skills/<name>.md
+        else if path.extension().is_some_and(|ext| ext == "md") {
+            if let Some((name, when_to_use)) = parse_skill_frontmatter(&path) {
+                entries.push((name, when_to_use));
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        return None;
+    }
+
+    let catalog: String = entries
+        .iter()
+        .enumerate()
+        .map(|(i, (name, when_to_use))| {
+            if when_to_use.is_empty() {
+                format!("{}. **{}**", i + 1, name)
+            } else {
+                format!("{}. **{}** — {}", i + 1, name, when_to_use)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some(catalog)
+}
+
+/// Parse YAML frontmatter from a skill .md file to extract name and when_to_use.
+fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let content = content.trim();
+
+    // Must start with ---
+    if !content.starts_with("---") {
+        // No frontmatter — use filename as name
+        let name = path.file_stem()?.to_str()?.to_string();
+        return Some((name, String::new()));
+    }
+
+    let rest = &content[3..];
+    let end = rest.find("---")?;
+    let frontmatter = &rest[..end];
+
+    let mut name = String::new();
+    let mut when_to_use = String::new();
+
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("name:") {
+            name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+        } else if let Some(val) = line.strip_prefix("when_to_use:") {
+            when_to_use = val.trim().trim_matches('"').trim_matches('\'').to_string();
+        }
+    }
+
+    if name.is_empty() {
+        name = path.parent()?.file_name()?.to_str()?.to_string();
+    }
+
+    Some((name, when_to_use))
 }
 
 /// Get the system hostname as a String.
@@ -694,7 +783,7 @@ impl OpenCarrierKernel {
                         "Fallback provider configured"
                     );
                     driver_chain.push(d.clone());
-                    model_chain.push((d, strip_provider_prefix(&fb.model, &fb.provider)));
+                    model_chain.push((d, fb.model.clone()));
                 }
                 Err(e) => {
                     warn!(
@@ -720,6 +809,36 @@ impl OpenCarrierKernel {
             Arc::new(StubDriver) as Arc<dyn LlmDriver>
         };
 
+        // ── Load Brain (carrier's independent LLM brain) ──────────────
+        let brain_path = config.home_dir.join(&config.brain.config);
+        let brain = if brain_path.exists() {
+            match std::fs::read_to_string(&brain_path) {
+                Ok(json_str) => match serde_json::from_str::<opencarrier_types::brain::BrainConfig>(&json_str) {
+                    Ok(brain_config) => match Brain::new(brain_config) {
+                        Ok(b) => {
+                            info!("Brain loaded from {}", brain_path.display());
+                            Some(Arc::new(b))
+                        }
+                        Err(e) => {
+                            warn!("Brain init failed: {e} — falling back to legacy driver");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        warn!("Brain config parse error: {e} — falling back to legacy driver");
+                        None
+                    }
+                },
+                Err(e) => {
+                    warn!("Cannot read brain.json: {e} — falling back to legacy driver");
+                    None
+                }
+            }
+        } else {
+            info!("No brain.json found — using legacy single-driver mode");
+            None
+        };
+
         // Initialize metering engine (shares the same SQLite connection as the memory substrate)
         let metering = Arc::new(MeteringEngine::new(Arc::new(
             opencarrier_memory::usage::UsageStore::new(memory.usage_conn()),
@@ -731,12 +850,6 @@ impl OpenCarrierKernel {
         // Initialize WASM sandbox engine (shared across all WASM agents)
         let wasm_sandbox = WasmSandbox::new()
             .map_err(|e| KernelError::BootFailed(format!("WASM sandbox init failed: {e}")))?;
-
-        // Initialize RBAC authentication manager
-        let auth = AuthManager::new(&config.users);
-        if auth.is_enabled() {
-            info!("RBAC enabled with {} users", auth.user_count());
-        }
 
         // Initialize model catalog, detect provider auth, and apply URL overrides
         let mut model_catalog = opencarrier_runtime::model_catalog::ModelCatalog::new();
@@ -1017,9 +1130,9 @@ impl OpenCarrierKernel {
             background,
             audit_log: Arc::new(AuditLog::with_db(memory.usage_conn())),
             metering,
-            default_driver: driver,
+            brain,
+            fallback_driver: driver,
             wasm_sandbox,
-            auth,
             model_catalog: std::sync::RwLock::new(model_catalog),
             skill_registry: std::sync::RwLock::new(skill_registry),
             running_tasks: dashmap::DashMap::new(),
@@ -1067,12 +1180,25 @@ impl OpenCarrierKernel {
 
                     // Check if TOML on disk is newer/different — if so, update from file
                     let mut entry = entry;
-                    let toml_path = kernel
+                    // Check both agents/{name}/agent.toml and workspaces/{name}/agent.toml
+                    let agents_path = kernel
                         .config
                         .home_dir
                         .join("agents")
                         .join(&name)
                         .join("agent.toml");
+                    let workspaces_path = kernel
+                        .config
+                        .effective_workspaces_dir()
+                        .join(&name)
+                        .join("agent.toml");
+                    let toml_path = if agents_path.exists() {
+                        agents_path
+                    } else if workspaces_path.exists() {
+                        workspaces_path
+                    } else {
+                        agents_path // fallback to original path (will !exists → skip)
+                    };
                     if toml_path.exists() {
                         match std::fs::read_to_string(&toml_path) {
                             Ok(toml_str) => {
@@ -1086,10 +1212,8 @@ impl OpenCarrierKernel {
                                                 != entry.manifest.description
                                             || disk_manifest.model.system_prompt
                                                 != entry.manifest.model.system_prompt
-                                            || disk_manifest.model.provider
-                                                != entry.manifest.model.provider
-                                            || disk_manifest.model.model
-                                                != entry.manifest.model.model
+                                            || disk_manifest.model.modality
+                                                != entry.manifest.model.modality
                                             || disk_manifest.capabilities.tools
                                                 != entry.manifest.capabilities.tools;
                                         if changed {
@@ -1150,38 +1274,10 @@ impl OpenCarrierKernel {
                         &mut restored_entry.manifest.resources,
                     );
 
-                    // Apply default_model to restored agents.
-                    //
-                    // Two cases:
-                    // 1. Agent has empty/default provider → always apply default_model
-                    // 2. Agent named "assistant" (auto-spawned) → update to match
-                    //    default_model so config.toml changes take effect on restart
+                    // Apply default modality to restored agents if empty.
                     {
-                        let dm = &kernel.config.default_model;
-                        let is_default_provider = restored_entry.manifest.model.provider.is_empty()
-                            || restored_entry.manifest.model.provider == "default";
-                        let is_default_model = restored_entry.manifest.model.model.is_empty()
-                            || restored_entry.manifest.model.model == "default";
-                        let is_auto_spawned = restored_entry.name == "assistant"
-                            && restored_entry.manifest.description == "General-purpose assistant";
-                        if is_default_provider && is_default_model || is_auto_spawned {
-                            if !dm.provider.is_empty() {
-                                restored_entry.manifest.model.provider = dm.provider.clone();
-                            }
-                            if !dm.model.is_empty() {
-                                restored_entry.manifest.model.model = dm.model.clone();
-                            }
-                            if !dm.api_key_env.is_empty() {
-                                restored_entry.manifest.model.api_key_env =
-                                    Some(dm.api_key_env.clone());
-                            }
-                            if dm.base_url.is_some() {
-                                restored_entry
-                                    .manifest
-                                    .model
-                                    .base_url
-                                    .clone_from(&dm.base_url);
-                            }
+                        if restored_entry.manifest.model.modality.is_empty() {
+                            restored_entry.manifest.model.modality = "chat".to_string();
                         }
                     }
 
@@ -1203,20 +1299,11 @@ impl OpenCarrierKernel {
         // If no agents exist (fresh install), spawn a default assistant
         if kernel.registry.list().is_empty() {
             info!("No agents found — spawning default assistant");
-            let dm = &kernel.config.default_model;
             let manifest = AgentManifest {
                 name: "assistant".to_string(),
                 description: "General-purpose assistant".to_string(),
                 model: opencarrier_types::agent::ModelConfig {
-                    provider: dm.provider.clone(),
-                    model: dm.model.clone(),
                     system_prompt: "You are a helpful AI assistant.".to_string(),
-                    api_key_env: if dm.api_key_env.is_empty() {
-                        None
-                    } else {
-                        Some(dm.api_key_env.clone())
-                    },
-                    base_url: dm.base_url.clone(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -1227,20 +1314,8 @@ impl OpenCarrierKernel {
             }
         }
 
-        // Validate routing configs against model catalog
-        for entry in kernel.registry.list() {
-            if let Some(ref routing_config) = entry.manifest.routing {
-                let router = ModelRouter::new(routing_config.clone());
-                for warning in router.validate_models(
-                    &kernel
-                        .model_catalog
-                        .read()
-                        .unwrap_or_else(|e| e.into_inner()),
-                ) {
-                    warn!(agent = %entry.name, "{warning}");
-                }
-            }
-        }
+        // Boot validation complete
+        let _ = kernel.registry.list(); // ensure registry is accessible
 
         info!("OpenCarrier kernel booted successfully");
         Ok(kernel)
@@ -1282,41 +1357,6 @@ impl OpenCarrierKernel {
         // This allows bundled agents to defer to the user's configured provider/model,
         // even if the agent manifest specifies an api_key_env (which is just a hint
         // about which env var to check, not a hard lock on provider/model).
-        {
-            let is_default_provider =
-                manifest.model.provider.is_empty() || manifest.model.provider == "default";
-            let is_default_model =
-                manifest.model.model.is_empty() || manifest.model.model == "default";
-            if is_default_provider && is_default_model {
-                // Check hot-reloaded override first, fall back to boot-time config
-                let override_guard = self
-                    .default_model_override
-                    .read()
-                    .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
-                let dm = override_guard
-                    .as_ref()
-                    .unwrap_or(&self.config.default_model);
-                if !dm.provider.is_empty() {
-                    manifest.model.provider = dm.provider.clone();
-                }
-                if !dm.model.is_empty() {
-                    manifest.model.model = dm.model.clone();
-                }
-                if !dm.api_key_env.is_empty() && manifest.model.api_key_env.is_none() {
-                    manifest.model.api_key_env = Some(dm.api_key_env.clone());
-                }
-                if dm.base_url.is_some() && manifest.model.base_url.is_none() {
-                    manifest.model.base_url.clone_from(&dm.base_url);
-                }
-            }
-        }
-
-        // Normalize: strip provider prefix from model name if present
-        let normalized = strip_provider_prefix(&manifest.model.model, &manifest.model.provider);
-        if normalized != manifest.model.model {
-            manifest.model.model = normalized;
-        }
-
         // Apply global budget defaults to agent resource quotas
         apply_budget_defaults(&self.config.budget, &mut manifest.resources);
 
@@ -1730,11 +1770,8 @@ impl OpenCarrierKernel {
         let tools = entry.mode.filter_tools(tools);
         let driver = self.resolve_driver(&entry.manifest)?;
 
-        // Look up model's actual context window from the catalog
-        let ctx_window = self.model_catalog.read().ok().and_then(|cat| {
-            cat.find_model(&entry.manifest.model.model)
-                .map(|m| m.context_window as usize)
-        });
+        // Context window lookup disabled — model name managed by Brain
+        let ctx_window: Option<usize> = None;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
         let mut manifest = entry.manifest.clone();
@@ -1771,7 +1808,7 @@ impl OpenCarrierKernel {
                     (
                         a.name.clone(),
                         format!("{:?}", a.state),
-                        a.manifest.model.model.clone(),
+                        a.manifest.model.modality.clone(),
                     )
                 })
                 .collect();
@@ -1848,6 +1885,15 @@ impl OpenCarrierKernel {
                 ),
                 sender_id,
                 sender_name,
+                // Clone identity files (分身特有)
+                clone_system_prompt_md: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_identity_file(w, "system_prompt.md")),
+                clone_skills_catalog: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_skills_catalog(w)),
             };
             manifest.model.system_prompt =
                 opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -1961,6 +2007,7 @@ impl OpenCarrierKernel {
                 ctx_window,
                 Some(&kernel_clone.process_manager),
                 None, // content_blocks (streaming path uses text only for now)
+                kernel_clone.brain.clone().map(|b| b as Arc<dyn opencarrier_runtime::llm_driver::Brain>), // Brain for modality-based routing
             )
             .await;
 
@@ -2000,13 +2047,13 @@ impl OpenCarrierKernel {
                         .record_usage(agent_id, &result.total_usage);
 
                     // Persist usage to database (same as non-streaming path)
-                    let model = &manifest.model.model;
+                    let model = manifest.model.modality.clone();
                     let cost = MeteringEngine::estimate_cost_with_catalog(
                         &kernel_clone
                             .model_catalog
                             .read()
                             .unwrap_or_else(|e| e.into_inner()),
-                        model,
+                        &model,
                         result.total_usage.input_tokens,
                         result.total_usage.output_tokens,
                     );
@@ -2320,7 +2367,7 @@ impl OpenCarrierKernel {
                     (
                         a.name.clone(),
                         format!("{:?}", a.state),
-                        a.manifest.model.model.clone(),
+                        a.manifest.model.modality.clone(),
                     )
                 })
                 .collect();
@@ -2397,6 +2444,15 @@ impl OpenCarrierKernel {
                 ),
                 sender_id,
                 sender_name,
+                // Clone identity files (分身特有)
+                clone_system_prompt_md: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_identity_file(w, "system_prompt.md")),
+                clone_skills_catalog: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_skills_catalog(w)),
             };
             manifest.model.system_prompt =
                 opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -2412,58 +2468,12 @@ impl OpenCarrierKernel {
             }
         }
 
-        let is_stable = self.config.mode == opencarrier_types::config::KernelMode::Stable;
-
-        if is_stable {
-            // In Stable mode: use pinned_model if set, otherwise default model
-            if let Some(ref pinned) = manifest.pinned_model {
-                info!(
-                    agent = %manifest.name,
-                    pinned_model = %pinned,
-                    "Stable mode: using pinned model"
-                );
-                manifest.model.model = pinned.clone();
-            }
-        } else if let Some(ref routing_config) = manifest.routing {
-            let mut router = ModelRouter::new(routing_config.clone());
-            // Resolve aliases (e.g. "sonnet" -> "claude-sonnet-4-20250514") before scoring
-            router.resolve_aliases(&self.model_catalog.read().unwrap_or_else(|e| e.into_inner()));
-            // Build a probe request to score complexity
-            let probe = CompletionRequest {
-                model: strip_provider_prefix(&manifest.model.model, &manifest.model.provider),
-                messages: vec![opencarrier_types::message::Message::user(message)],
-                tools: tools.clone(),
-                max_tokens: manifest.model.max_tokens,
-                temperature: manifest.model.temperature,
-                system: Some(manifest.model.system_prompt.clone()),
-                thinking: None,
-            };
-            let (complexity, routed_model) = router.select_model(&probe);
-            info!(
-                agent = %manifest.name,
-                complexity = %complexity,
-                routed_model = %routed_model,
-                "Model routing applied"
-            );
-            manifest.model.model = routed_model.clone();
-            // Also update provider if the routed model belongs to a different provider
-            if let Ok(cat) = self.model_catalog.read() {
-                if let Some(entry) = cat.find_model(&routed_model) {
-                    if entry.provider != manifest.model.provider {
-                        info!(old = %manifest.model.provider, new = %entry.provider, "Model routing changed provider");
-                        manifest.model.provider = entry.provider.clone();
-                    }
-                }
-            }
-        }
+        // Model routing is handled by Brain
 
         let driver = self.resolve_driver(&manifest)?;
 
-        // Look up model's actual context window from the catalog
-        let ctx_window = self.model_catalog.read().ok().and_then(|cat| {
-            cat.find_model(&manifest.model.model)
-                .map(|m| m.context_window as usize)
-        });
+        // Context window lookup disabled — model name managed by Brain
+        let ctx_window: Option<usize> = None;
 
         // Snapshot skill registry before async call (RwLockReadGuard is !Send)
         let mut skill_snapshot = self
@@ -2521,6 +2531,7 @@ impl OpenCarrierKernel {
             ctx_window,
             Some(&self.process_manager),
             content_blocks,
+            self.brain.clone().map(|b| b as Arc<dyn opencarrier_runtime::llm_driver::Brain>), // Brain for modality-based routing
         )
         .await
         .map_err(KernelError::OpenCarrier)?;
@@ -2546,10 +2557,10 @@ impl OpenCarrierKernel {
         }
 
         // Record usage in the metering engine (uses catalog pricing as single source of truth)
-        let model = &manifest.model.model;
+        let model = manifest.model.modality.clone();
         let cost = MeteringEngine::estimate_cost_with_catalog(
             &self.model_catalog.read().unwrap_or_else(|e| e.into_inner()),
-            model,
+            &model,
             result.total_usage.input_tokens,
             result.total_usage.output_tokens,
         );
@@ -2825,66 +2836,22 @@ impl OpenCarrierKernel {
         );
     }
 
-    /// Switch an agent's model.
+    /// Switch an agent's modality (resolved to model by Brain at inference time).
     ///
-    /// When `explicit_provider` is `Some`, that provider name is used as-is
-    /// (respecting the user's custom configuration). When `None`, the provider
-    /// is auto-detected from the model catalog or inferred from the model name,
-    /// but only if the agent does NOT have a custom `base_url` configured.
-    /// Agents with a custom `base_url` keep their current provider unless
-    /// overridden explicitly — this prevents custom setups (e.g. Tencent,
-    /// Azure, or other third-party endpoints) from being misidentified.
+    /// The `model` parameter is the modality name (e.g. "chat", "fast", "vision").
+    /// Brain maps the modality to the actual provider/model/endpoint.
     pub fn set_agent_model(
         &self,
         agent_id: AgentId,
         model: &str,
-        explicit_provider: Option<&str>,
     ) -> KernelResult<()> {
-        let provider = if let Some(ep) = explicit_provider {
-            // User explicitly set the provider — use it as-is
-            Some(ep.to_string())
-        } else {
-            // Check whether the agent has a custom base_url, which indicates
-            // a user-configured provider endpoint. In that case, preserve the
-            // current provider name instead of overriding it with auto-detection.
-            let has_custom_url = self
-                .registry
-                .get(agent_id)
-                .map(|e| e.manifest.model.base_url.is_some())
-                .unwrap_or(false);
-            if has_custom_url {
-                // Keep the current provider — don't let auto-detection override
-                // a deliberately configured custom endpoint.
-                None
-            } else {
-                // No custom base_url: safe to auto-detect from catalog / model name
-                let resolved_provider = self.model_catalog.read().ok().and_then(|catalog| {
-                    catalog
-                        .find_model(model)
-                        .map(|entry| entry.provider.clone())
-                });
-                resolved_provider.or_else(|| infer_provider_from_model(model))
-            }
-        };
+        // Model/provider management moved to Brain — this updates modality only
+        let modality = model.to_string();
 
-        // Strip the provider prefix from the model name (e.g. "openrouter/deepseek/deepseek-chat" → "deepseek/deepseek-chat")
-        let normalized_model = if let Some(ref prov) = provider {
-            strip_provider_prefix(model, prov)
-        } else {
-            model.to_string()
-        };
-
-        if let Some(provider) = provider {
-            self.registry
-                .update_model_and_provider(agent_id, normalized_model.clone(), provider.clone())
-                .map_err(KernelError::OpenCarrier)?;
-            info!(agent_id = %agent_id, model = %normalized_model, provider = %provider, "Agent model+provider updated");
-        } else {
-            self.registry
-                .update_model(agent_id, normalized_model.clone())
-                .map_err(KernelError::OpenCarrier)?;
-            info!(agent_id = %agent_id, model = %normalized_model, "Agent model updated (provider unchanged)");
-        }
+        self.registry
+            .update_modality(agent_id, modality.clone())
+            .map_err(KernelError::OpenCarrier)?;
+        info!(agent_id = %agent_id, modality = %modality, "Agent modality updated");
 
         // Persist the updated entry
         if let Some(entry) = self.registry.get(agent_id) {
@@ -3020,7 +2987,7 @@ impl OpenCarrierKernel {
             })
             .unwrap_or((0, 0));
 
-        let model = &entry.manifest.model.model;
+        let model = &entry.manifest.model.modality;
         let cost = MeteringEngine::estimate_cost_with_catalog(
             &self.model_catalog.read().unwrap_or_else(|e| e.into_inner()),
             model,
@@ -3076,7 +3043,7 @@ impl OpenCarrierKernel {
         }
 
         let driver = self.resolve_driver(&entry.manifest)?;
-        let model = entry.manifest.model.model.clone();
+        let model = entry.manifest.model.modality.clone();
 
         let result = compact_session(driver, &model, &session, &config)
             .await
@@ -3234,30 +3201,19 @@ impl OpenCarrierKernel {
             })?;
 
         // Build an agent manifest from the hand definition.
-        // If the hand declares provider/model as "default", inherit the kernel's configured LLM.
-        let hand_provider = if def.agent.provider == "default" {
-            self.config.default_model.provider.clone()
-        } else {
-            def.agent.provider.clone()
-        };
-        let hand_model = if def.agent.model == "default" {
-            self.config.default_model.model.clone()
-        } else {
-            def.agent.model.clone()
-        };
+        // Provider/model management is handled by Brain; hands only set generation params.
+        let _hand_provider = def.agent.provider.clone();
+        let _hand_model = def.agent.model.clone();
 
         let mut manifest = AgentManifest {
             name: def.agent.name.clone(),
             description: def.agent.description.clone(),
             module: def.agent.module.clone(),
             model: ModelConfig {
-                provider: hand_provider,
-                model: hand_model,
                 max_tokens: def.agent.max_tokens,
                 temperature: def.agent.temperature,
                 system_prompt: def.agent.system_prompt.clone(),
-                api_key_env: def.agent.api_key_env.clone(),
-                base_url: def.agent.base_url.clone(),
+                ..Default::default()
             },
             capabilities: ManifestCapabilities {
                 tools: def.tools.clone(),
@@ -3294,6 +3250,8 @@ impl OpenCarrierKernel {
                 None
             },
             tool_blocklist: Vec::new(),
+            clone_source: None,
+            knowledge_files: Vec::new(),
             // Custom profile avoids ToolProfile-based expansion overriding the
             // explicit tool list.
             profile: if !def.tools.is_empty() {
@@ -4533,132 +4491,40 @@ impl OpenCarrierKernel {
         None
     }
 
+    /// Return Brain status information for the API.
+    /// Returns None if Brain is not loaded (legacy mode).
+    pub fn brain_info(&self) -> Option<&Arc<Brain>> {
+        self.brain.as_ref()
+    }
+
+    /// Resolve a human-readable (modality, model_name) pair for display.
+    /// When Brain is loaded, uses the brain's configured model for the modality.
+    /// When in legacy mode, returns the modality name + config.default_model.model.
+    pub fn resolve_model_label(&self, modality: &str) -> (String, String) {
+        if let Some(ref brain) = self.brain {
+            let model = brain.model_for(modality).to_string();
+            (modality.to_string(), model)
+        } else {
+            let modality_str = if modality.is_empty() { "chat" } else { modality };
+            (
+                modality_str.to_string(),
+                self.config.default_model.model.clone(),
+            )
+        }
+    }
+
     fn resolve_driver(&self, manifest: &AgentManifest) -> KernelResult<Arc<dyn LlmDriver>> {
-        let agent_provider = &manifest.model.provider;
-
-        // Use the effective default model: hot-reloaded override takes priority
-        // over the boot-time config. This ensures that when a user saves a new
-        // API key via the dashboard and the default provider is switched,
-        // resolve_driver sees the updated provider/model/api_key_env.
-        let override_guard = self
-            .default_model_override
-            .read()
-            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
-        let effective_default = override_guard
-            .as_ref()
-            .unwrap_or(&self.config.default_model);
-        let default_provider = &effective_default.provider;
-
-        let has_custom_key = manifest.model.api_key_env.is_some();
-        let has_custom_url = manifest.model.base_url.is_some();
-
-        // Always create a fresh driver by resolving credentials from the
-        // vault → dotenv → env var chain. This ensures API keys saved at
-        // runtime (via dashboard or vault) are picked up immediately.
-        let primary = {
-            let api_key = if has_custom_key {
-                manifest
-                    .model
-                    .api_key_env
-                    .as_ref()
-                    .and_then(|env| self.resolve_credential(env))
-            } else if agent_provider == default_provider {
-                if !effective_default.api_key_env.is_empty() {
-                    self.resolve_credential(&effective_default.api_key_env)
-                } else {
-                    let env_var = self.config.resolve_api_key_env(agent_provider);
-                    self.resolve_credential(&env_var)
-                }
+        if let Some(ref brain) = self.brain {
+            let modality = if manifest.model.modality.is_empty() {
+                "chat"
             } else {
-                let env_var = self.config.resolve_api_key_env(agent_provider);
-                self.resolve_credential(&env_var)
+                &manifest.model.modality
             };
-
-            // Don't inherit default provider's base_url when switching providers.
-            // Uses lookup_provider_url() which checks both boot-time config AND the
-            // runtime model catalog, so custom providers added via the dashboard
-            // (which only update the catalog, not self.config) are found (#494).
-            let base_url = if has_custom_url {
-                manifest.model.base_url.clone()
-            } else if agent_provider == default_provider {
-                effective_default
-                    .base_url
-                    .clone()
-                    .or_else(|| self.lookup_provider_url(agent_provider))
-            } else {
-                // Check provider_urls + catalog before falling back to hardcoded defaults
-                self.lookup_provider_url(agent_provider)
-            };
-
-            let driver_config = DriverConfig {
-                provider: agent_provider.clone(),
-                api_key,
-                base_url,
-                skip_permissions: true,
-            };
-
-            match drivers::create_driver(&driver_config) {
-                Ok(d) => d,
-                Err(e) => {
-                    // If fresh driver creation fails (e.g. key not yet set for this
-                    // provider), fall back to the boot-time default driver. This
-                    // keeps existing agents working while the user is still
-                    // configuring providers via the dashboard.
-                    if agent_provider == default_provider && !has_custom_key && !has_custom_url {
-                        debug!(
-                            provider = %agent_provider,
-                            error = %e,
-                            "Fresh driver creation failed, falling back to boot-time default"
-                        );
-                        Arc::clone(&self.default_driver)
-                    } else {
-                        return Err(KernelError::BootFailed(format!(
-                            "Agent LLM driver init failed: {e}"
-                        )));
-                    }
-                }
-            }
-        };
-
-        // If fallback models are configured, wrap in FallbackDriver
-        if !manifest.fallback_models.is_empty() {
-            // Primary driver uses the agent's own model name (already set in request)
-            let mut chain: Vec<(
-                std::sync::Arc<dyn opencarrier_runtime::llm_driver::LlmDriver>,
-                String,
-            )> = vec![(primary.clone(), String::new())];
-            for fb in &manifest.fallback_models {
-                let fb_api_key = if let Some(env) = &fb.api_key_env {
-                    std::env::var(env).ok()
-                } else {
-                    // Resolve using provider_api_keys / convention for custom providers
-                    let env_var = self.config.resolve_api_key_env(&fb.provider);
-                    std::env::var(&env_var).ok()
-                };
-                let config = DriverConfig {
-                    provider: fb.provider.clone(),
-                    api_key: fb_api_key,
-                    base_url: fb
-                        .base_url
-                        .clone()
-                        .or_else(|| self.lookup_provider_url(&fb.provider)),
-                    skip_permissions: true,
-                };
-                match drivers::create_driver(&config) {
-                    Ok(d) => chain.push((d, strip_provider_prefix(&fb.model, &fb.provider))),
-                    Err(e) => {
-                        warn!("Fallback driver '{}' failed to init: {e}", fb.provider);
-                    }
-                }
-            }
-            if chain.len() > 1 {
-                return Ok(Arc::new(
-                    opencarrier_runtime::drivers::fallback::FallbackDriver::with_models(chain),
-                ));
+            if let Some(driver) = brain.driver_for_modality(modality) {
+                return Ok(driver);
             }
         }
-
-        Ok(primary)
+        Ok(Arc::clone(&self.fallback_driver))
     }
 
     /// Connect to all configured MCP servers and cache their tool definitions.
@@ -5645,15 +5511,18 @@ impl KernelHandle for OpenCarrierKernel {
         self.registry
             .list()
             .into_iter()
-            .map(|e| kernel_handle::AgentInfo {
-                id: e.id.to_string(),
-                name: e.name.clone(),
-                state: format!("{:?}", e.state),
-                model_provider: e.manifest.model.provider.clone(),
-                model_name: e.manifest.model.model.clone(),
-                description: e.manifest.description.clone(),
-                tags: e.tags.clone(),
-                tools: e.manifest.capabilities.tools.clone(),
+            .map(|e| {
+                let (modality, model) = self.resolve_model_label(&e.manifest.model.modality);
+                kernel_handle::AgentInfo {
+                    id: e.id.to_string(),
+                    name: e.name.clone(),
+                    state: format!("{:?}", e.state),
+                    modality,
+                    model,
+                    description: e.manifest.description.clone(),
+                    tags: e.tags.clone(),
+                    tools: e.manifest.capabilities.tools.clone(),
+                }
             })
             .collect()
     }
@@ -5696,15 +5565,18 @@ impl KernelHandle for OpenCarrierKernel {
                 let desc_match = e.manifest.description.to_lowercase().contains(&q);
                 name_match || tag_match || tool_match || desc_match
             })
-            .map(|e| kernel_handle::AgentInfo {
-                id: e.id.to_string(),
-                name: e.name.clone(),
-                state: format!("{:?}", e.state),
-                model_provider: e.manifest.model.provider.clone(),
-                model_name: e.manifest.model.model.clone(),
-                description: e.manifest.description.clone(),
-                tags: e.tags.clone(),
-                tools: e.manifest.capabilities.tools.clone(),
+            .map(|e| {
+                let (modality, model) = self.resolve_model_label(&e.manifest.model.modality);
+                kernel_handle::AgentInfo {
+                    id: e.id.to_string(),
+                    name: e.name.clone(),
+                    state: format!("{:?}", e.state),
+                    modality,
+                    model,
+                    description: e.manifest.description.clone(),
+                    tags: e.tags.clone(),
+                    tools: e.manifest.capabilities.tools.clone(),
+                }
             })
             .collect()
     }
@@ -6291,7 +6163,6 @@ mod tests {
             module: "test".to_string(),
             schedule: ScheduleMode::default(),
             model: ModelConfig::default(),
-            fallback_models: vec![],
             resources: ResourceQuota::default(),
             priority: Priority::default(),
             capabilities: ManifestCapabilities::default(),
@@ -6301,14 +6172,14 @@ mod tests {
             mcp_servers: vec![],
             metadata: HashMap::new(),
             tags: vec![],
-            routing: None,
             autonomous: None,
-            pinned_model: None,
             workspace: None,
             generate_identity_files: true,
             exec_policy: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
+            clone_source: None,
+            knowledge_files: vec![],
         };
         manifest.capabilities.tools = vec!["file_read".to_string(), "web_fetch".to_string()];
         manifest.capabilities.agent_spawn = true;
@@ -6328,7 +6199,6 @@ mod tests {
             module: "builtin:chat".to_string(),
             schedule: ScheduleMode::default(),
             model: ModelConfig::default(),
-            fallback_models: vec![],
             resources: ResourceQuota::default(),
             priority: Priority::default(),
             capabilities: ManifestCapabilities::default(),
@@ -6338,14 +6208,14 @@ mod tests {
             mcp_servers: vec![],
             metadata: HashMap::new(),
             tags,
-            routing: None,
             autonomous: None,
-            pinned_model: None,
             workspace: None,
             generate_identity_files: true,
             exec_policy: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
+            clone_source: None,
+            knowledge_files: vec![],
         }
     }
 

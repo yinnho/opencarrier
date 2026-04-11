@@ -224,7 +224,7 @@ async fn test_status_endpoint() {
     assert_eq!(body["status"], "running");
     assert_eq!(body["agent_count"], 1); // default assistant auto-spawned
     assert!(body["uptime_seconds"].is_number());
-    assert_eq!(body["default_provider"], "ollama");
+    assert_eq!(body["default_modality"], "chat");
     assert_eq!(body["agents"].as_array().unwrap().len(), 1);
 }
 
@@ -258,7 +258,7 @@ async fn test_spawn_list_kill_agent() {
     assert_eq!(agents.len(), 2);
     let test_agent = agents.iter().find(|a| a["name"] == "test-agent").unwrap();
     assert_eq!(test_agent["id"], agent_id);
-    assert_eq!(test_agent["model_provider"], "ollama");
+    assert_eq!(test_agent["modality"], "chat");
 
     // --- Kill ---
     let resp = client

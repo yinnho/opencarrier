@@ -247,7 +247,7 @@ impl App {
                 self.dashboard.agent_count = agent_count;
                 self.dashboard.uptime_secs = uptime_secs;
                 self.dashboard.version = version;
-                self.dashboard.provider = provider;
+                self.dashboard.modality = provider;
                 self.dashboard.model = model;
                 self.dashboard.loading = false;
             }
@@ -1628,8 +1628,8 @@ impl App {
                 // Find template and generate TOML manifest
                 if let Some(t) = self.templates.templates.iter().find(|t| t.name == name) {
                     let toml_content = format!(
-                        "name = \"{}\"\ndescription = \"{}\"\n\n[model]\nprovider = \"{}\"\nmodel = \"{}\"\n\n[capabilities]\ntools = [\"shell\", \"file_read\", \"file_write\", \"web_fetch\", \"web_search\"]\n",
-                        t.name, t.description, t.provider, t.model,
+                        "name = \"{}\"\ndescription = \"{}\"\n\n[model]\nmodality = \"chat\"\n\n[capabilities]\ntools = [\"shell\", \"file_read\", \"file_write\", \"web_fetch\", \"web_search\"]\n",
+                        t.name, t.description,
                     );
                     self.spawn_agent(toml_content);
                 }
@@ -1739,9 +1739,9 @@ impl App {
             let client = crate::daemon_client();
             if let Ok(resp) = client.get(format!("{base_url}/api/agents/{id}")).send() {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let provider = body["model_provider"].as_str().unwrap_or("?");
+                    let modality = body["modality"].as_str().unwrap_or("?");
                     let model = body["model_name"].as_str().unwrap_or("?");
-                    self.chat.model_label = format!("{provider}/{model}");
+                    self.chat.model_label = format!("{modality}/{model}");
                 }
             }
         }
@@ -1765,10 +1765,7 @@ impl App {
 
         if let Backend::InProcess { ref kernel } = self.backend {
             if let Some(entry) = kernel.registry.get(id) {
-                self.chat.model_label = format!(
-                    "{}/{}",
-                    entry.manifest.model.provider, entry.manifest.model.model
-                );
+                self.chat.model_label = entry.manifest.model.modality.clone();
             }
         }
 
@@ -1928,9 +1925,9 @@ impl App {
                                 .send()
                             {
                                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                                    let provider = body["model_provider"].as_str().unwrap_or("?");
+                                    let modality = body["modality"].as_str().unwrap_or("?");
                                     let model = body["model_name"].as_str().unwrap_or("?");
-                                    self.chat.model_label = format!("{provider}/{model}");
+                                    self.chat.model_label = format!("{modality}/{model}");
                                 }
                             }
                             self.chat.push_message(
@@ -1949,31 +1946,10 @@ impl App {
             }
             (Backend::InProcess { kernel }, Some(target)) => {
                 if let Some(id) = target.agent_id_inprocess {
-                    let provider = kernel
-                        .model_catalog
-                        .read()
-                        .unwrap()
-                        .find_model(model_id)
-                        .map(|e| e.provider.clone());
-                    let result = if let Some(ref prov) = provider {
-                        kernel.registry.update_model_and_provider(
-                            id,
-                            model_id.to_string(),
-                            prov.clone(),
-                        )
-                    } else {
-                        kernel.registry.update_model(id, model_id.to_string())
-                    };
+                    let result = kernel.registry.update_modality(id, model_id.to_string());
                     match result {
                         Ok(()) => {
-                            let prov_label = provider.unwrap_or_else(|| {
-                                kernel
-                                    .registry
-                                    .get(id)
-                                    .map(|e| e.manifest.model.provider.clone())
-                                    .unwrap_or_else(|| "?".to_string())
-                            });
-                            self.chat.model_label = format!("{prov_label}/{model_id}");
+                            self.chat.model_label = model_id.to_string();
                             self.chat.push_message(
                                 chat::Role::System,
                                 format!("Switched to {model_id}"),
@@ -2058,8 +2034,8 @@ impl App {
                     Backend::InProcess { kernel } => {
                         for e in kernel.registry.list() {
                             lines.push(format!(
-                                "{} [{:?}] {}/{}",
-                                e.name, e.state, e.manifest.model.provider, e.manifest.model.model,
+                                "{} [{:?}] modality={}",
+                                e.name, e.state, e.manifest.model.modality,
                             ));
                         }
                     }

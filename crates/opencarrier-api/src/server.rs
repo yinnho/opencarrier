@@ -135,6 +135,7 @@ pub async fn build_router(
             axum::routing::get(routes::health_detail),
         )
         .route("/api/status", axum::routing::get(routes::status))
+        .route("/api/brain", axum::routing::get(routes::brain_info))
         .route("/api/version", axum::routing::get(routes::version))
         .route(
             "/api/agents",
@@ -273,6 +274,24 @@ pub async fn build_router(
         .route(
             "/api/templates/{name}",
             axum::routing::get(routes::get_template),
+        )
+        // Clone (.agx) endpoints
+        .route("/api/clones", axum::routing::get(routes::list_clones))
+        .route(
+            "/api/clones/install",
+            axum::routing::post(routes::install_clone),
+        )
+        .route(
+            "/api/clones/{name}/start",
+            axum::routing::post(routes::start_clone),
+        )
+        .route(
+            "/api/clones/{name}/stop",
+            axum::routing::post(routes::stop_clone),
+        )
+        .route(
+            "/api/clones/{name}",
+            axum::routing::delete(routes::uninstall_clone),
         )
         // Memory endpoints
         .route(
