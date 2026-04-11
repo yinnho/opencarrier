@@ -456,6 +456,103 @@ fn append_daily_memory_log(workspace: &Path, response: &str) {
     }
 }
 
+impl OpenCarrierKernel {
+    /// Run post-conversation evolution for clone agents (background, non-blocking).
+    ///
+    /// Checks if evolution is enabled, the agent is a clone (empty system_prompt),
+    /// and the conversation is non-trivial. If so, spawns a background task that:
+    /// 1. Calls `should_skip()` for local filtering
+    /// 2. Sends the conversation to LLM for analysis
+    /// 3. Parses the response and writes knowledge files
+    pub fn maybe_run_evolution(
+        &self,
+        manifest: &opencarrier_types::agent::AgentManifest,
+        user_msg: &str,
+        response: &str,
+    ) {
+        // Check config + clone mode
+        if !self.config.clone_lifecycle.evolution_enabled {
+            return;
+        }
+        let Some(ref workspace) = manifest.workspace else {
+            return;
+        };
+        // Clone mode: empty system_prompt signals dynamic assembly
+        if !manifest.model.system_prompt.is_empty() {
+            return;
+        }
+        // Local pre-filter
+        if opencarrier_lifecycle::evolution::should_skip(user_msg, response) {
+            return;
+        }
+
+        let workspace = workspace.clone();
+        let user_msg = user_msg.to_string();
+        let response = response.to_string();
+        let driver = match self.resolve_driver(manifest) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let memory_md = read_identity_file(&workspace, "MEMORY.md");
+
+        tokio::spawn(async move {
+            let prompt = opencarrier_lifecycle::evolution::build_analysis_prompt();
+            let memory_index = memory_md.unwrap_or_default();
+            let mem_preview = if memory_index.len() > 2000 {
+                format!("{}...(省略)", &memory_index[..2000])
+            } else {
+                memory_index
+            };
+            let resp_preview = if response.len() > 4000 {
+                format!("{}...(截断)", &response[..4000])
+            } else {
+                response.clone()
+            };
+            let user_prompt = format!(
+                "已知知识索引：\n{}\n\n---\n\n对话：\n用户: {}\n\n助手: {}",
+                mem_preview, user_msg, resp_preview
+            );
+
+            let request = opencarrier_runtime::llm_driver::CompletionRequest {
+                model: String::new(), // driver uses its default
+                messages: vec![opencarrier_types::message::Message {
+                    role: opencarrier_types::message::Role::User,
+                    content: opencarrier_types::message::MessageContent::Text(user_prompt),
+                }],
+                tools: vec![],
+                max_tokens: 2048,
+                temperature: 0.3,
+                system: Some(prompt),
+                thinking: None,
+            };
+
+            match driver.complete(request).await {
+                Ok(completion) => {
+                    let text = completion.text();
+                    match opencarrier_lifecycle::evolution::parse_analysis_response(&text) {
+                        Ok(analysis) => {
+                            let saved =
+                                opencarrier_lifecycle::evolution::apply_evolution(&workspace, &analysis);
+                            if !saved.is_empty() {
+                                tracing::info!(
+                                    count = saved.len(),
+                                    "Evolution: new knowledge extracted"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Evolution: failed to parse analysis")
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Evolution: LLM call failed");
+                }
+            }
+        });
+    }
+}
+
 /// Read a workspace identity file with a size cap to prevent prompt stuffing.
 /// Returns None if the file doesn't exist or is empty.
 fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
@@ -2023,6 +2120,9 @@ impl OpenCarrierKernel {
 
             match result {
                 Ok(result) => {
+                    // Evolution hook — post-conversation auto-learning for clones
+                    kernel_clone.maybe_run_evolution(&manifest, &message_owned, &result.response);
+
                     // Append new messages to canonical session for cross-channel memory
                     if session.messages.len() > messages_before {
                         let new_messages = session.messages[messages_before..].to_vec();
@@ -2535,6 +2635,9 @@ impl OpenCarrierKernel {
         )
         .await
         .map_err(KernelError::OpenCarrier)?;
+
+        // Evolution hook — post-conversation auto-learning for clones
+        self.maybe_run_evolution(&manifest, message, &result.response);
 
         // Append new messages to canonical session for cross-channel memory
         if session.messages.len() > messages_before {

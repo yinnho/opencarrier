@@ -12,6 +12,7 @@ members = [
     "crates/opencarrier-hands",
     "crates/opencarrier-extensions",
     "crates/opencarrier-clone",
+    "crates/opencarrier-lifecycle",
     "crates/ying-relay",
     "xtask",
 ]
@@ -160,6 +161,7 @@ opencarrier-skills = { path = "crates/opencarrier-skills" }
 opencarrier-hands = { path = "crates/opencarrier-hands" }
 opencarrier-extensions = { path = "crates/opencarrier-extensions" }
 opencarrier-clone = { path = "crates/opencarrier-clone" }
+opencarrier-lifecycle = { path = "crates/opencarrier-lifecycle" }
 ying-relay = { path = "crates/ying-relay" }
 
 [profile.release]

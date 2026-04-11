@@ -2539,6 +2539,7 @@ dependencies = [
  "opencarrier-channels",
  "opencarrier-extensions",
  "opencarrier-hands",
+ "opencarrier-lifecycle",
  "opencarrier-memory",
  "opencarrier-runtime",
  "opencarrier-skills",
@@ -2557,6 +2558,19 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "opencarrier-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "opencarrier-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

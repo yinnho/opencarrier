@@ -176,6 +176,10 @@ pub async fn execute_tool(
         "file_read" => tool_file_read(input, workspace_root).await,
         "file_write" => tool_file_write(input, workspace_root).await,
         "file_list" => tool_file_list(input, workspace_root).await,
+
+        // Knowledge tools (clone-specific, safe access to data/knowledge/)
+        "knowledge_list" => tool_knowledge_list(workspace_root).await,
+        "knowledge_read" => tool_knowledge_read(input, workspace_root).await,
         "apply_patch" => tool_apply_patch(input, workspace_root).await,
 
         // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
@@ -561,6 +565,26 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "path": { "type": "string", "description": "The directory path to list" }
                 },
                 "required": ["path"]
+            }),
+        },
+        // --- Knowledge tools (safe access to data/knowledge/) ---
+        ToolDefinition {
+            name: "knowledge_list".to_string(),
+            description: "List available knowledge files in the agent's knowledge base. Returns filenames with descriptions.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolDefinition {
+            name: "knowledge_read".to_string(),
+            description: "Read a specific knowledge file from the agent's knowledge base. Only files in data/knowledge/ are accessible.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "filename": { "type": "string", "description": "The knowledge file name (e.g., 'refund-policy.md')" }
+                },
+                "required": ["filename"]
             }),
         },
         ToolDefinition {
@@ -1333,6 +1357,98 @@ async fn tool_file_list(
     }
     files.sort();
     Ok(files.join("\n"))
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge tools (safe access to data/knowledge/)
+// ---------------------------------------------------------------------------
+
+async fn tool_knowledge_list(
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_list requires a workspace root")?;
+    let knowledge_dir = root.join("data/knowledge");
+
+    if !knowledge_dir.exists() {
+        return Ok("No knowledge files found (data/knowledge/ does not exist).".to_string());
+    }
+
+    let mut entries = tokio::fs::read_dir(&knowledge_dir)
+        .await
+        .map_err(|e| format!("Failed to read knowledge directory: {e}"))?;
+
+    let mut files = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("Failed to read entry: {e}"))?
+    {
+        let path = entry.path();
+        if path.extension().map(|e| e == "md").unwrap_or(false) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Try to extract title from frontmatter
+            let title = tokio::fs::read_to_string(&path)
+                .await
+                .ok()
+                .and_then(|content| extract_knowledge_title(&content));
+            match title {
+                Some(t) => files.push(format!("- {} ({})", t, name)),
+                None => files.push(format!("- {}", name)),
+            }
+        }
+    }
+
+    files.sort();
+    if files.is_empty() {
+        Ok("No knowledge files found.".to_string())
+    } else {
+        Ok(format!("Knowledge files ({}):\n{}", files.len(), files.join("\n")))
+    }
+}
+
+async fn tool_knowledge_read(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let filename = input["filename"]
+        .as_str()
+        .ok_or("Missing 'filename' parameter")?;
+    let root = workspace_root.ok_or("knowledge_read requires a workspace root")?;
+
+    // Security: validate filename (no path traversal)
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid filename: path separators and '..' are forbidden".to_string());
+    }
+    if !filename.ends_with(".md") {
+        return Err("Only .md knowledge files can be read".to_string());
+    }
+
+    let path = root.join("data/knowledge").join(filename);
+
+    if !path.exists() {
+        return Err(format!("Knowledge file not found: {}", filename));
+    }
+
+    tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("Failed to read knowledge file: {e}"))
+}
+
+/// Extract `name` from YAML frontmatter of a knowledge file.
+fn extract_knowledge_title(content: &str) -> Option<String> {
+    let content = content.strip_prefix("---")?;
+    let end = content.find("---")?;
+    let frontmatter = &content[..end];
+
+    for line in frontmatter.lines() {
+        if let Some(value) = line.strip_prefix("name:") {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
