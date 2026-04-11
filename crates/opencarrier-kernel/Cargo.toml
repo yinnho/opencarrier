@@ -14,6 +14,7 @@ opencarrier-channels = { path = "../opencarrier-channels" }
 # Stub crates (to be removed)
 opencarrier-hands = { path = "../opencarrier-hands" }
 opencarrier-extensions = { path = "../opencarrier-extensions" }
+opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

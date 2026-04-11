@@ -1102,6 +1102,27 @@ pub struct KernelConfig {
     /// Defaults to `~/.opencarrier/workflows`. Set to empty string to disable.
     #[serde(default)]
     pub workflows_dir: Option<PathBuf>,
+    /// Clone lifecycle configuration (evolution, version tracking).
+    #[serde(default)]
+    pub clone_lifecycle: CloneLifecycleConfig,
+}
+
+/// Clone lifecycle configuration — controls post-conversation learning and knowledge evolution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloneLifecycleConfig {
+    /// Enable post-conversation knowledge evolution for clones.
+    /// When true, conversations with clone agents are automatically analyzed
+    /// to extract new knowledge files.
+    pub evolution_enabled: bool,
+}
+
+impl Default for CloneLifecycleConfig {
+    fn default() -> Self {
+        Self {
+            evolution_enabled: true,
+        }
+    }
 }
 
 /// Dashboard authentication (username/password login).
@@ -1312,6 +1333,7 @@ impl Default for KernelConfig {
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
             workflows_dir: None,
+            clone_lifecycle: CloneLifecycleConfig::default(),
         }
     }
 }
