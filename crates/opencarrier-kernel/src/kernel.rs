@@ -481,6 +481,14 @@ impl OpenCarrierKernel {
         if !manifest.model.system_prompt.is_empty() {
             return;
         }
+        // Check per-clone evolution config (EVOLUTION.md)
+        let evo_config = opencarrier_lifecycle::evolution_config::read_evolution_config(workspace);
+        let knowledge_count = std::fs::read_dir(workspace.join("data/knowledge"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        if !opencarrier_lifecycle::evolution_config::should_evolve(&evo_config, knowledge_count) {
+            return;
+        }
         // Local pre-filter
         if opencarrier_lifecycle::evolution::should_skip(user_msg, response) {
             return;
@@ -633,6 +641,119 @@ fn read_skills_catalog(workspace: &Path) -> Option<String> {
         .join("\n");
 
     Some(catalog)
+}
+
+/// Read all style samples from workspace/style/ directory.
+/// Returns a concatenated summary of style files.
+fn read_style_samples(workspace: &Path) -> Option<String> {
+    let style_dir = workspace.join("style");
+    if !style_dir.is_dir() {
+        return None;
+    }
+
+    let dir_iter = match std::fs::read_dir(&style_dir) {
+        Ok(iter) => iter,
+        Err(_) => return None,
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    for entry in dir_iter.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "md") {
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                // Enforce 32KB cap per style file (same as identity files)
+                let capped = if trimmed.len() > 32_768 { &trimmed[..32_768] } else { trimmed };
+                let name = path.file_stem().unwrap_or_default().to_str().unwrap_or("unknown");
+                parts.push(format!("### {}\n{}", name, capped));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+/// Read full skill prompts from workspace/skills/ directory.
+/// Returns formatted skill body + allowed_tools for each skill.
+fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
+    let skills_dir = workspace.join("skills");
+    if !skills_dir.is_dir() {
+        return None;
+    }
+
+    let dir_iter = match std::fs::read_dir(&skills_dir) {
+        Ok(iter) => iter,
+        Err(_) => return None,
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    for entry in dir_iter.flatten() {
+        let path = entry.path();
+
+        // Directory format: skills/<name>/SKILL.md
+        let skill_path = if path.is_dir() {
+            path.join("SKILL.md")
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            path.clone()
+        } else {
+            continue;
+        };
+
+        if !skill_path.exists() {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&skill_path).unwrap_or_default();
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Parse frontmatter
+        let (name, allowed_tools, body) = parse_skill_full(&trimmed);
+        let mut section = format!("### {}\n", name);
+        if !allowed_tools.is_empty() {
+            section.push_str(&format!("可用工具: {}\n", allowed_tools));
+        }
+        section.push_str(body);
+        parts.push(section);
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+/// Parse a skill .md file to extract name, allowed_tools, and body.
+fn parse_skill_full(content: &str) -> (String, String, &str) {
+    let mut name = String::new();
+    let mut allowed_tools = String::new();
+
+    if let Some(rest) = content.strip_prefix("---") {
+        if let Some(end) = rest.find("---") {
+            let frontmatter = &rest[..end];
+            for line in frontmatter.lines() {
+                let line = line.trim();
+                if let Some(val) = line.strip_prefix("name:") {
+                    name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                } else if let Some(val) = line.strip_prefix("allowed_tools:") {
+                    allowed_tools = val.trim().to_string();
+                }
+            }
+            let body = rest[end + 3..].trim();
+            return (name, allowed_tools, body);
+        }
+    }
+
+    // No frontmatter
+    (String::new(), String::new(), content)
 }
 
 /// Parse YAML frontmatter from a skill .md file to extract name and when_to_use.
@@ -1991,6 +2112,14 @@ impl OpenCarrierKernel {
                     .workspace
                     .as_ref()
                     .and_then(|w| read_skills_catalog(w)),
+                clone_style_md: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_style_samples(w)),
+                clone_skills_prompts: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_workspace_skills_prompts(w)),
             };
             manifest.model.system_prompt =
                 opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -2553,6 +2682,14 @@ impl OpenCarrierKernel {
                     .workspace
                     .as_ref()
                     .and_then(|w| read_skills_catalog(w)),
+                clone_style_md: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_style_samples(w)),
+                clone_skills_prompts: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_workspace_skills_prompts(w)),
             };
             manifest.model.system_prompt =
                 opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);

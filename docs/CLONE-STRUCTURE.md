@@ -345,13 +345,13 @@ clone.agx (tar.gz)
 | system_prompt.md | ✅ 动态组装 | prompt_builder.rs 读取，4000字上限 |
 | MEMORY.md | ✅ 动态组装 | prompt_builder.rs 读取，1000字上限 |
 | knowledge/ | ⚠️ 工具访问 | knowledge_list + knowledge_read 工具，不预加载 |
-| skills/ | ⚠️ 只有目录 | read_skills_catalog() 生成目录，缺两步激活 |
-| style/ | ❌ 未实现 | 无 style 提取和注入逻辑 |
+| skills/ | ✅ 目录+完整 prompt | read_skills_catalog() + read_workspace_skills_prompts() |
+| style/ | ✅ 动态组装 | read_style_samples() 读取并注入 prompt_builder |
 | output/ | ✅ 目录存在 | ensure_workspace() 创建 |
 | sessions/ | ✅ JSONL | kernel.rs 写入 |
 | orchestrator.md | ❌ 未实现 | 无编排训练模式 |
 | history/versions.jsonl | ✅ Phase 10 P0 | opencarrier-lifecycle crate |
-| EVOLUTION.md | ❌ 未实现 | 无进化策略配置文件 |
+| EVOLUTION.md | ✅ 进化策略 | evolution_config.rs 解析，kernel hook 检查 |
 | 进化引擎 | ✅ Phase 10 P0 | 对话后自动提取知识 |
 
 ---

@@ -9,4 +9,5 @@
 //! `parse_analysis_response()` and `apply_evolution()`.
 
 pub mod evolution;
+pub mod evolution_config;
 pub mod version;
