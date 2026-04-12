@@ -66,6 +66,12 @@ pub struct PromptContext {
     /// Clone's skill catalog — all skills' name + when_to_use (short summary).
     /// Scanned from workspace/skills/ at prompt build time.
     pub clone_skills_catalog: Option<String>,
+    /// Clone's style samples — extracted speaking patterns from chat history.
+    /// Scanned from workspace/style/ at prompt build time.
+    pub clone_style_md: Option<String>,
+    /// Clone's full skill prompts — workspace skill body + allowed_tools.
+    /// Injected alongside the catalog so the LLM knows HOW to execute each skill.
+    pub clone_skills_prompts: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -110,10 +116,27 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             }
         }
 
+        // skills/ → 技能详细说明（完整 body + allowed_tools）
+        if let Some(ref prompts) = ctx.clone_skills_prompts {
+            if !prompts.trim().is_empty() {
+                sections.push(format!("## 技能详细说明\n{}\n\n严格按照每个技能定义的流程和步骤执行。", prompts));
+            }
+        }
+
         // MEMORY.md → 知识索引
         if let Some(ref mem) = ctx.memory_md {
             if !mem.trim().is_empty() {
                 sections.push(format!("## 知识索引\n{}", cap_str(mem, 1000)));
+            }
+        }
+
+        // style/ → 风格参考（真实对话中的说话风格模式）
+        if let Some(ref style) = ctx.clone_style_md {
+            if !style.trim().is_empty() {
+                sections.push(format!(
+                    "## 风格参考\n以下是从真实对话中提取的说话风格。参考这些风格模式，但以 SOUL.md 中的人格为主。\n\n{}",
+                    cap_str(style, 1500)
+                ));
             }
         }
     }
