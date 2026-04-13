@@ -1,7 +1,7 @@
 # OpenCarrier 开发计划
 
-> **版本**: v2.0
-> **日期**: 2026-04-11
+> **版本**: v3.0
+> **日期**: 2026-04-12
 > **状态**: 进行中
 
 ---
@@ -60,7 +60,7 @@ opencarrier 从 Hub 下载分身：
 
 ## 当前阶段
 
-### Phase 10：分身生命周期系统
+### Phase 10：分身生命周期系统 ✅
 
 让分身能**学习、成长、自我维护**。将 openclone 的核心训练能力变为 opencarrier 的平台级能力。
 
@@ -68,23 +68,37 @@ opencarrier 从 Hub 下载分身：
 
 **P0 — 核心（让分身能学习）**：
 
-- [ ] 新建 `opencarrier-lifecycle` crate
-- [ ] `evolution.rs` — 对话后自动进化（pre-filter + LLM 分析）
-- [ ] `version.rs` — 知识版本管理（JSONL 日志）
-- [ ] `parsers/chat.rs` — 聊天记录解析（多平台自动检测）
-- [ ] 内核集成 — 对话完成后触发进化 hook
+- [x] 新建 `opencarrier-lifecycle` crate
+- [x] `evolution.rs` — 对话后自动进化（pre-filter + LLM 分析）
+- [x] `version.rs` — 知识版本管理（JSONL 日志）
+- [x] `parsers.rs` — 聊天记录/FAQ/文档解析（多平台自动检测 + 分层解析）
+- [x] 内核集成 — 对话完成后触发进化 hook + 知识注入 system prompt
 
 **P1 — 维护（让分身保持健康）**：
 
-- [ ] `health.rs` — 知识 lint + heal
-- [ ] `bloat.rs` + `compile.rs` — 膨胀控制 + 自动编译
-- [ ] `parsers/faq.rs` + `parsers/document.rs` — 更多数据类型
-- [ ] 系统工具注册到 tool_runner
+- [x] `health.rs` — 知识 lint + heal
+- [x] `bloat.rs` + `compile.rs` — 膨胀控制 + 自动编译（content-hash 去重）
+- [x] `version.rs` — 版本回滚 + 验证
+- [x] API 端点 — compile/health/rollback/verify
 
 **P2 — 生态（让分身反哺 Hub）**：
 
-- [ ] `evaluate.rs` — 分身质量评估
-- [ ] `feedback.rs` — 反馈收集 + 匿名化 + 推送 Hub
+- [x] `evaluate.rs` — 分身质量评估（确定性指标 + LLM 测试）
+- [x] `feedback.rs` — 反馈收集 + 匿名化 + 推送 Hub
+
+**Phase 11 — 系统工具注册**：
+
+- [x] 6 个 lifecycle 工具注册到 tool_runner（lint/heal/add/remove/import/evaluate）
+- [x] 分身可通过 tool_call 调用知识管理能力
+
+**Phase 12 — 知识品质增强（借鉴 Graphify）**：
+
+> 详细设计：[CLONE-LIFECYCLE-SYSTEM.md](./CLONE-LIFECYCLE-SYSTEM.md) §8
+
+- [x] P3.1 知识置信度标签 — EXTRACTED/INFERRED/AMBIGUOUS 三级，区分知识来源可信度
+- [x] P3.2 增量编译 Manifest — JSON manifest 记录文件 hash，只编译变化的文件
+- [x] P3.3 知识 Schema 验证 — lint 增加必填字段检查、合法值校验
+- [x] P3.4 Workspace Watch — 监听 knowledge/ 变化，自动触发 health check
 
 ---
 
@@ -96,6 +110,8 @@ opencarrier 从 Hub 下载分身：
 | 平台提供进化/维护能力 | 不是分身 skill，是 OS 级别的基础设施 |
 | 新建 lifecycle crate | 关注点分离，不污染现有 crate |
 | 复用 openclone 的算法 | 进化/编译/膨胀控制/解析器已在 openclone 验证过 |
+| 知识置信度标签 | 借鉴 Graphify，区分 evolution 产出和用户手写知识的可信度 |
+| 增量编译 | 借鉴 Graphify manifest，只处理变化的文件 |
 
 ---
 
@@ -106,9 +122,9 @@ opencarrier 从 Hub 下载分身：
 | Phase 0-7: 基础平台 | 2026-03 ~ 2026-03 | ✅ 完成 |
 | Phase 8: Hub 集成 | 2026-04 | ✅ 完成 |
 | Phase 9: 去多租户 | 2026-04 | ✅ 完成 |
-| Phase 10-P0: 生命周期核心 | — | 📋 设计中 |
-| Phase 10-P1: 知识维护 | — | 📋 待开始 |
-| Phase 10-P2: 生态闭环 | — | 📋 待开始 |
+| Phase 10: 分身生命周期系统 | 2026-04 | ✅ 完成 |
+| Phase 11: 系统工具注册 | 2026-04 | ✅ 完成 |
+| Phase 12: 知识品质增强 | 2026-04 | ✅ 已完成 |
 
 ---
 

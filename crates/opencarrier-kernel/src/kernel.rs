@@ -497,6 +497,11 @@ impl OpenCarrierKernel {
         let workspace = workspace.clone();
         let user_msg = user_msg.to_string();
         let response = response.to_string();
+        let clone_name = manifest.name.clone();
+        let feedback_to_hub = evo_config.feedback_to_hub;
+        let hub_url = self.config.hub.url.clone();
+        let hub_api_key = opencarrier_clone::hub::read_api_key(&self.config.hub.api_key_env)
+            .unwrap_or_default();
         let driver = match self.resolve_driver(manifest) {
             Ok(d) => d,
             Err(_) => return,
@@ -546,6 +551,77 @@ impl OpenCarrierKernel {
                                     count = saved.len(),
                                     "Evolution: new knowledge extracted"
                                 );
+                            }
+
+                            // Feedback pipeline — anonymize and push to Hub
+                            if feedback_to_hub && !analysis.knowledge.is_empty() {
+                                for candidate in &analysis.knowledge {
+                                    let (sys, user) =
+                                        opencarrier_lifecycle::feedback::build_anonymize_prompt(
+                                            &candidate.title,
+                                            &candidate.content,
+                                        );
+                                    let anon_req = opencarrier_runtime::llm_driver::CompletionRequest {
+                                        model: String::new(),
+                                        messages: vec![opencarrier_types::message::Message {
+                                            role: opencarrier_types::message::Role::User,
+                                            content: opencarrier_types::message::MessageContent::Text(user),
+                                        }],
+                                        tools: vec![],
+                                        max_tokens: 1024,
+                                        temperature: 0.1,
+                                        system: Some(sys),
+                                        thinking: None,
+                                    };
+                                    match driver.complete(anon_req).await {
+                                        Ok(anon_resp) => {
+                                            let anon_text = anon_resp.text();
+                                            let (title, content) =
+                                                opencarrier_lifecycle::feedback::parse_anonymize_response(
+                                                    &anon_text,
+                                                )
+                                                .unwrap_or_else(|_| {
+                                                    (candidate.title.clone(), candidate.content.clone())
+                                                });
+                                            if let Err(e) = opencarrier_lifecycle::feedback::save_feedback(
+                                                &workspace,
+                                                &clone_name,
+                                                &title,
+                                                &content,
+                                            ) {
+                                                tracing::warn!(error = %e, "Feedback: failed to save");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(error = %e, "Feedback: anonymize LLM failed");
+                                        }
+                                    }
+                                }
+
+                                // Push collected feedback to Hub
+                                if let Ok(entries) =
+                                    opencarrier_lifecycle::feedback::collect_feedback(&workspace)
+                                {
+                                    if !entries.is_empty() {
+                                        match opencarrier_lifecycle::feedback::push_feedback_to_hub(
+                                            &hub_url,
+                                            &hub_api_key,
+                                            &entries,
+                                        )
+                                        .await
+                                        {
+                                            Ok(results) => {
+                                                tracing::info!(
+                                                    count = results.len(),
+                                                    "Feedback: pushed to Hub"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(error = %e, "Feedback: push failed");
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         Err(e) => {
@@ -641,6 +717,65 @@ fn read_skills_catalog(workspace: &Path) -> Option<String> {
         .join("\n");
 
     Some(catalog)
+}
+
+/// Read all knowledge files from workspace/data/knowledge/ directory.
+///
+/// Returns a concatenated string of all knowledge file contents (compiled truth
+/// section only, not timeline). Capped at ~6KB to avoid context overflow.
+fn read_knowledge_content(workspace: &Path) -> Option<String> {
+    const MAX_KNOWLEDGE_TOTAL_BYTES: usize = 6144; // 6KB cap
+    let knowledge_dir = workspace.join("data/knowledge");
+    if !knowledge_dir.is_dir() {
+        return None;
+    }
+
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut total_bytes = 0;
+
+    if let Ok(dir_iter) = std::fs::read_dir(&knowledge_dir) {
+        let mut files: Vec<_> = dir_iter
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+            .collect();
+        files.sort_by_key(|e| e.file_name());
+
+        for entry in files {
+            let path = entry.path();
+            let name = path.file_stem()?.to_string_lossy().to_string();
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                // Extract compiled truth only (skip timeline for context injection)
+                let compiled = if content.contains("\n---\n") {
+                    // Dual-layer format: take content before the second --- separator
+                    let (truth, _timeline) =
+                        opencarrier_lifecycle::evolution::split_dual_layer(&content);
+                    truth
+                } else {
+                    content.clone()
+                };
+                let trimmed = compiled.trim();
+                if !trimmed.is_empty() {
+                    total_bytes += trimmed.len();
+                    if total_bytes > MAX_KNOWLEDGE_TOTAL_BYTES {
+                        break; // Stop adding files once we hit the cap
+                    }
+                    entries.push((name, trimmed.to_string()));
+                }
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        return None;
+    }
+
+    let result: String = entries
+        .iter()
+        .map(|(name, content)| format!("### {name}\n{content}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    Some(result)
 }
 
 /// Read all style samples from workspace/style/ directory.
@@ -2120,6 +2255,10 @@ impl OpenCarrierKernel {
                     .workspace
                     .as_ref()
                     .and_then(|w| read_workspace_skills_prompts(w)),
+                knowledge_content: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_knowledge_content(w)),
             };
             manifest.model.system_prompt =
                 opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -2690,6 +2829,10 @@ impl OpenCarrierKernel {
                     .workspace
                     .as_ref()
                     .and_then(|w| read_workspace_skills_prompts(w)),
+                knowledge_content: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_knowledge_content(w)),
             };
             manifest.model.system_prompt =
                 opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -4753,7 +4896,7 @@ impl OpenCarrierKernel {
         }
     }
 
-    fn resolve_driver(&self, manifest: &AgentManifest) -> KernelResult<Arc<dyn LlmDriver>> {
+    pub fn resolve_driver(&self, manifest: &AgentManifest) -> KernelResult<Arc<dyn LlmDriver>> {
         if let Some(ref brain) = self.brain {
             let modality = if manifest.model.modality.is_empty() {
                 "chat"

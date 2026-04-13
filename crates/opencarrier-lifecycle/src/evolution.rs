@@ -140,15 +140,13 @@ pub fn apply_evolution(workspace: &Path, analysis: &EvolutionAnalysis) -> Vec<Pa
 
     // Write new knowledge files
     for candidate in &analysis.knowledge {
-        if !knowledge_exists(workspace, &candidate.title) {
-            match write_knowledge(workspace, candidate) {
-                Ok(path) => {
-                    info!(file = ?path, "Evolution: new knowledge");
-                    saved.push(path);
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Evolution: failed to write knowledge");
-                }
+        match write_knowledge(workspace, candidate) {
+            Ok(path) => {
+                info!(file = ?path, "Evolution: knowledge updated");
+                saved.push(path);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Evolution: failed to write knowledge");
             }
         }
     }
@@ -177,28 +175,23 @@ pub fn apply_evolution(workspace: &Path, analysis: &EvolutionAnalysis) -> Vec<Pa
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Check if a knowledge file already exists (by title → filename).
-fn knowledge_exists(workspace: &Path, title: &str) -> bool {
-    let knowledge_dir = workspace.join("data/knowledge");
-    if !knowledge_dir.exists() {
-        return false;
-    }
-
-    let safe_title = sanitize_filename(&title.to_lowercase());
-
-    if let Ok(entries) = fs::read_dir(&knowledge_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let name_no_ext = name.trim_end_matches(".md");
-            if name_no_ext == safe_title {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 /// Write a knowledge candidate as a markdown file in data/knowledge/.
+///
+/// Uses dual-layer format:
+/// ```md
+/// ---
+/// name: ...
+/// ---
+///
+/// [compiled truth — current knowledge, rewritable by compile]
+///
+/// ---
+///
+/// - 2026-04-12: learned from conversation
+/// ```
+///
+/// Evolution appends to the timeline (below the second `---`).
+/// Compile rewrites the compiled truth (above the second `---`).
 fn write_knowledge(workspace: &Path, candidate: &KnowledgeCandidate) -> Result<PathBuf> {
     let knowledge_dir = workspace.join("data/knowledge");
     fs::create_dir_all(&knowledge_dir)?;
@@ -213,37 +206,60 @@ fn write_knowledge(workspace: &Path, candidate: &KnowledgeCandidate) -> Result<P
         format!("{}.md", safe_title)
     };
     let path = knowledge_dir.join(&filename);
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-    // Record version: check if file already exists
-    let before = if path.exists() {
-        Some(fs::read_to_string(&path).unwrap_or_default())
+    let content = if path.exists() {
+        // Existing file — append to timeline section
+        let before = fs::read_to_string(&path).unwrap_or_default();
+        let (compiled_truth, mut timeline) = split_dual_layer(&before);
+
+        // Add new entry to timeline
+        timeline.push_str(&format!("- {}: {} (from conversation)\n", date, candidate.title));
+
+        let updated = format!(
+            "{}\n\n---\n\n{}",
+            compiled_truth.trim_end(),
+            timeline.trim_end()
+        );
+
+        crate::version::record_version(
+            workspace,
+            "update",
+            &filename,
+            Some(&before),
+            Some(&updated),
+            "evolution",
+        )?;
+
+        updated
     } else {
-        None
-    };
-    let action = if before.is_some() { "update" } else { "create" };
+        // New file — create with compiled truth + initial timeline entry
+        let content = format!(
+            "---\nname: {}\nsource: evolution\ntype: knowledge\nconfidence: INFERRED\n---\n\n{}\n\n---\n\n- {}: created from conversation\n",
+            candidate.title,
+            candidate.content,
+            date
+        );
 
-    let content = format!(
-        "---\nname: {}\nsource: evolution\ntype: knowledge\n---\n\n{}",
-        candidate.title, candidate.content
-    );
+        crate::version::record_version(
+            workspace,
+            "create",
+            &filename,
+            None,
+            Some(&content),
+            "evolution",
+        )?;
+
+        content
+    };
 
     fs::write(&path, &content)?;
-
-    // Record version
-    crate::version::record_version(
-        workspace,
-        action,
-        &filename,
-        before.as_deref(),
-        Some(&content),
-        "evolution",
-    )?;
 
     Ok(path)
 }
 
 /// Rebuild MEMORY.md by scanning data/knowledge/ directory.
-fn update_memory_index(workspace: &Path) -> Result<()> {
+pub fn update_memory_index(workspace: &Path) -> Result<()> {
     let index_path = workspace.join("MEMORY.md");
 
     let mut lines = vec![
@@ -274,13 +290,20 @@ fn update_memory_index(workspace: &Path) -> Result<()> {
                 .unwrap_or_default();
 
             // Try to extract title from frontmatter
-            let title = if let Ok(content) = fs::read_to_string(&path) {
-                extract_frontmatter_name(&content).unwrap_or_else(|| name.clone())
+            let (title, confidence) = if let Ok(file_content) = fs::read_to_string(&path) {
+                let title = extract_frontmatter_name(&file_content).unwrap_or_else(|| name.clone());
+                let conf = extract_confidence(&file_content);
+                (title, conf)
             } else {
-                name.clone()
+                (name.clone(), "EXTRACTED".to_string())
             };
 
-            lines.push(format!("- [{}](data/knowledge/{}.md)", title, name));
+            let label = match confidence.as_str() {
+                "INFERRED" => format!("[INFERRED] {}", title),
+                "AMBIGUOUS" => format!("[AMBIGUOUS] {}", title),
+                _ => title, // EXTRACTED or unknown — no tag needed
+            };
+            lines.push(format!("- [{}](data/knowledge/{}.md)", label, name));
         }
     }
 
@@ -319,6 +342,50 @@ fn append_gaps_to_index(workspace: &Path, gaps: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Split a dual-layer knowledge file into (compiled_truth, timeline).
+///
+/// Format (text, not code):
+/// `---frontmatter---` ... `compiled truth` ... `---` ... `timeline entries`
+///
+/// Returns (compiled_truth_with_frontmatter, timeline_text).
+/// If no second `---` separator found, the whole body is compiled truth
+/// with an empty timeline (legacy format compat).
+pub fn split_dual_layer(content: &str) -> (String, String) {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Find frontmatter end (first standalone ---)
+    let fm_end = if lines.first().map(|l| l.trim()) == Some("---") {
+        lines.iter().position(|l| l.trim() == "---").and_then(|start| {
+            lines[start + 1..].iter().position(|l| l.trim() == "---").map(|end| start + 1 + end)
+        })
+    } else {
+        None
+    };
+
+    // Search for dual-layer separator after frontmatter
+    // It's a standalone --- line preceded by an empty line
+    let search_start = fm_end.map(|i| i + 1).unwrap_or(0);
+    let mut separator_line = None;
+    for i in (search_start + 1)..lines.len() {
+        if lines[i].trim() == "---" && i > 0 && lines[i - 1].trim().is_empty() {
+            separator_line = Some(i);
+            break;
+        }
+    }
+
+    match separator_line {
+        Some(sep_idx) => {
+            let compiled = lines[..sep_idx].join("\n").trim_end().to_string();
+            let timeline = lines[sep_idx + 1..].join("\n").trim().to_string();
+            (compiled, timeline)
+        }
+        None => {
+            // No dual-layer separator — treat entire content as compiled truth
+            (content.to_string(), String::new())
+        }
+    }
+}
+
 /// Extract `name` from YAML frontmatter (`---\nname: Foo\n---`).
 fn extract_frontmatter_name(content: &str) -> Option<String> {
     let content = content.strip_prefix("---")?;
@@ -334,6 +401,27 @@ fn extract_frontmatter_name(content: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Extract confidence field from frontmatter. Defaults to EXTRACTED if absent.
+fn extract_confidence(content: &str) -> String {
+    let Some(rest) = content.strip_prefix("---") else {
+        return "EXTRACTED".to_string();
+    };
+    let Some(end) = rest.find("---") else {
+        return "EXTRACTED".to_string();
+    };
+    let frontmatter = &rest[..end];
+
+    for line in frontmatter.lines() {
+        if let Some(value) = line.strip_prefix("confidence:") {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return value.to_string();
+            }
+        }
+    }
+    "EXTRACTED".to_string()
 }
 
 /// Extract JSON from text (handles markdown code blocks).
@@ -361,7 +449,7 @@ fn extract_json(text: &str) -> String {
 }
 
 /// Sanitize a string for use as a filename.
-fn sanitize_filename(input: &str) -> String {
+pub fn sanitize_filename(input: &str) -> String {
     input
         .chars()
         .map(|c| {
@@ -458,12 +546,16 @@ mod tests {
         let saved = apply_evolution(workspace, &analysis);
         assert_eq!(saved.len(), 1);
 
-        // Knowledge file created
+        // Knowledge file created with dual-layer format
         let path = workspace.join("data/knowledge/refund-policy.md");
         assert!(path.exists());
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("refund-policy"));
         assert!(content.contains("7天内可退款"));
+        assert!(content.contains("created from conversation"));
+        // Verify dual-layer separator present
+        let (compiled, timeline) = split_dual_layer(&content);
+        assert!(compiled.contains("7天内可退款"));
+        assert!(timeline.contains("created from conversation"));
 
         // MEMORY.md updated
         let memory = fs::read_to_string(workspace.join("MEMORY.md")).unwrap();
@@ -477,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_evolution_dedup() {
+    fn test_apply_evolution_appends_to_existing() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path();
         fs::create_dir_all(workspace.join("data/knowledge")).unwrap();
@@ -487,21 +579,34 @@ mod tests {
             content: "original".to_string(),
         };
 
-        // First write
+        // First write — creates file
         write_knowledge(workspace, &candidate).unwrap();
-        assert!(knowledge_exists(workspace, "test-knowledge"));
+        assert!(workspace.join("data/knowledge/test-knowledge.md").exists());
 
-        // Second write should be skipped by apply_evolution (dedup)
+        // Second write — appends instead of skipping
         let analysis = EvolutionAnalysis {
             knowledge: vec![KnowledgeCandidate {
                 title: "test-knowledge".to_string(),
-                content: "updated".to_string(),
+                content: "updated info".to_string(),
             }],
             gaps: vec![],
             trivial: false,
         };
         let saved = apply_evolution(workspace, &analysis);
-        assert!(saved.is_empty());
+        assert_eq!(saved.len(), 1, "should append, not skip");
+
+        // File should have dual-layer format: compiled truth preserved + timeline appended
+        let content = fs::read_to_string(workspace.join("data/knowledge/test-knowledge.md")).unwrap();
+        let (compiled, timeline) = split_dual_layer(&content);
+        assert!(compiled.contains("original"), "compiled truth should preserve original");
+        assert!(timeline.contains("created from conversation"));
+        assert!(timeline.contains("from conversation"), "timeline should have appended entry");
+
+        // Two version records: create + update
+        let versions = crate::version::get_all_versions(workspace).unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].action, "create");
+        assert_eq!(versions[1].action, "update");
     }
 
     #[test]
@@ -522,5 +627,23 @@ mod tests {
     fn test_extract_frontmatter_name() {
         let content = "---\nname: Test Knowledge\nsource: evolution\n---\n\nSome content";
         assert_eq!(extract_frontmatter_name(content), Some("Test Knowledge".to_string()));
+    }
+
+    #[test]
+    fn test_split_dual_layer() {
+        let content = "---\nname: test\n---\n\nCompiled truth here.\n\n---\n\n- 2026-04-12: created\n- 2026-04-13: updated";
+        let (compiled, timeline) = split_dual_layer(content);
+        assert!(compiled.contains("Compiled truth here."));
+        assert!(compiled.contains("name: test"));
+        assert!(timeline.contains("created"));
+        assert!(timeline.contains("updated"));
+    }
+
+    #[test]
+    fn test_split_dual_layer_legacy_no_separator() {
+        let content = "---\nname: test\n---\n\nJust compiled truth, no timeline.";
+        let (compiled, timeline) = split_dual_layer(content);
+        assert!(compiled.contains("Just compiled truth"));
+        assert!(timeline.is_empty());
     }
 }

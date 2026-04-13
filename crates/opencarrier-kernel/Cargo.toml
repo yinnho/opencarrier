@@ -15,6 +15,7 @@ opencarrier-channels = { path = "../opencarrier-channels" }
 opencarrier-hands = { path = "../opencarrier-hands" }
 opencarrier-extensions = { path = "../opencarrier-extensions" }
 opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
+opencarrier-clone = { path = "../opencarrier-clone" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

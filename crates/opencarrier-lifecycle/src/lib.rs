@@ -8,6 +8,13 @@
 //! to get the prompt, executes the LLM call itself, then passes the response to
 //! `parse_analysis_response()` and `apply_evolution()`.
 
+pub mod bloat;
+pub mod compile;
 pub mod evolution;
 pub mod evolution_config;
+pub mod evaluate;
+pub mod feedback;
+pub mod health;
+pub mod parsers;
 pub mod version;
+pub mod watcher;

@@ -1,7 +1,7 @@
 {
-  "version": "1",
+  "version": "3",
   "name": "clone-creator",
-  "description": "分身生成器 — 帮助用户设计、创建和安装新的 AI 分身",
+  "description": "分身生成器 — 帮助用户设计、创建和安装新的 AI 分身（含子代理协作）",
   "author": "opencarrier",
   "tags": ["meta", "creator", "generator"],
   "exported_at": "1712736000",
