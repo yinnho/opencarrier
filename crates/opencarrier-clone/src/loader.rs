@@ -47,6 +47,17 @@ pub struct SkillScriptData {
     pub toml_content: String,
 }
 
+/// A parsed sub-agent from the .agx archive.
+#[derive(Debug, Clone)]
+pub struct AgentData {
+    pub name: String,
+    pub description: String,
+    pub tools: Vec<String>,
+    pub model: String,
+    pub color: Option<String>,
+    pub prompt: String,
+}
+
 /// The fully parsed .agx clone data.
 #[derive(Debug, Clone)]
 pub struct CloneData {
@@ -70,6 +81,12 @@ pub struct CloneData {
     pub profile: String,
     /// Security warnings found during loading.
     pub security_warnings: Vec<String>,
+    /// Sub-agents: agents/*.md parsed.
+    pub agents: Vec<AgentData>,
+    /// EVOLUTION.md content.
+    pub evolution: String,
+    /// Style files: filename → content.
+    pub style: HashMap<String, String>,
 }
 
 /// Load a .agx file (tar.gz) and parse it into CloneData.
@@ -132,13 +149,37 @@ pub fn load_agx(path: &Path) -> Result<CloneData> {
     // Parse skills
     let skills = parse_skills(&files);
 
+    // Parse agents/*.md
+    let mut agents = Vec::new();
+    for (name, bytes) in &files {
+        if name.starts_with("agents/") && name.ends_with(".md") {
+            let content = String::from_utf8_lossy(bytes).to_string();
+            if let Some(agent) = parse_agent_file(name, &content) {
+                agents.push(agent);
+            }
+        }
+    }
+
+    // Read EVOLUTION.md
+    let evolution = get_file_text(&files, "EVOLUTION.md");
+
+    // Parse style/*.md
+    let mut style = HashMap::new();
+    for (name, bytes) in &files {
+        if name.starts_with("style/") && name.ends_with(".md") {
+            let content = String::from_utf8_lossy(bytes).to_string();
+            let filename = name.strip_prefix("style/").unwrap_or(name);
+            style.insert(filename.to_string(), content);
+        }
+    }
+
     // Security scan
     let mut security_warnings = Vec::new();
     scan_security(&soul, &system_prompt, &knowledge, &skills, &mut security_warnings);
 
     debug!(
-        "Parsed clone '{}': soul={} bytes, system_prompt={} bytes, knowledge={} files, skills={}, memory_index={} bytes",
-        name, soul.len(), system_prompt.len(), knowledge.len(), skills.len(), memory_index.len()
+        "Parsed clone '{}': soul={} bytes, system_prompt={} bytes, knowledge={} files, skills={}, agents={}, style={}, evolution={} bytes, memory_index={} bytes",
+        name, soul.len(), system_prompt.len(), knowledge.len(), skills.len(), agents.len(), style.len(), evolution.len(), memory_index.len()
     );
 
     Ok(CloneData {
@@ -152,6 +193,9 @@ pub fn load_agx(path: &Path) -> Result<CloneData> {
         skills,
         profile,
         security_warnings,
+        agents,
+        evolution,
+        style,
     })
 }
 
@@ -262,6 +306,41 @@ fn parse_skills(files: &HashMap<String, Vec<u8>>) -> Vec<SkillData> {
     }
 
     skills
+}
+
+/// Parse an agents/*.md file from the archive.
+fn parse_agent_file(path: &str, content: &str) -> Option<AgentData> {
+    let (frontmatter, body) = parse_frontmatter(content);
+    let name = frontmatter.get("name")
+        .cloned()
+        .unwrap_or_else(|| {
+            path.strip_prefix("agents/")
+                .unwrap_or(path)
+                .strip_suffix(".md")
+                .unwrap_or("unknown")
+                .to_string()
+        });
+    let description = frontmatter.get("description")
+        .cloned()
+        .unwrap_or_default();
+    let tools = frontmatter.get("tools")
+        .map(|s| parse_string_array(s))
+        .unwrap_or_default();
+    let model = frontmatter.get("model")
+        .cloned()
+        .unwrap_or_else(|| "sonnet".to_string());
+    let color = frontmatter.get("color")
+        .cloned();
+    let prompt = body.trim().to_string();
+
+    Some(AgentData {
+        name,
+        description,
+        tools,
+        model,
+        color,
+        prompt,
+    })
 }
 
 /// Parse YAML frontmatter from markdown content.

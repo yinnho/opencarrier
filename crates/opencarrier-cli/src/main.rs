@@ -3,7 +3,6 @@
 //! When a daemon is running (`opencarrier start`), the CLI talks to it over HTTP.
 //! Otherwise, commands boot an in-process kernel (single-shot mode).
 
-mod bundled_agents;
 mod dotenv;
 mod launcher;
 mod mcp;
@@ -1369,9 +1368,6 @@ fn cmd_init(quick: bool) {
             });
         }
     }
-
-    // Install bundled agent templates (skips existing ones to preserve user edits)
-    bundled_agents::install_bundled_agents(&opencarrier_dir.join("agents"));
 
     if quick {
         cmd_init_quick(&opencarrier_dir);
