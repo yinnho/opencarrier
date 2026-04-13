@@ -813,6 +813,48 @@ fn read_style_samples(workspace: &Path) -> Option<String> {
     }
 }
 
+/// Read sub-agent definitions from workspace/agents/ directory.
+/// Returns formatted agent name + prompt for each agent.
+fn read_agents_directory(workspace: &Path) -> Option<String> {
+    let agents_dir = workspace.join("agents");
+    if !agents_dir.is_dir() {
+        return None;
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(&agents_dir).ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    let mut parts: Vec<String> = Vec::new();
+    for entry in &entries {
+        let content = std::fs::read_to_string(entry.path()).unwrap_or_default();
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let name = entry.path().file_stem().unwrap_or_default().to_str().unwrap_or("unknown").to_string();
+        // Extract body (skip frontmatter)
+        let body = if trimmed.starts_with("---") {
+            if let Some(end) = trimmed[3..].find("---") {
+                trimmed[3 + end + 3..].trim()
+            } else {
+                trimmed
+            }
+        } else {
+            trimmed
+        };
+        parts.push(format!("### {}\n{}", name, body));
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
 /// Read full skill prompts from workspace/skills/ directory.
 /// Returns formatted skill body + allowed_tools for each skill.
 fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
@@ -2259,6 +2301,10 @@ impl OpenCarrierKernel {
                     .workspace
                     .as_ref()
                     .and_then(|w| read_knowledge_content(w)),
+                clone_agents_md: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_agents_directory(w)),
             };
             manifest.model.system_prompt =
                 opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -2833,6 +2879,10 @@ impl OpenCarrierKernel {
                     .workspace
                     .as_ref()
                     .and_then(|w| read_knowledge_content(w)),
+                clone_agents_md: manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_agents_directory(w)),
             };
             manifest.model.system_prompt =
                 opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);

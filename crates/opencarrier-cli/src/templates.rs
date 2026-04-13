@@ -94,18 +94,6 @@ pub fn load_all_templates() -> Vec<AgentTemplate> {
         }
     }
 
-    // Fallback: load bundled templates for any not found on disk
-    for (name, content) in crate::bundled_agents::bundled_agents() {
-        if seen_names.insert(name.to_string()) {
-            let description = extract_description(content);
-            templates.push(AgentTemplate {
-                name: name.to_string(),
-                description,
-                content: content.to_string(),
-            });
-        }
-    }
-
     templates.sort_by(|a, b| a.name.cmp(&b.name));
     templates
 }

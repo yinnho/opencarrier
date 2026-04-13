@@ -106,6 +106,9 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
 /// - data/knowledge/*.md
 /// - memory/index.md
 /// - skills/<name>/SKILL.md + scripts/*.toml
+/// - agents/*.md
+/// - EVOLUTION.md
+/// - style/*.md
 pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<()> {
     let manifest = convert_to_manifest(data);
 
@@ -116,11 +119,13 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     let data_dir = workspace.join("data");
     let memory_dir = workspace.join("memory");
     let skills_dir = workspace.join("skills");
+    let agents_dir = workspace.join("agents");
+    let style_dir = workspace.join("style");
     let sessions_dir = workspace.join("sessions");
     let logs_dir = workspace.join("logs");
     let output_dir = workspace.join("output");
 
-    for dir in &[&data_dir, &memory_dir, &skills_dir, &sessions_dir, &logs_dir, &output_dir] {
+    for dir in &[&data_dir, &memory_dir, &skills_dir, &agents_dir, &style_dir, &sessions_dir, &logs_dir, &output_dir] {
         std::fs::create_dir_all(dir)?;
     }
 
@@ -165,6 +170,30 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
         }
     }
 
+    // Write agents
+    for agent in &data.agents {
+        let agent_path = agents_dir.join(format!("{}.md", agent.name));
+        let color_line = agent.color.as_ref().map(|c| format!("color: {}", c)).unwrap_or_default();
+        let agent_md = format!(
+            "---\nname: {}\ndescription: {}\ntools: {:?}\nmodel: {}\n{}\n---\n\n{}",
+            agent.name, agent.description, agent.tools, agent.model, color_line, agent.prompt,
+        );
+        std::fs::write(agent_path, agent_md)?;
+        debug!("Wrote agent: {}.md", agent.name);
+    }
+
+    // Write EVOLUTION.md
+    if !data.evolution.is_empty() {
+        std::fs::write(workspace.join("EVOLUTION.md"), &data.evolution)?;
+        debug!("Wrote EVOLUTION.md");
+    }
+
+    // Write style files
+    for (name, content) in &data.style {
+        std::fs::write(style_dir.join(name), content)?;
+        debug!("Wrote style file: {}", name);
+    }
+
     // Write SOUL.md and system_prompt.md to workspace root (for reference)
     if !data.soul.is_empty() {
         std::fs::write(workspace.join("SOUL.md"), &data.soul)?;
@@ -177,11 +206,13 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     }
 
     info!(
-        "Installed clone '{}' to workspace: {} ({} knowledge files, {} skills)",
+        "Installed clone '{}' to workspace: {} ({} knowledge, {} skills, {} agents, {} style)",
         data.name,
         workspace.display(),
         data.knowledge.len(),
         data.skills.len(),
+        data.agents.len(),
+        data.style.len(),
     );
 
     Ok(())

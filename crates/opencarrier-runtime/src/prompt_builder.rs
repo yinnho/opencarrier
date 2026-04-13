@@ -75,6 +75,8 @@ pub struct PromptContext {
     /// Clone's knowledge content — compiled truth from data/knowledge/*.md files.
     /// Unlike memory_md (which is just the index), this contains actual knowledge.
     pub knowledge_content: Option<String>,
+    /// Clone's sub-agents — workspace/agents/*.md parsed at prompt build time.
+    pub clone_agents_md: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -149,6 +151,16 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
                 sections.push(format!(
                     "## 风格参考\n以下是从真实对话中提取的说话风格。参考这些风格模式，但以 SOUL.md 中的人格为主。\n\n{}",
                     cap_str(style, 1500)
+                ));
+            }
+        }
+
+        // agents/ → 子代理目录
+        if let Some(ref agents) = ctx.clone_agents_md {
+            if !agents.trim().is_empty() {
+                sections.push(format!(
+                    "## 子代理\n你可以将任务委派给以下子代理。每个子代理有独立的指令和工具。\n\n{}",
+                    cap_str(agents, 2000)
                 ));
             }
         }
