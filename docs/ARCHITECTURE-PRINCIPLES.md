@@ -16,9 +16,9 @@
 用户自部署 opencarrier → 从 Hub 下载分身 → 分身自主运行、学习、进化
 ```
 
-### 1.2 分身 = 人格 + 指令 + 知识 + 技能
+### 1.2 分身 = 人格 + 指令 + 知识 + 技能 + 子代理
 
-分身不是静态的 agent，而是能学习、成长的数字实体。四个部分同级，共同定义分身是什么：
+分身不是静态的 agent，而是能学习、成长的数字实体。五个部分同级，共同定义分身是什么：
 
 | 组成 | 文件 | 定义 | 包含 | 不包含 |
 |------|------|------|------|--------|
@@ -26,6 +26,7 @@
 | 指令 | system_prompt.md | 你怎么做事 | 能力、规则、工作方式、输出格式 | 人格描述、FAQ 条目、纯参考文档 |
 | 知识 | knowledge/*.md + MEMORY.md | 你知道什么 | 领域知识、FAQ、产品信息、流程指南 | 行为规则、人格描述 |
 | 技能 | skills/*.md | 你会做什么 | when_to_use + allowed_tools + 执行步骤 | 知识事实（放 knowledge/） |
+| 子代理 | agents/*.md | 你派谁做 | 独立执行者：指令 + 工具白名单 + 模型 | 主代理行为规则、知识事实 |
 
 **工具是哑的，Skill 是聪明的。** 两个分身用同样的工具（file_write、web_fetch），但因为 Skill 不同，做的事完全不同。
 
@@ -67,7 +68,7 @@ Hub (hub.yinnho.cn)  ←→  opencarrier (本地)
 │ · 对话后进化           │──自动触发──→  │ 指令（system_prompt）  │
 │ · 知识过期清理         │               │ 知识（knowledge/）     │
 │ · 版本记录            │               │ 技能（skills/）        │
-│                      │               │                      │
+│                      │               │ 子代理（agents/）      │
 │ 系统工具（按需调用）    │               │                      │
 │ · knowledge_import   │←─tool_call──│ 分身的 Skill 决定      │
 │ · knowledge_compile  │               │ 什么时候用、怎么用     │
@@ -92,6 +93,7 @@ Hub (hub.yinnho.cn)  ←→  opencarrier (本地)
 ├── MEMORY.md            ← 知识索引（始终加载）
 ├── data/knowledge/      ← 知识库（按需加载）
 ├── skills/              ← 技能（按需激活）
+├── agents/              ← 子代理（可派出去干活的专门角色）
 ├── agent.toml           ← 运行参数（模型、资源、能力）— 不是身份
 ├── profile.md           ← 分身档案（名称、描述、来源）
 ├── history/             ← 知识版本历史
@@ -112,7 +114,9 @@ SOUL.md（人格 — 最高优先级）
   → 引导语："体现以上人格和语气"
   → system_prompt.md（行为指令）
   → Skill 目录（所有 skill 的 name + when_to_use，始终注入）
+  → Agent 目录（所有 agent 的 name + description + tools，始终注入）
   → Skill 完整 prompt（被激活的 skill 的 body + allowed_tools，按需注入）
+  → Agent 完整 prompt（被派出的子代理的 AGENT.md，按需注入）
   → MEMORY.md（知识索引）
   → 相关知识（LLM 按需选择的 knowledge/ 文件）
 ```

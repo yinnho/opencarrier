@@ -540,8 +540,15 @@ enum AgentCommands {
     },
     /// Interactive chat with an agent.
     Chat {
-        /// Agent ID (UUID).
+        /// Agent ID (UUID) or name.
         agent_id: String,
+        /// Send a single message non-interactively, print the response, and exit.
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Read file content and prepend to message. Use "-" for stdin.
+        /// Can be specified multiple times.
+        #[arg(short, long)]
+        file: Vec<String>,
     },
     /// Kill an agent.
     Kill {
@@ -959,7 +966,14 @@ fn main() {
             AgentCommands::New { template } => cmd_agent_new(cli.config, template),
             AgentCommands::Spawn { manifest } => cmd_agent_spawn(cli.config, manifest),
             AgentCommands::List { json } => cmd_agent_list(cli.config, json),
-            AgentCommands::Chat { agent_id } => cmd_agent_chat(cli.config, &agent_id),
+            AgentCommands::Chat { agent_id, message, file } => {
+                if message.is_some() || !file.is_empty() {
+                    let msg = message.unwrap_or_default();
+                    cmd_agent_chat_once(cli.config, &agent_id, &msg, &file)
+                } else {
+                    cmd_agent_chat(cli.config, &agent_id)
+                }
+            }
             AgentCommands::Kill { agent_id } => cmd_agent_kill(cli.config, &agent_id),
             AgentCommands::Set {
                 agent_id,
@@ -1986,6 +2000,127 @@ fn cmd_agent_list(config: Option<PathBuf>, json: bool) {
 
 fn cmd_agent_chat(config: Option<PathBuf>, agent_id_str: &str) {
     tui::chat_runner::run_chat_tui(config, Some(agent_id_str.to_string()));
+}
+
+/// Non-interactive chat: send one message (with optional file attachments), print response, exit.
+fn cmd_agent_chat_once(
+    config: Option<PathBuf>,
+    agent_id_str: &str,
+    message: &str,
+    files: &[String],
+) {
+    use opencarrier_kernel::OpenCarrierKernel;
+    use opencarrier_types::agent::AgentId;
+    use std::io::Read;
+
+    let config_path = config.or_else(|| {
+        let home = opencarrier_home();
+        let candidate = home.join("config.toml");
+        if candidate.exists() {
+            Some(candidate)
+        } else {
+            None
+        }
+    });
+
+    let kernel = match OpenCarrierKernel::boot(config_path.as_deref()) {
+        Ok(k) => std::sync::Arc::new(k),
+        Err(e) => {
+            ui::error(&format!("Failed to boot kernel: {e}"));
+            std::process::exit(1);
+        }
+    };
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            ui::error(&format!("Failed to create runtime: {e}"));
+            std::process::exit(1);
+        }
+    };
+
+    // Resolve agent ID (accept UUID or name)
+    let agent_id: AgentId = match agent_id_str.parse() {
+        Ok(id) => id,
+        Err(_) => match kernel.registry.find_by_name(agent_id_str) {
+            Some(entry) => {
+                ui::hint(&format!("Using agent '{}' ({})", entry.name, entry.id));
+                entry.id
+            }
+            None => {
+                ui::error(&format!("Agent not found: {}", agent_id_str));
+                std::process::exit(1);
+            }
+        },
+    };
+
+    // Build the full message from -m text + -f file contents
+    let mut full_message = String::new();
+
+    // Read file contents
+    for (i, path) in files.iter().enumerate() {
+        let content = if path == "-" {
+            // Read from stdin
+            let mut buf = String::new();
+            match std::io::stdin().read_to_string(&mut buf) {
+                Ok(_) => buf,
+                Err(e) => {
+                    ui::error(&format!("Failed to read stdin: {e}"));
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    ui::error(&format!("Failed to read file '{}': {e}", path));
+                    std::process::exit(1);
+                }
+            }
+        };
+
+        if i > 0 {
+            full_message.push_str("\n\n");
+        }
+        let filename = if path == "-" {
+            "stdin".to_string()
+        } else {
+            std::path::Path::new(path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone())
+        };
+        full_message.push_str(&format!("--- {} ---\n{}", filename, content));
+    }
+
+    // Append user message after file contents
+    if !message.is_empty() {
+        if !files.is_empty() {
+            full_message.push_str("\n\n");
+        }
+        full_message.push_str(message);
+    }
+
+    if full_message.is_empty() {
+        ui::error("No message or file content provided");
+        std::process::exit(1);
+    }
+
+    ui::hint("Sending message...");
+    match rt.block_on(kernel.send_message(agent_id, &full_message)) {
+        Ok(result) => {
+            if !result.silent {
+                println!("{}", result.response);
+            }
+            if let Some(cost) = result.cost_usd {
+                eprintln!("[cost: ${:.4}, {} iterations]", cost, result.iterations);
+            }
+        }
+        Err(e) => {
+            ui::error(&format!("Error: {e}"));
+            std::process::exit(1);
+        }
+    }
 }
 
 fn cmd_agent_kill(config: Option<PathBuf>, agent_id_str: &str) {

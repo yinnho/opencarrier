@@ -5,7 +5,7 @@
 
 ---
 
-## 分身 = 12 个组成部分
+## 分身 = 13 个组成部分
 
 分身不是一个文件，而是一个**目录**。每个部分有严格的责任边界，绝不混淆。
 
@@ -17,13 +17,14 @@
 ├── MEMORY.md               # 4.  知识索引（系统自动维护，永远加载）
 ├── data/knowledge/         # 5.  参考资料/知识库（按需加载）
 ├── skills/                 # 6.  能力模块（两步激活）
-├── style/                  # 7.  风格样本（从聊天记录提取的说话风格）
-├── output/                 # 8.  工作产物（分身生成的文件）
-├── sessions/               # 9.  对话历史（JSONL 格式）
-├── data/orchestrator.md    # 10. 编排对话记录（训练模式日志）
-├── history/                # 11. 版本追踪
+├── agents/                 # 7.  子代理（可派出去干活的专门角色）
+├── style/                  # 8.  风格样本（从聊天记录提取的说话风格）
+├── output/                 # 9.  工作产物（分身生成的文件）
+├── sessions/               # 10. 对话历史（JSONL 格式）
+├── data/orchestrator.md    # 11. 编排对话记录（训练模式日志）
+├── history/                # 12. 版本追踪
 │   └── versions.jsonl      #     知识变更日志（创建/修改/验证/回滚）
-└── EVOLUTION.md            # 12. 进化策略（每个分身的学习配置）
+└── EVOLUTION.md            # 13. 进化策略（每个分身的学习配置）
 ```
 
 ---
@@ -204,7 +205,63 @@ body = '''{"order_id": "{{order_id}}", "reason": "{{reason}}"}'''
 
 ---
 
-### 7. style/ — 风格样本
+### 7. agents/ — 子代理
+
+**定义**: 可派出去干活的专门角色。每个 agent = 一个独立的执行者，有自己的指令、工具白名单和模型选择。
+
+**与 skills/ 的区别**:
+- **Skills** = "做什么" — 操作手册，是能力描述
+- **Agents** = "谁来做" — 专门的员工，是执行实体
+
+**两步激活机制**:
+
+**Step 1 — 目录（始终注入，短）**:
+```
+1. **code-reviewer** — 代码审查专家 (tools: Glob, Grep, Read)
+2. **code-architect** — 架构设计专家 (tools: Glob, Grep, Read, Bash)
+```
+
+**Step 2 — 完整 prompt（被派出时注入）**:
+当主代理决定派出子代理时，以该 agent 的 AGENT.md 作为独立 system prompt 启动子代理。
+
+**Agent 文件格式**:
+
+扁平格式:
+```markdown
+---
+name: code-reviewer
+description: 专门做代码审查的子代理
+tools: [Glob, Grep, Read, Bash]
+model: sonnet
+color: red
+---
+
+# Code Reviewer
+
+你是代码审查专家。分析代码质量、安全漏洞、性能问题。
+按以下维度审查：正确性、安全性、性能、可维护性。
+```
+
+目录格式（带脚本）:
+```
+agents/
+└── code-architect/
+    ├── AGENT.md
+    └── scripts/
+        └── analyze.toml
+```
+
+**使用场景**:
+- 复杂任务需要并行处理（如同时审查安全 + 性能 + 风格）
+- 子任务需要不同的模型（主代理用 opus，子代理用 sonnet/haiku）
+- 子任务需要隔离的工具权限（审查员只读，不能写）
+- Claude 插件中的 agents/ 可直接映射
+
+**生命周期**: 与 skills/ 相同 — 从进化中诞生 → compile 优化 → 过期删除。
+
+---
+
+### 8. style/ — 风格样本
 
 **定义**: 从聊天记录中提取的说话风格样本。不是人格定义，是**真实对话中的风格模式**。
 
@@ -220,7 +277,7 @@ body = '''{"order_id": "{{order_id}}", "reason": "{{reason}}"}'''
 
 ---
 
-### 8. output/ — 工作产物
+### 9. output/ — 工作产物
 
 **定义**: 分身在对话中生成的文件。代码、文档、图片等。
 
@@ -228,7 +285,7 @@ body = '''{"order_id": "{{order_id}}", "reason": "{{reason}}"}'''
 
 ---
 
-### 9. sessions/ — 对话历史
+### 10. sessions/ — 对话历史
 
 **定义**: JSONL 格式的对话记录。每次对话一个文件。
 
@@ -236,7 +293,7 @@ body = '''{"order_id": "{{order_id}}", "reason": "{{reason}}"}'''
 
 ---
 
-### 10. orchestrator.md — 编排对话记录
+### 11. orchestrator.md — 编排对话记录
 
 **定义**: 训练模式（clone-creator）的对话日志。记录分身训练过程中的所有交互。
 
@@ -244,7 +301,7 @@ body = '''{"order_id": "{{order_id}}", "reason": "{{reason}}"}'''
 
 ---
 
-### 11. history/versions.jsonl — 版本追踪
+### 12. history/versions.jsonl — 版本追踪
 
 **定义**: 知识文件变更日志。每行一条 JSON 记录。
 
@@ -257,7 +314,7 @@ body = '''{"order_id": "{{order_id}}", "reason": "{{reason}}"}'''
 
 ---
 
-### 12. EVOLUTION.md — 进化策略
+### 13. EVOLUTION.md — 进化策略
 
 **定义**: 每个分身的学习配置。不同分身有不同进化策略。
 
@@ -292,11 +349,13 @@ feedback_to_hub: false          # 是否匿名反馈知识到 Hub
 2. 引导语                     ← "体现以上人格和语气..."
 3. system_prompt.md           ← 行为指令
 4. Skill 目录                 ← 所有 skill 的 name + when_to_use（始终注入，短）
-5. [激活的 Skill 完整 prompt]  ← 按需注入（LLM 匹配 when_to_use 时）
-6. MEMORY.md                  ← 知识索引（文件目录）
-7. [选中的 knowledge 文件]     ← LLM 通过工具按需读取
-8. [style/ 风格参考]          ← 配合 SOUL.md 使用
-9. 系统段                     ← 当前日期、可用工具、安全规则、频道信息
+5. Agent 目录                 ← 所有 agent 的 name + description + tools（始终注入，短）
+6. [激活的 Skill 完整 prompt]  ← 按需注入（LLM 匹配 when_to_use 时）
+7. [派出的 Agent 完整 prompt]  ← 按需注入（主代理决定派出子代理时）
+8. MEMORY.md                  ← 知识索引（文件目录）
+9. [选中的 knowledge 文件]     ← LLM 通过工具按需读取
+10. [style/ 风格参考]         ← 配合 SOUL.md 使用
+11. 系统段                    ← 当前日期、可用工具、安全规则、频道信息
 ```
 
 **关键**: 动态组装，每次对话都从文件读取。编辑文件后立即生效，不需要重启。
@@ -316,6 +375,7 @@ clone.agx (tar.gz)
 ├── MEMORY.md           # 知识索引
 ├── knowledge/          # 所有知识文件
 ├── skills/             # 所有技能文件 + 脚本
+├── agents/             # 所有子代理定义（如有）
 └── style/              # 风格样本（如有）
 ```
 
@@ -331,6 +391,7 @@ clone.agx (tar.gz)
 | system_prompt.md | 你怎么做事 | 能力、规则、流程 | 人格、FAQ、代码 |
 | knowledge/ | 你知道什么 | 事实、FAQ、文档 | 行为规则、人格 |
 | skills/ | 你能做什么 | 触发条件+工具+步骤 | 知识事实 |
+| agents/ | 你派谁做 | 子代理：独立指令+工具+模型 | 主代理行为规则、知识事实 |
 | style/ | 你怎么说话 | 真实对话风格模式 | 规则、知识 |
 | EVOLUTION.md | 你怎么学习 | 进化策略、容量限制 | 人格、知识 |
 
@@ -346,6 +407,7 @@ clone.agx (tar.gz)
 | MEMORY.md | ✅ 动态组装 | prompt_builder.rs 读取，1000字上限 |
 | knowledge/ | ⚠️ 工具访问 | knowledge_list + knowledge_read 工具，不预加载 |
 | skills/ | ✅ 目录+完整 prompt | read_skills_catalog() + read_workspace_skills_prompts() |
+| agents/ | ❌ 未实现 | 结构已定义，子代理派出机制待实现 |
 | style/ | ✅ 动态组装 | read_style_samples() 读取并注入 prompt_builder |
 | output/ | ✅ 目录存在 | ensure_workspace() 创建 |
 | sessions/ | ✅ JSONL | kernel.rs 写入 |

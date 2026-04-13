@@ -3,7 +3,6 @@
 //! Reads `EVOLUTION.md` from the clone's workspace root. When missing,
 //! uses conservative defaults.
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;

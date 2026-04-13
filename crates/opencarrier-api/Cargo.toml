@@ -13,6 +13,7 @@ opencarrier-memory = { path = "../opencarrier-memory" }
 opencarrier-channels = { path = "../opencarrier-channels" }
 opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-clone = { path = "../opencarrier-clone" }
+opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
 # Stub crates (to be removed)
 opencarrier-hands = { path = "../opencarrier-hands" }
 opencarrier-extensions = { path = "../opencarrier-extensions" }
@@ -39,6 +40,7 @@ hex = { workspace = true }
 argon2 = { workspace = true }
 socket2 = { workspace = true }
 reqwest = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

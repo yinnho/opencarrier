@@ -531,8 +531,9 @@ struct JsonlLine {
 impl SessionStore {
     /// Write a human-readable JSONL mirror of a session to disk.
     ///
-    /// Best-effort: errors are returned but should be logged and never
-    /// affect the primary SQLite store.
+    /// **Append-only**: reads the existing file to find how many lines are
+    /// already written, then appends only the new messages. Never truncates
+    /// or rewrites existing lines — conversation history is immutable.
     pub fn write_jsonl_mirror(
         &self,
         session: &Session,
@@ -540,10 +541,36 @@ impl SessionStore {
     ) -> Result<(), std::io::Error> {
         std::fs::create_dir_all(sessions_dir)?;
         let path = sessions_dir.join(format!("{}.jsonl", session.id.0));
-        let mut file = std::fs::File::create(&path)?;
+
+        // Count existing lines to find what's already written
+        let existing_lines = if path.exists() {
+            std::io::BufRead::lines(std::io::BufReader::new(
+                std::fs::File::open(&path)?,
+            ))
+            .count()
+        } else {
+            0
+        };
+
+        // Only append new messages (those beyond what's already written)
+        let new_messages = if session.messages.len() > existing_lines {
+            &session.messages[existing_lines..]
+        } else {
+            return Ok(()); // Nothing new to append
+        };
+
+        if new_messages.is_empty() {
+            return Ok(());
+        }
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+
         let now = Utc::now().to_rfc3339();
 
-        for msg in &session.messages {
+        for msg in new_messages {
             let role_str = match msg.role {
                 Role::User => "user",
                 Role::Assistant => "assistant",

@@ -72,6 +72,9 @@ pub struct PromptContext {
     /// Clone's full skill prompts — workspace skill body + allowed_tools.
     /// Injected alongside the catalog so the LLM knows HOW to execute each skill.
     pub clone_skills_prompts: Option<String>,
+    /// Clone's knowledge content — compiled truth from data/knowledge/*.md files.
+    /// Unlike memory_md (which is just the index), this contains actual knowledge.
+    pub knowledge_content: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -127,6 +130,16 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         if let Some(ref mem) = ctx.memory_md {
             if !mem.trim().is_empty() {
                 sections.push(format!("## 知识索引\n{}", cap_str(mem, 1000)));
+            }
+        }
+
+        // data/knowledge/*.md → 知识内容（compiled truth，不含 timeline）
+        if let Some(ref knowledge) = ctx.knowledge_content {
+            if !knowledge.trim().is_empty() {
+                sections.push(format!(
+                    "## 知识库\n以下是你已经掌握的知识。在回答问题时优先参考这些知识。\n\n{}",
+                    knowledge
+                ));
             }
         }
 

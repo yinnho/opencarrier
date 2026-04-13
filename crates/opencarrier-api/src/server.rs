@@ -293,6 +293,31 @@ pub async fn build_router(
             "/api/clones/{name}",
             axum::routing::delete(routes::uninstall_clone),
         )
+        // Clone lifecycle endpoints
+        .route(
+            "/api/clones/{name}/compile",
+            axum::routing::post(routes::clone_compile),
+        )
+        .route(
+            "/api/clones/{name}/health",
+            axum::routing::get(routes::clone_health),
+        )
+        .route(
+            "/api/clones/{name}/rollback",
+            axum::routing::post(routes::clone_rollback),
+        )
+        .route(
+            "/api/clones/{name}/verify",
+            axum::routing::post(routes::clone_verify),
+        )
+        .route(
+            "/api/clones/{name}/feedback/push",
+            axum::routing::post(routes::clone_feedback_push),
+        )
+        .route(
+            "/api/clones/{name}/evaluate",
+            axum::routing::get(routes::clone_evaluate),
+        )
         // Memory endpoints
         .route(
             "/api/memory/agents/{id}/kv",

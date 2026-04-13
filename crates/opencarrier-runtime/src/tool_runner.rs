@@ -182,6 +182,14 @@ pub async fn execute_tool(
         "knowledge_read" => tool_knowledge_read(input, workspace_root).await,
         "apply_patch" => tool_apply_patch(input, workspace_root).await,
 
+        // Lifecycle system tools (clone knowledge management)
+        "knowledge_lint" => tool_knowledge_lint(workspace_root).await,
+        "knowledge_heal" => tool_knowledge_heal(workspace_root).await,
+        "knowledge_add" => tool_knowledge_add(input, workspace_root).await,
+        "knowledge_remove" => tool_knowledge_remove(input, workspace_root).await,
+        "knowledge_import" => tool_knowledge_import(input, workspace_root).await,
+        "clone_evaluate" => tool_clone_evaluate(workspace_root).await,
+
         // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
         "web_fetch" => {
             // Taint check: block URLs containing secrets/PII from being exfiltrated
@@ -600,6 +608,57 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 },
                 "required": ["patch"]
             }),
+        },
+        // --- Lifecycle system tools (clone knowledge management) ---
+        ToolDefinition {
+            name: "knowledge_lint".to_string(),
+            description: "Check the health of the clone's knowledge base. Reports missing frontmatter, empty files, placeholder content, and other issues.".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolDefinition {
+            name: "knowledge_heal".to_string(),
+            description: "Automatically fix knowledge base issues: remove empty files, rebuild MEMORY.md index, add missing frontmatter templates.".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolDefinition {
+            name: "knowledge_add".to_string(),
+            description: "Add a new knowledge entry to the clone's knowledge base.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short title for the knowledge entry"},
+                    "content": {"type": "string", "description": "The knowledge content (markdown)"},
+                },
+                "required": ["title", "content"],
+            }),
+        },
+        ToolDefinition {
+            name: "knowledge_remove".to_string(),
+            description: "Remove a knowledge entry by filename (supports fuzzy matching).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Filename or title to remove (fuzzy matched)"},
+                },
+                "required": ["filename"],
+            }),
+        },
+        ToolDefinition {
+            name: "knowledge_import".to_string(),
+            description: "Import data into the clone's knowledge base. Supports FAQ (CSV/TSV), chat logs (JSON), and document text.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Raw data content to import"},
+                    "data_type": {"type": "string", "description": "Data format: 'faq', 'chat', 'document', or 'auto' (default: auto)"},
+                },
+                "required": ["data"],
+            }),
+        },
+        ToolDefinition {
+            name: "clone_evaluate".to_string(),
+            description: "Evaluate the clone's quality with deterministic metrics. Returns a score (0-100) based on identity completeness, knowledge richness, skills, and knowledge quality.".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
         // --- Web tools ---
         ToolDefinition {
@@ -1472,6 +1531,201 @@ async fn tool_apply_patch(
             result.errors.join("; ")
         ))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle system tools (clone knowledge management)
+// ---------------------------------------------------------------------------
+
+async fn tool_knowledge_lint(workspace_root: Option<&Path>) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_lint requires a workspace root")?;
+    let report = opencarrier_lifecycle::health::check_health(root);
+    if report.issues.is_empty() {
+        Ok("All knowledge files are healthy.".to_string())
+    } else {
+        let mut out = format!("Found {} issue(s):\n", report.issues.len());
+        for issue in &report.issues {
+            out.push_str(&format!("- [{:?}] {}: {}\n", issue.severity, issue.filename, issue.message));
+        }
+        Ok(out)
+    }
+}
+
+async fn tool_knowledge_heal(workspace_root: Option<&Path>) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_heal requires a workspace root")?;
+    let report = opencarrier_lifecycle::health::check_health(root);
+    let fixes = opencarrier_lifecycle::health::auto_fix(root, &report);
+    Ok(format!("Fixed {} issue(s).", fixes))
+}
+
+async fn tool_knowledge_add(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_add requires a workspace root")?;
+    let title = input["title"]
+        .as_str()
+        .ok_or("Missing 'title' parameter")?;
+    let content = input["content"]
+        .as_str()
+        .ok_or("Missing 'content' parameter")?;
+    let filename = opencarrier_lifecycle::evolution::sanitize_filename(title);
+    let knowledge_dir = root.join("data/knowledge");
+    tokio::fs::create_dir_all(&knowledge_dir)
+        .await
+        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+    let path = knowledge_dir.join(format!("{filename}.md"));
+    let full = format!(
+        "---\nname: {}\ndescription: {}\nconfidence: EXTRACTED\n---\n{}\n---\n",
+        title, title, content
+    );
+    tokio::fs::write(&path, &full)
+        .await
+        .map_err(|e| format!("Failed to write knowledge file: {e}"))?;
+    let _ = opencarrier_lifecycle::version::record_version(
+        root,
+        "create",
+        &format!("{filename}.md"),
+        None,
+        Some(&full),
+        "tool",
+    );
+    Ok(format!("Knowledge added: {filename}.md"))
+}
+
+async fn tool_knowledge_remove(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_remove requires a workspace root")?;
+    let query = input["filename"]
+        .as_str()
+        .ok_or("Missing 'filename' parameter")?;
+    let knowledge_dir = root.join("data/knowledge");
+    let target = find_knowledge_file(&knowledge_dir, query)?;
+    let before = tokio::fs::read_to_string(&target).await.ok();
+    tokio::fs::remove_file(&target)
+        .await
+        .map_err(|e| format!("Failed to delete: {e}"))?;
+    let name = target
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let _ = opencarrier_lifecycle::version::record_version(
+        root,
+        "delete",
+        &name,
+        before.as_deref(),
+        None,
+        "tool",
+    );
+    let _ = opencarrier_lifecycle::evolution::update_memory_index(root);
+    Ok(format!("Knowledge removed: {name}"))
+}
+
+async fn tool_knowledge_import(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_import requires a workspace root")?;
+    let data = input["data"]
+        .as_str()
+        .ok_or("Missing 'data' parameter")?;
+    let data_type = input["data_type"].as_str().unwrap_or("auto");
+    let result = opencarrier_lifecycle::parsers::parse_import_data(data, data_type)
+        .map_err(|e| format!("Parse failed: {e}"))?;
+    let knowledge_dir = root.join("data/knowledge");
+    tokio::fs::create_dir_all(&knowledge_dir)
+        .await
+        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+    let mut saved = Vec::new();
+    for entry in &result.entries {
+        let filename = opencarrier_lifecycle::evolution::sanitize_filename(&entry.title);
+        let path = knowledge_dir.join(format!("{filename}.md"));
+        let full = format!(
+            "---\nname: {}\ndescription: {}\nconfidence: INFERRED\n---\n{}\n---\n",
+            entry.title, entry.title, entry.content
+        );
+        tokio::fs::write(&path, &full)
+            .await
+            .map_err(|e| format!("Failed to write {}: {e}", filename))?;
+        saved.push(filename);
+    }
+    Ok(format!(
+        "Imported {} entries as knowledge files. Quality: {:?}",
+        saved.len(),
+        result.quality
+    ))
+}
+
+async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> Result<String, String> {
+    let root = workspace_root.ok_or("clone_evaluate requires a workspace root")?;
+    let metrics = opencarrier_lifecycle::evaluate::compute_deterministic_metrics(root);
+    Ok(format!(
+        "Quality Score: {}/100 ({})\nKnowledge: {} files, {} bytes\nSkills: {}\nIdentity: SOUL={}, SP={}, MEMORY={}",
+        metrics.score,
+        metrics.grade,
+        metrics.knowledge_files,
+        metrics.knowledge_total_bytes,
+        metrics.skill_count,
+        metrics.has_soul,
+        metrics.has_system_prompt,
+        metrics.has_memory,
+    ))
+}
+
+/// Fuzzy-match a knowledge file by name (exact → prefix → substring).
+fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> Result<PathBuf, String> {
+    let entries = std::fs::read_dir(knowledge_dir).map_err(|e| e.to_string())?;
+    let query_lower = query.to_lowercase();
+    let query_no_ext = query_lower.trim_end_matches(".md");
+
+    let candidates: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
+        .map(|e| e.path())
+        .collect();
+
+    // Exact match
+    if let Some(exact) = candidates.iter().find(|p| {
+        p.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase()
+            == query_lower
+            || p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase()
+                == format!("{query_no_ext}.md")
+    }) {
+        return Ok(exact.clone());
+    }
+
+    // Prefix match
+    if let Some(prefix) = candidates.iter().find(|p| {
+        p.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase()
+            .starts_with(query_no_ext)
+    }) {
+        return Ok(prefix.clone());
+    }
+
+    // Substring match
+    if let Some(sub) = candidates.iter().find(|p| {
+        p.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase()
+            .contains(query_no_ext)
+    }) {
+        return Ok(sub.clone());
+    }
+
+    Err(format!("No knowledge file matching '{}' found", query))
 }
 
 // ---------------------------------------------------------------------------
