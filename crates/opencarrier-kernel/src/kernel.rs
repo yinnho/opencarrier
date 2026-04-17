@@ -6933,37 +6933,29 @@ impl KernelHandle for OpenCarrierKernel {
         let api_key = opencarrier_clone::hub::read_api_key(&self.config.hub.api_key_env)
             .map_err(|e| format!("Hub API Key 未配置: {e}"))?;
 
-        // Gather metadata from the agent manifest
-        let entry = self.registry.find_by_name(name)
-            .ok_or_else(|| format!("Agent '{}' not found", name))?;
-        let manifest = &entry.manifest;
-        let version = manifest.version.clone();
-        let description = if manifest.description.is_empty() {
-            format!("Clone: {}", name)
-        } else {
-            manifest.description.clone()
-        };
-        let tags = manifest.tags.clone();
+        // Get or create device ID for API key binding
+        let home_dir = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let device_id = opencarrier_clone::hub::get_or_create_device_id(&home_dir)
+            .unwrap_or_else(|_| "unknown".to_string());
 
-        let template_id = opencarrier_clone::hub::publish(
+        let result = opencarrier_clone::hub::publish(
             &hub_url,
             &api_key,
-            name,
             agx_bytes,
-            &version,
-            &description,
-            &tags,
+            &device_id,
+            None,  // category
+            None,  // visibility (default: public)
         )
         .await
         .map_err(|e| format!("Hub publish failed: {e}"))?;
 
         tracing::info!(
             name = %name,
-            template_id = %template_id,
+            result = %result,
             "Clone published to Hub"
         );
 
-        Ok(template_id)
+        Ok(result)
     }
 }
 

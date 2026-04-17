@@ -159,38 +159,38 @@ pub fn read_api_key(env_var: &str) -> Result<String> {
 }
 
 /// Publish (upload) a clone .agx to Hub.
-/// Uses multipart form upload with API key auth.
+/// Sends JSON with base64-encoded .agx file, matching Hub's PublishPayload format.
 pub async fn publish(
     hub_url: &str,
     api_key: &str,
-    name: &str,
     agx_bytes: &[u8],
-    version: &str,
-    description: &str,
-    tags: &[String],
+    device_id: &str,
+    category: Option<&str>,
+    visibility: Option<&str>,
 ) -> Result<String> {
+    use base64::Engine;
     let base = hub_url.trim_end_matches('/');
     let url = format!("{}/api/templates", base);
 
-    let file_part = reqwest::multipart::Part::bytes(agx_bytes.to_vec())
-        .file_name(format!("{}.agx", name))
-        .mime_str("application/gzip")
-        .context("Failed to set MIME type")?;
+    let file_base64 = base64::engine::general_purpose::STANDARD.encode(agx_bytes);
 
-    let mut form = reqwest::multipart::Form::new()
-        .part("file", file_part)
-        .text("name", name.to_string())
-        .text("version", version.to_string())
-        .text("description", description.to_string());
-
-    for tag in tags {
-        form = form.text("tags[]", tag.clone());
+    let mut payload = serde_json::json!({
+        "file_base64": file_base64,
+    });
+    if let Some(cat) = category {
+        payload["category"] = serde_json::Value::String(cat.to_string());
     }
+    if let Some(vis) = visibility {
+        payload["visibility"] = serde_json::Value::String(vis.to_string());
+    }
+
+    tracing::info!("正在发布到 Hub ({} bytes / {:.1} KB)...", agx_bytes.len(), agx_bytes.len() as f64 / 1024.0);
 
     let resp = reqwest::Client::new()
         .post(&url)
         .bearer_auth(api_key)
-        .multipart(form)
+        .header("X-Device-ID", device_id)
+        .json(&payload)
         .send()
         .await
         .context("无法连接 Hub")?;
@@ -202,8 +202,11 @@ pub async fn publish(
     }
 
     let body: serde_json::Value = resp.json().await.context("解析 Hub 响应失败")?;
-    let template_id = body["id"].as_str().unwrap_or("unknown");
-    Ok(template_id.to_string())
+    let name = body["name"].as_str().unwrap_or("unknown");
+    let version = body["version"].as_str().unwrap_or("unknown");
+    let status = body["status"].as_str().unwrap_or("unknown");
+    tracing::info!("发布成功: {} v{} ({})", name, version, status);
+    Ok(name.to_string())
 }
 
 fn format_stars(avg: f64) -> String {
