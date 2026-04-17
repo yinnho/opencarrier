@@ -538,9 +538,23 @@ impl SessionStore {
         &self,
         session: &Session,
         sessions_dir: &Path,
+        sender_id: Option<&str>,
     ) -> Result<(), std::io::Error> {
-        std::fs::create_dir_all(sessions_dir)?;
-        let path = sessions_dir.join(format!("{}.jsonl", session.id.0));
+        // Route to per-user sessions directory when sender_id is present
+        let effective_dir = if let Some(sid) = sender_id {
+            let user_dir = sessions_dir
+                .parent()
+                .unwrap_or(sessions_dir)
+                .join("users")
+                .join(sid)
+                .join("sessions");
+            std::fs::create_dir_all(&user_dir)?;
+            user_dir
+        } else {
+            std::fs::create_dir_all(sessions_dir)?;
+            sessions_dir.to_path_buf()
+        };
+        let path = effective_dir.join(format!("{}.jsonl", session.id.0));
 
         // Count existing lines to find what's already written
         let existing_lines = if path.exists() {
@@ -820,7 +834,7 @@ mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let sessions_dir = dir.path().join("sessions");
-        store.write_jsonl_mirror(&session, &sessions_dir).unwrap();
+        store.write_jsonl_mirror(&session, &sessions_dir, None).unwrap();
 
         let jsonl_path = sessions_dir.join(format!("{}.jsonl", session.id.0));
         assert!(jsonl_path.exists());

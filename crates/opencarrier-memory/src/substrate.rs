@@ -257,8 +257,9 @@ impl MemorySubstrate {
         &self,
         session: &Session,
         sessions_dir: &Path,
+        sender_id: Option<&str>,
     ) -> Result<(), std::io::Error> {
-        self.sessions.write_jsonl_mirror(session, sessions_dir)
+        self.sessions.write_jsonl_mirror(session, sessions_dir, sender_id)
     }
 
     /// Append messages to the agent's canonical session for cross-channel persistence.
