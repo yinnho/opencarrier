@@ -46,8 +46,9 @@
 - 通常 3-7 个技能是合适的范围
 
 ### allowed_tools
-- 只列出该技能真正需要的工具
-- 常用工具：`file_read`、`file_write`、`web_fetch`、`memory_store`、`memory_recall`
+- 只列出该技能**额外**需要的工具（基础工具已默认包含，不需要声明）
+- **默认已包含的自进化工具**：`knowledge_add`、`knowledge_list`、`knowledge_read`、`knowledge_lint`、`file_read`、`file_write`、`file_list`、`memory_store`、`memory_recall`、`user_profile`
+- 需要额外声明的工具：`web_fetch`、`web_search`、`shell_exec`、`browser_*`、`agent_*` 等专业工具
 
 ## 知识文件
 

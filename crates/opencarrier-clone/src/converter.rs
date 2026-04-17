@@ -35,20 +35,35 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
     let mut all_tools: Vec<String> = data.skills.iter()
         .flat_map(|s| s.allowed_tools.iter().cloned())
         .collect();
+
+    // Always include self-evolution tools so clones can learn and adapt
+    let evolution_tools: &[&str] = &[
+        "knowledge_add",
+        "knowledge_list",
+        "knowledge_read",
+        "knowledge_lint",
+        "file_read",
+        "file_write",
+        "file_list",
+        "memory_store",
+        "memory_recall",
+        "user_profile",
+    ];
+    for tool in evolution_tools {
+        let t = tool.to_string();
+        if !all_tools.contains(&t) {
+            all_tools.push(t);
+        }
+    }
+
+    // Default tools for chat clones (when skills declare nothing extra)
+    if all_tools.len() == evolution_tools.len() {
+        all_tools.push("web_fetch".into());
+        all_tools.push("web_search".into());
+    }
+
     all_tools.sort();
     all_tools.dedup();
-
-    // Default tools for chat clones
-    if all_tools.is_empty() {
-        all_tools = vec![
-            "file_read".into(),
-            "file_list".into(),
-            "memory_store".into(),
-            "memory_recall".into(),
-            "web_fetch".into(),
-            "web_search".into(),
-        ];
-    }
 
     let clone_source = CloneSource {
         template_name: data.name.clone(),
