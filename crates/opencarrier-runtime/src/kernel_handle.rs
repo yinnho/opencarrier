@@ -238,6 +238,13 @@ pub trait KernelHandle: Send + Sync {
         Err("Channel file data send not available".to_string())
     }
 
+    /// Resolve an agent's workspace directory by name.
+    /// Returns the absolute path string, or None if the agent is not found.
+    fn resolve_agent_workspace(&self, agent_name: &str) -> Option<String> {
+        let _ = agent_name;
+        None
+    }
+
     /// Spawn an agent with capability inheritance enforcement.
     /// `parent_caps` are the parent's granted capabilities. The kernel MUST verify
     /// that every capability in the child manifest is covered by `parent_caps`.

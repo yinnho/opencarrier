@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "clone-trainer",
+  "description": "分身训练器 — 通过对话训练已有分身的知识、技能、人格、行为和配置",
+  "author": "opencarrier",
+  "tags": ["meta", "trainer", "training"],
+  "exported_at": "1744867200",
+  "knowledge_version": 1
+}
