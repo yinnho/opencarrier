@@ -272,7 +272,7 @@ impl DeliveryTracker {
 
 /// Create workspace directory structure for an agent.
 fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
-    for subdir in &["data", "data/knowledge", "output", "sessions", "skills", "logs", "memory", "history"] {
+    for subdir in &["data", "data/knowledge", "output", "sessions", "skills", "logs", "memory", "history", "users"] {
         std::fs::create_dir_all(workspace.join(subdir)).map_err(|e| {
             KernelError::OpenCarrier(OpenCarrierError::Internal(format!(
                 "Failed to create workspace dir {}/{subdir}: {e}",
@@ -661,6 +661,75 @@ fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
         Some(opencarrier_types::truncate_str(&content, MAX_IDENTITY_FILE_BYTES).to_string())
     } else {
         Some(content)
+    }
+}
+
+/// Read user profile for multi-tenancy context injection.
+/// Returns a short summary string suitable for the system prompt.
+fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<String> {
+    let profile_path = workspace.join("users").join(sender_id).join("profile.json");
+    if !profile_path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&profile_path).ok()?;
+    let profile: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let mut parts = Vec::new();
+    if let Some(name) = profile["display_name"].as_str() {
+        parts.push(format!("Name: {}", name));
+    }
+    if let Some(count) = profile["conversation_count"].as_u64() {
+        if count > 0 {
+            parts.push(format!("Previous conversations: {}", count));
+        }
+    }
+    if let Some(prefs) = profile["preferences"].as_object() {
+        if !prefs.is_empty() {
+            parts.push(format!("Preferences: {}", serde_json::to_string(prefs).unwrap_or_default()));
+        }
+    }
+    if let Some(patterns) = profile["interaction_patterns"].as_object() {
+        if !patterns.is_empty() {
+            parts.push(format!("Interaction patterns: {}", serde_json::to_string(patterns).unwrap_or_default()));
+        }
+    }
+    if let Some(notes) = profile["notes"].as_str() {
+        if !notes.is_empty() {
+            parts.push(format!("Notes: {}", notes));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+/// Update user profile after a conversation (touch last_seen, increment count).
+fn touch_user_profile(workspace: &Path, sender_id: &str) {
+    let profile_path = workspace.join("users").join(sender_id).join("profile.json");
+    let mut profile: serde_json::Value = if profile_path.exists() {
+        std::fs::read_to_string(&profile_path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    } else {
+        serde_json::json!({
+            "sender_id": sender_id,
+            "first_seen": chrono::Utc::now().to_rfc3339(),
+        })
+    };
+
+    profile["sender_id"] = serde_json::Value::String(sender_id.to_string());
+    profile["last_seen"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
+    let count = profile["conversation_count"].as_u64().unwrap_or(0);
+    profile["conversation_count"] = serde_json::Value::Number((count + 1).into());
+
+    if let Some(parent) = profile_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(output) = serde_json::to_string_pretty(&profile) {
+        let _ = std::fs::write(&profile_path, output);
     }
 }
 
@@ -2108,17 +2177,34 @@ impl OpenCarrierKernel {
         }
 
         // LLM agent: true streaming via agent loop
-        let mut session = self
-            .memory
-            .get_session(entry.session_id)
-            .map_err(KernelError::OpenCarrier)?
-            .unwrap_or_else(|| opencarrier_memory::session::Session {
-                id: entry.session_id,
-                agent_id,
-                messages: Vec::new(),
-                context_window_tokens: 0,
-                label: None,
-            });
+        // Load session: use per-user session when sender_id is present (multi-tenancy),
+        // otherwise use the agent's default session.
+        let mut session = if let Some(ref sid) = sender_id {
+            let user_label = format!("user:{}", sid);
+            match self
+                .memory
+                .find_session_by_label(agent_id, &user_label)
+                .map_err(KernelError::OpenCarrier)?
+            {
+                Some(s) => s,
+                None => {
+                    self.memory
+                        .create_session_with_label(agent_id, Some(&user_label))
+                        .map_err(KernelError::OpenCarrier)?
+                }
+            }
+        } else {
+            self.memory
+                .get_session(entry.session_id)
+                .map_err(KernelError::OpenCarrier)?
+                .unwrap_or_else(|| opencarrier_memory::session::Session {
+                    id: entry.session_id,
+                    agent_id,
+                    messages: Vec::new(),
+                    context_window_tokens: 0,
+                    label: None,
+                })
+        };
 
         // Check if auto-compaction is needed: message-count OR token-count OR quota-headroom trigger
         let needs_compact = {
@@ -2278,8 +2364,11 @@ impl OpenCarrierKernel {
                         .format("%A, %B %d, %Y (%Y-%m-%d %H:%M %Z)")
                         .to_string(),
                 ),
-                sender_id,
+                sender_id: sender_id.clone(),
                 sender_name,
+                user_profile_summary: sender_id.as_ref().and_then(|sid| {
+                    manifest.workspace.as_ref().and_then(|w| read_user_profile_summary(w, sid))
+                }),
                 // Clone identity files (分身特有)
                 clone_system_prompt_md: manifest
                     .workspace
@@ -2419,6 +2508,7 @@ impl OpenCarrierKernel {
                 Some(&kernel_clone.process_manager),
                 None, // content_blocks (streaming path uses text only for now)
                 kernel_clone.brain.clone().map(|b| b as Arc<dyn opencarrier_runtime::llm_driver::Brain>), // Brain for modality-based routing
+                sender_id.as_deref(),
             )
             .await;
 
@@ -2437,6 +2527,11 @@ impl OpenCarrierKernel {
                     // Evolution hook — post-conversation auto-learning for clones
                     kernel_clone.maybe_run_evolution(&manifest, &message_owned, &result.response);
 
+                    // Multi-tenancy: update user profile
+                    if let (Some(ref sid), Some(ref ws)) = (&sender_id, &manifest.workspace) {
+                        touch_user_profile(ws, sid);
+                    }
+
                     // Append new messages to canonical session for cross-channel memory
                     if session.messages.len() > messages_before {
                         let new_messages = session.messages[messages_before..].to_vec();
@@ -2448,7 +2543,7 @@ impl OpenCarrierKernel {
                     // Write JSONL session mirror to workspace
                     if let Some(ref workspace) = manifest.workspace {
                         if let Err(e) =
-                            memory.write_jsonl_mirror(&session, &workspace.join("sessions"))
+                            memory.write_jsonl_mirror(&session, &workspace.join("sessions"), sender_id.as_deref())
                         {
                             warn!("Failed to write JSONL session mirror (streaming): {e}");
                         }
@@ -2684,17 +2779,34 @@ impl OpenCarrierKernel {
             .check_quota(agent_id, &entry.manifest.resources)
             .map_err(KernelError::OpenCarrier)?;
 
-        let mut session = self
-            .memory
-            .get_session(entry.session_id)
-            .map_err(KernelError::OpenCarrier)?
-            .unwrap_or_else(|| opencarrier_memory::session::Session {
-                id: entry.session_id,
-                agent_id,
-                messages: Vec::new(),
-                context_window_tokens: 0,
-                label: None,
-            });
+        // Load session: use per-user session when sender_id is present (multi-tenancy),
+        // otherwise use the agent's default session.
+        let mut session = if let Some(ref sid) = sender_id {
+            let user_label = format!("user:{}", sid);
+            match self
+                .memory
+                .find_session_by_label(agent_id, &user_label)
+                .map_err(KernelError::OpenCarrier)?
+            {
+                Some(s) => s,
+                None => {
+                    self.memory
+                        .create_session_with_label(agent_id, Some(&user_label))
+                        .map_err(KernelError::OpenCarrier)?
+                }
+            }
+        } else {
+            self.memory
+                .get_session(entry.session_id)
+                .map_err(KernelError::OpenCarrier)?
+                .unwrap_or_else(|| opencarrier_memory::session::Session {
+                    id: entry.session_id,
+                    agent_id,
+                    messages: Vec::new(),
+                    context_window_tokens: 0,
+                    label: None,
+                })
+        };
 
         // Pre-emptive compaction: compact before LLM call if session is large or quota headroom is low
         {
@@ -2856,8 +2968,11 @@ impl OpenCarrierKernel {
                         .format("%A, %B %d, %Y (%Y-%m-%d %H:%M %Z)")
                         .to_string(),
                 ),
-                sender_id,
+                sender_id: sender_id.clone(),
                 sender_name,
+                user_profile_summary: sender_id.as_ref().and_then(|sid| {
+                    manifest.workspace.as_ref().and_then(|w| read_user_profile_summary(w, sid))
+                }),
                 // Clone identity files (分身特有)
                 clone_system_prompt_md: manifest
                     .workspace
@@ -2962,12 +3077,18 @@ impl OpenCarrierKernel {
             Some(&self.process_manager),
             content_blocks,
             self.brain.clone().map(|b| b as Arc<dyn opencarrier_runtime::llm_driver::Brain>), // Brain for modality-based routing
+            sender_id.as_deref(),
         )
         .await
         .map_err(KernelError::OpenCarrier)?;
 
         // Evolution hook — post-conversation auto-learning for clones
         self.maybe_run_evolution(&manifest, message, &result.response);
+
+        // Multi-tenancy: update user profile (touch last_seen, increment conversation_count)
+        if let (Some(ref sid), Some(ref ws)) = (&sender_id, &manifest.workspace) {
+            touch_user_profile(ws, sid);
+        }
 
         // Append new messages to canonical session for cross-channel memory
         if session.messages.len() > messages_before {
@@ -2981,7 +3102,7 @@ impl OpenCarrierKernel {
         if let Some(ref workspace) = manifest.workspace {
             if let Err(e) = self
                 .memory
-                .write_jsonl_mirror(&session, &workspace.join("sessions"))
+                .write_jsonl_mirror(&session, &workspace.join("sessions"), sender_id.as_deref())
             {
                 warn!("Failed to write JSONL session mirror: {e}");
             }
@@ -3854,6 +3975,16 @@ impl OpenCarrierKernel {
     /// Set the weak self-reference for trigger dispatch.
     ///
     /// Must be called once after the kernel is wrapped in `Arc`.
+    /// Get a kernel handle for passing to agent loop operations.
+    ///
+    /// Returns `None` if `set_self_handle` hasn't been called yet.
+    pub fn get_kernel_handle(self: &Arc<Self>) -> Option<Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle>> {
+        self.self_handle
+            .get()
+            .and_then(|w| w.upgrade())
+            .map(|arc| arc as Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle>)
+    }
+
     pub fn set_self_handle(self: &Arc<Self>) {
         let _ = self.self_handle.set(Arc::downgrade(self));
     }
@@ -6574,6 +6705,13 @@ impl KernelHandle for OpenCarrierKernel {
 
         // Delegate to the normal spawn path (use trait method via KernelHandle::)
         KernelHandle::spawn_agent(self, manifest_toml, parent_id).await
+    }
+
+    fn resolve_agent_workspace(&self, agent_name: &str) -> Option<String> {
+        self.registry
+            .find_by_name(agent_name)
+            .and_then(|entry| entry.manifest.workspace.clone())
+            .map(|p| p.to_string_lossy().to_string())
     }
 }
 

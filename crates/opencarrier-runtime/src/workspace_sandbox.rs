@@ -68,6 +68,86 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
     Ok(canon_candidate)
 }
 
+/// Resolve a user-supplied path for write operations within a workspace sandbox.
+///
+/// Extends `resolve_sandbox_path` with per-directory permission rules:
+/// - **Blocked**: `agent.toml`, `SOUL.md` (only trainer tools may modify these)
+/// - **Allowed (self-evolution)**: `system_prompt.md`, `skills/`, `data/`, `memory/`, `output/`
+/// - **Per-user**: `users/{sender_id}/` when sender_id matches the current sender
+/// - **Blocked**: `users/{other_sender_id}/`
+///
+/// When `sender_id` is present and the path starts with `output/`, the path is
+/// automatically rewritten to `users/{sender_id}/output/`.
+pub fn resolve_sandbox_path_for_write(
+    user_path: &str,
+    workspace_root: &Path,
+    sender_id: Option<&str>,
+) -> Result<PathBuf, String> {
+    let normalized = user_path.replace('\\', "/");
+    let path = Path::new(&normalized);
+
+    // Extract the relative path components for permission checking
+    let relative = if path.is_absolute() {
+        path.strip_prefix(workspace_root)
+            .map_err(|_| "Absolute path outside workspace".to_string())?
+            .to_path_buf()
+    } else {
+        path.to_path_buf()
+    };
+
+    let rel_str = relative.to_string_lossy();
+
+    // Block writes to protected config files
+    if rel_str == "agent.toml" || rel_str == "SOUL.md" {
+        return Err(format!(
+            "Write denied: '{}' is a protected config file (only trainer may modify)",
+            rel_str
+        ));
+    }
+
+    // Rewrite output/ paths to per-user output when sender_id is present
+    let effective_path = if let Some(sid) = sender_id {
+        if rel_str.starts_with("output/") || rel_str == "output" {
+            let rest = rel_str.strip_prefix("output").unwrap_or("");
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            if rest.is_empty() {
+                format!("users/{}/output", sid)
+            } else {
+                format!("users/{}/output/{}", sid, rest)
+            }
+        } else {
+            rel_str.to_string()
+        }
+    } else {
+        rel_str.to_string()
+    };
+
+    // Check per-user isolation for users/ paths
+    let eff_path = Path::new(&effective_path);
+    if eff_path.starts_with("users/") {
+        let components: Vec<&str> = eff_path.components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        // components: ["users", "{sender_id}", ...]
+        if components.len() >= 2 {
+            let path_sender = components[1];
+            if let Some(sid) = sender_id {
+                if path_sender != sid {
+                    return Err(format!(
+                        "Write denied: cannot write to user '{}' directory (current sender: '{}')",
+                        path_sender, sid
+                    ));
+                }
+            } else {
+                return Err("Write denied: cannot write to users/ directory without sender context".to_string());
+            }
+        }
+    }
+
+    // Delegate to the existing sandbox for path resolution and traversal checks
+    resolve_sandbox_path(&effective_path, workspace_root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

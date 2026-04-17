@@ -135,6 +135,7 @@ pub async fn run_agent_loop(
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
     brain: Option<Arc<dyn Brain>>,
+    sender_id: Option<&str>,
 ) -> OpenCarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -674,6 +675,7 @@ pub async fn run_agent_loop(
                             tts_engine,
                             docker_config,
                             process_manager,
+                            sender_id,
                         ),
                     )
                     .await
@@ -1112,6 +1114,7 @@ pub async fn run_agent_loop_streaming(
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
     brain: Option<Arc<dyn Brain>>,
+    sender_id: Option<&str>,
 ) -> OpenCarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting streaming agent loop");
 
@@ -1663,6 +1666,7 @@ pub async fn run_agent_loop_streaming(
                             tts_engine,
                             docker_config,
                             process_manager,
+                            sender_id,
                         ),
                     )
                     .await
@@ -2883,6 +2887,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Loop should complete without error");
@@ -2937,6 +2942,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Loop should complete without error");
@@ -2993,6 +2999,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Loop should complete without error");
@@ -3047,6 +3054,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Loop should complete without error");
@@ -3094,6 +3102,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -3219,6 +3228,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Loop should recover via retry");
@@ -3267,6 +3277,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Loop should complete with fallback");
@@ -3323,6 +3334,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -4212,6 +4224,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Agent loop should complete");
@@ -4280,6 +4293,7 @@ mod tests {
             None,
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Normal loop should complete");
@@ -4344,6 +4358,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // sender_id
         )
         .await
         .expect("Streaming loop should complete");

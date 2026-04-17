@@ -59,6 +59,9 @@ pub struct PromptContext {
     pub sender_id: Option<String>,
     /// Sender display name.
     pub sender_name: Option<String>,
+    /// User profile summary — preferences, habits, and interaction history
+    /// between this clone and the current sender.
+    pub user_profile_summary: Option<String>,
     // --- Clone identity files (分身特有) ---
     /// Clone's system_prompt.md — behavioral instructions ("你怎么做事").
     /// Only present for agents loaded from .agx with a workspace system_prompt.md.
@@ -264,6 +267,11 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             build_sender_section(ctx.sender_name.as_deref(), ctx.sender_id.as_deref())
         {
             sections.push(sender_line);
+        }
+
+        // Section 9.2 — User Profile (multi-tenancy)
+        if let Some(ref profile) = ctx.user_profile_summary {
+            sections.push(format!("## User Profile\n{}", profile));
         }
     }
 
