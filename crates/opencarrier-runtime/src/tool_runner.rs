@@ -1537,6 +1537,37 @@ fn validate_path(path: &str) -> Result<&str, String> {
     Ok(path)
 }
 
+/// Validate a clone name: only lowercase alphanumeric and hyphens allowed.
+/// Rejects empty names, names starting/ending with hyphens, and names with path separators.
+fn validate_clone_name(name: &str) -> Result<&str, String> {
+    if name.is_empty() {
+        return Err("Clone name cannot be empty".to_string());
+    }
+    if name.len() > 64 {
+        return Err("Clone name too long (max 64 characters)".to_string());
+    }
+    if name.starts_with('-') || name.ends_with('-') {
+        return Err("Clone name cannot start or end with a hyphen".to_string());
+    }
+    if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return Err(
+            "Clone name must contain only lowercase letters, digits, and hyphens (e.g. 'customer-support')".to_string()
+        );
+    }
+    Ok(name)
+}
+
+/// Validate a file path key inside clone files map — no traversal, no absolute paths.
+fn validate_clone_file_path(path: &str) -> Result<&str, String> {
+    if path.is_empty() {
+        return Err("File path cannot be empty".to_string());
+    }
+    if path.starts_with('/') || path.starts_with("..") {
+        return Err(format!("Invalid file path '{}': must be relative and not escape the archive", path));
+    }
+    validate_path(path)
+}
+
 /// Resolve a file path through the workspace sandbox (if available) or legacy validation.
 fn resolve_file_path(raw_path: &str, workspace_root: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(root) = workspace_root {
@@ -2176,9 +2207,9 @@ async fn tool_clone_install(
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_install requires kernel access")?;
-    let name = input["name"].as_str()
-        .ok_or("Missing 'name' parameter")?
-        .to_string();
+    let name_raw = input["name"].as_str()
+        .ok_or("Missing 'name' parameter")?;
+    let name = validate_clone_name(name_raw)?.to_string();
 
     let files = input.get("files")
         .and_then(|v| v.as_object())
@@ -2205,6 +2236,11 @@ async fn tool_clone_install(
         return Err("system_prompt.md is required in files".to_string());
     }
 
+    // Validate all file paths for traversal
+    for path in files.keys() {
+        validate_clone_file_path(path)?;
+    }
+
     // Parse knowledge files
     let mut knowledge = HashMap::new();
     for (path, val) in files {
@@ -2219,7 +2255,7 @@ async fn tool_clone_install(
     for (path, val) in files {
         if path.starts_with("skills/") && path.ends_with(".md") {
             let content = val.as_str().unwrap_or("");
-            let (fm, body) = parse_simple_frontmatter(content);
+            let (fm, body) = opencarrier_clone::parse_frontmatter(content);
             let skill_name = fm.get("name")
                 .cloned()
                 .unwrap_or_else(|| {
@@ -2233,7 +2269,7 @@ async fn tool_clone_install(
                 name: skill_name,
                 when_to_use: fm.get("when_to_use").cloned().unwrap_or_default(),
                 allowed_tools: fm.get("allowed_tools")
-                    .map(|s| parse_simple_string_array(s))
+                    .map(|s| opencarrier_clone::parse_string_array(s))
                     .unwrap_or_default(),
                 prompt: body.trim().to_string(),
                 scripts: Vec::new(),
@@ -2246,7 +2282,7 @@ async fn tool_clone_install(
     for (path, val) in files {
         if path.starts_with("agents/") && path.ends_with(".md") {
             let content = val.as_str().unwrap_or("");
-            let (fm, body) = parse_simple_frontmatter(content);
+            let (fm, body) = opencarrier_clone::parse_frontmatter(content);
             agents.push(AgentData {
                 name: fm.get("name").cloned().unwrap_or_else(|| {
                     path.strip_prefix("agents/")
@@ -2256,7 +2292,7 @@ async fn tool_clone_install(
                         .to_string()
                 }),
                 description: fm.get("description").cloned().unwrap_or_default(),
-                tools: fm.get("tools").map(|s| parse_simple_string_array(s)).unwrap_or_default(),
+                tools: fm.get("tools").map(|s| opencarrier_clone::parse_string_array(s)).unwrap_or_default(),
                 model: fm.get("model").cloned().unwrap_or_else(|| "sonnet".to_string()),
                 color: fm.get("color").cloned(),
                 prompt: body.trim().to_string(),
@@ -2310,9 +2346,9 @@ async fn tool_clone_export(
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_export requires kernel access")?;
-    let name = input["name"].as_str()
-        .ok_or("Missing 'name' parameter")?
-        .to_string();
+    let name = validate_clone_name(
+        input["name"].as_str().ok_or("Missing 'name' parameter")?
+    )?.to_string();
 
     let agx_bytes = kernel.clone_export(&name)?;
 
@@ -2329,9 +2365,9 @@ async fn tool_clone_publish(
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_publish requires kernel access")?;
-    let name = input["name"].as_str()
-        .ok_or("Missing 'name' parameter")?
-        .to_string();
+    let name = validate_clone_name(
+        input["name"].as_str().ok_or("Missing 'name' parameter")?
+    )?.to_string();
 
     // Export the clone first
     let agx_bytes = kernel.clone_export(&name)?;
@@ -2345,48 +2381,6 @@ async fn tool_clone_publish(
         template_id,
         agx_bytes.len() as f64 / 1024.0,
     ))
-}
-
-/// Simple frontmatter parser for tool_clone_install.
-fn parse_simple_frontmatter(content: &str) -> (HashMap<String, String>, String) {
-    let mut map = HashMap::new();
-    if !content.starts_with("---") {
-        return (map, content.to_string());
-    }
-    let rest = &content[3..];
-    let Some(end) = rest.find("---") else {
-        return (map, content.to_string());
-    };
-    let frontmatter = &rest[..end];
-    let body = &rest[end + 3..];
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(colon_pos) = trimmed.find(':') {
-            let key = trimmed[..colon_pos].trim().to_string();
-            let val = trimmed[colon_pos + 1..].trim().trim_matches('"').to_string();
-            if !key.is_empty() {
-                map.insert(key, val);
-            }
-        }
-    }
-    (map, body.to_string())
-}
-
-/// Parse a string like `["tool1", "tool2"]` into a Vec.
-fn parse_simple_string_array(s: &str) -> Vec<String> {
-    let s = s.trim();
-    if !s.starts_with('[') {
-        return vec![s.trim_matches('"').to_string()];
-    }
-    s.trim_start_matches('[')
-        .trim_end_matches(']')
-        .split(',')
-        .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
 }
 
 /// Fuzzy-match a knowledge file by name (exact → prefix → substring).

@@ -170,9 +170,14 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
         std::fs::create_dir_all(&skill_dir)?;
 
         // Write SKILL.md
+        let tools_str = if skill.allowed_tools.is_empty() {
+            String::new()
+        } else {
+            format!("\nallowed_tools: {}", crate::loader::format_string_array(&skill.allowed_tools))
+        };
         let skill_md = format!(
-            "---\nname: {}\nwhen_to_use: {}\nallowed_tools: {:?}\n---\n\n{}",
-            skill.name, skill.when_to_use, skill.allowed_tools, skill.prompt
+            "---\nname: {}\nwhen_to_use: {}{}\n---\n\n{}",
+            skill.name, skill.when_to_use, tools_str, skill.prompt
         );
         std::fs::write(skill_dir.join("SKILL.md"), skill_md)?;
 
@@ -190,9 +195,19 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     for agent in &data.agents {
         let agent_path = agents_dir.join(format!("{}.md", agent.name));
         let color_line = agent.color.as_ref().map(|c| format!("color: {}", c)).unwrap_or_default();
+        let tools_line = if agent.tools.is_empty() {
+            String::new()
+        } else {
+            format!("\ntools: {}", crate::loader::format_string_array(&agent.tools))
+        };
+        let model_line = if agent.model.is_empty() {
+            String::new()
+        } else {
+            format!("\nmodel: {}", agent.model)
+        };
         let agent_md = format!(
-            "---\nname: {}\ndescription: {}\ntools: {:?}\nmodel: {}\n{}\n---\n\n{}",
-            agent.name, agent.description, agent.tools, agent.model, color_line, agent.prompt,
+            "---\nname: {}\ndescription: {}{}{}\n{}\n---\n\n{}",
+            agent.name, agent.description, tools_line, model_line, color_line, agent.prompt,
         );
         std::fs::write(agent_path, agent_md)?;
         debug!("Wrote agent: {}.md", agent.name);
@@ -202,6 +217,14 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     if !data.evolution.is_empty() {
         std::fs::write(workspace.join("EVOLUTION.md"), &data.evolution)?;
         debug!("Wrote EVOLUTION.md");
+    }
+
+    // Write template.json for round-trip preservation
+    if let Some(ref manifest) = data.manifest {
+        let json = serde_json::to_string_pretty(manifest)
+            .context("Failed to serialize template.json")?;
+        std::fs::write(workspace.join("template.json"), json)?;
+        debug!("Wrote template.json");
     }
 
     // Write style files

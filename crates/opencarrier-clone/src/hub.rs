@@ -81,9 +81,9 @@ pub async fn install(
 ) -> Result<String> {
     let base = hub_url.trim_end_matches('/');
     let url = if let Some(v) = version {
-        format!("{}/api/templates/{}/download/{}", base, name, v)
+        format!("{}/api/templates/{}/download/{}", base, urlencoding::encode(name), urlencoding::encode(v))
     } else {
-        format!("{}/api/templates/{}/download", base, name)
+        format!("{}/api/templates/{}/download", base, urlencoding::encode(name))
     };
 
     tracing::info!("正在从 Hub 下载 {} ...", name);
@@ -106,10 +106,7 @@ pub async fn install(
     tracing::info!("已下载 {} 字节", bytes.len());
 
     // Write to temp file, then load via load_agx
-    let tmp_dir = std::env::temp_dir().join(format!("opencarrier-hub-{}", std::process::id()));
-    if tmp_dir.exists() {
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-    }
+    let tmp_dir = std::env::temp_dir().join(format!("opencarrier-hub-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp_dir)?;
     let tmp_file = tmp_dir.join(format!("{}.agx", name));
     std::fs::write(&tmp_file, &bytes)?;
@@ -139,7 +136,7 @@ pub fn get_or_create_device_id(home_dir: &Path) -> Result<String> {
     let id = {
         use std::fmt::Write;
         let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).expect("rng");
+        getrandom::fill(&mut bytes).context("Failed to generate random device ID")?;
         let mut hex = String::with_capacity(32);
         for b in &bytes {
             write!(&mut hex, "{:02x}", b).unwrap();
