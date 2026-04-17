@@ -124,8 +124,9 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     let sessions_dir = workspace.join("sessions");
     let logs_dir = workspace.join("logs");
     let output_dir = workspace.join("output");
+    let users_dir = workspace.join("users");
 
-    for dir in &[&data_dir, &memory_dir, &skills_dir, &agents_dir, &style_dir, &sessions_dir, &logs_dir, &output_dir] {
+    for dir in &[&data_dir, &memory_dir, &skills_dir, &agents_dir, &style_dir, &sessions_dir, &logs_dir, &output_dir, &users_dir] {
         std::fs::create_dir_all(dir)?;
     }
 

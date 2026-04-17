@@ -114,6 +114,7 @@ pub async fn execute_tool(
     tts_engine: Option<&crate::tts::TtsEngine>,
     docker_config: Option<&opencarrier_types::config::DockerSandboxConfig>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
+    sender_id: Option<&str>,
 ) -> ToolResult {
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical OpenCarrier name.
@@ -174,7 +175,7 @@ pub async fn execute_tool(
     let result = match tool_name {
         // Filesystem tools
         "file_read" => tool_file_read(input, workspace_root).await,
-        "file_write" => tool_file_write(input, workspace_root).await,
+        "file_write" => tool_file_write(input, workspace_root, sender_id).await,
         "file_list" => tool_file_list(input, workspace_root).await,
 
         // Knowledge tools (clone-specific, safe access to data/knowledge/)
@@ -189,6 +190,19 @@ pub async fn execute_tool(
         "knowledge_remove" => tool_knowledge_remove(input, workspace_root).await,
         "knowledge_import" => tool_knowledge_import(input, workspace_root).await,
         "clone_evaluate" => tool_clone_evaluate(workspace_root).await,
+
+        // Cross-workspace training tools (for trainer agents like clone-trainer)
+        "train_read" => tool_train_read(input, kernel).await,
+        "train_write" => tool_train_write(input, kernel).await,
+        "train_list" => tool_train_list(input, kernel).await,
+        "train_knowledge_add" => tool_train_knowledge_add(input, kernel).await,
+        "train_knowledge_import" => tool_train_knowledge_import(input, kernel).await,
+        "train_knowledge_list" => tool_train_knowledge_list(input, kernel).await,
+        "train_knowledge_read" => tool_train_knowledge_read(input, kernel).await,
+        "train_knowledge_lint" => tool_train_knowledge_lint(input, kernel).await,
+        "train_knowledge_heal" => tool_train_knowledge_heal(input, kernel).await,
+        "train_evaluate" => tool_train_evaluate(input, kernel).await,
+        "user_profile" => tool_user_profile(input, workspace_root, sender_id).await,
 
         // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
         "web_fetch" => {
@@ -659,6 +673,139 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             name: "clone_evaluate".to_string(),
             description: "Evaluate the clone's quality with deterministic metrics. Returns a score (0-100) based on identity completeness, knowledge richness, skills, and knowledge quality.".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        // --- Cross-workspace training tools (for trainer agents) ---
+        ToolDefinition {
+            name: "train_read".to_string(),
+            description: "Read a file from a target clone's workspace. Used by trainer agents to inspect other clones.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone to read from"},
+                    "path": {"type": "string", "description": "File path relative to the target clone's workspace root"},
+                },
+                "required": ["target", "path"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_write".to_string(),
+            description: "Write a file to a target clone's workspace. Can modify any file including SOUL.md, system_prompt.md, agent.toml, and skills. Used by trainer agents to train other clones.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone to write to"},
+                    "path": {"type": "string", "description": "File path relative to the target clone's workspace root"},
+                    "content": {"type": "string", "description": "File content to write"},
+                },
+                "required": ["target", "path", "content"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_list".to_string(),
+            description: "List files in a target clone's workspace directory. Used by trainer agents to explore other clones.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone"},
+                    "path": {"type": "string", "description": "Directory path relative to the target clone's workspace root (default: '.')"},
+                },
+                "required": ["target"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_knowledge_add".to_string(),
+            description: "Add a knowledge entry to a target clone's knowledge base. The LLM trainer should process and structure the content before calling this.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone"},
+                    "title": {"type": "string", "description": "Knowledge entry title"},
+                    "content": {"type": "string", "description": "Knowledge content (structured, processed by LLM)"},
+                },
+                "required": ["target", "title", "content"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_knowledge_import".to_string(),
+            description: "Import bulk data into a target clone's knowledge base. Supports FAQ, chat logs, and document text.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone"},
+                    "data": {"type": "string", "description": "Raw data content to import"},
+                    "data_type": {"type": "string", "description": "Data format: 'faq', 'chat', 'document', or 'auto' (default: auto)"},
+                },
+                "required": ["target", "data"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_knowledge_list".to_string(),
+            description: "List knowledge files in a target clone's knowledge base.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone"},
+                },
+                "required": ["target"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_knowledge_read".to_string(),
+            description: "Read a specific knowledge file from a target clone's knowledge base.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone"},
+                    "filename": {"type": "string", "description": "Knowledge file name (e.g. 'rust-basics.md')"},
+                },
+                "required": ["target", "filename"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_knowledge_lint".to_string(),
+            description: "Check the knowledge base health of a target clone.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone"},
+                },
+                "required": ["target"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_knowledge_heal".to_string(),
+            description: "Auto-fix knowledge base issues in a target clone.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone"},
+                },
+                "required": ["target"],
+            }),
+        },
+        ToolDefinition {
+            name: "train_evaluate".to_string(),
+            description: "Evaluate a target clone's quality with deterministic metrics. Returns score (0-100), knowledge stats, skill count, and identity completeness.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Name of the target clone to evaluate"},
+                },
+                "required": ["target"],
+            }),
+        },
+        // --- User profile tool (multi-tenancy) ---
+        ToolDefinition {
+            name: "user_profile".to_string(),
+            description: "Read or update the current user's profile. The profile stores preferences, habits, and interaction patterns between this clone and a specific user. Requires a sender context (sender_id).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["read", "update"], "description": "Read the profile or update it with new key-value pairs"},
+                    "updates": {"type": "object", "description": "Key-value pairs to merge into the profile (only for action=update). Supported keys: display_name, preferences (object), interaction_patterns (object), notes (string)"},
+                },
+                "required": ["action"],
+            }),
         },
         // --- Web tools ---
         ToolDefinition {
@@ -1370,9 +1517,15 @@ async fn tool_file_read(
 async fn tool_file_write(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = resolve_file_path(raw_path, workspace_root)?;
+    let resolved = if let Some(root) = workspace_root {
+        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, sender_id)?
+    } else {
+        let _ = validate_path(raw_path)?;
+        PathBuf::from(raw_path)
+    };
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
@@ -1673,6 +1826,301 @@ async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> Result<String, St
         metrics.has_system_prompt,
         metrics.has_memory,
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Cross-workspace training tools (for trainer agents)
+// ---------------------------------------------------------------------------
+
+/// Resolve a target clone's workspace root via kernel.
+fn resolve_target_workspace(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<PathBuf, String> {
+    let kh = kernel.ok_or("train_* tools require kernel access")?;
+    let target = input["target"]
+        .as_str()
+        .ok_or("Missing 'target' parameter (target clone name)")?;
+    let target_workspace = kh
+        .resolve_agent_workspace(target)
+        .ok_or_else(|| format!("Agent '{}' not found or has no workspace", target))?;
+    let path = PathBuf::from(&target_workspace);
+    if !path.exists() {
+        return Err(format!("Workspace for '{}' does not exist: {}", target, target_workspace));
+    }
+    Ok(path)
+}
+
+async fn tool_train_read(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
+    let full_path = target_root.join(path);
+    if !full_path.starts_with(&target_root) {
+        return Err("Path traversal denied".to_string());
+    }
+    tokio::fs::read_to_string(&full_path)
+        .await
+        .map_err(|e| format!("Failed to read file: {e}"))
+}
+
+async fn tool_train_write(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
+    let content = input["content"]
+        .as_str()
+        .ok_or("Missing 'content' parameter")?;
+    let full_path = target_root.join(path);
+    if !full_path.starts_with(&target_root) {
+        return Err("Path traversal denied".to_string());
+    }
+    if let Some(parent) = full_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create directories: {e}"))?;
+    }
+    tokio::fs::write(&full_path, content)
+        .await
+        .map_err(|e| format!("Failed to write file: {e}"))?;
+    Ok(format!(
+        "Successfully wrote {} bytes to {}",
+        content.len(),
+        path
+    ))
+}
+
+async fn tool_train_list(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    let sub_path = input["path"].as_str().unwrap_or(".");
+    let full_path = target_root.join(sub_path);
+    if !full_path.starts_with(&target_root) {
+        return Err("Path traversal denied".to_string());
+    }
+    let mut entries = tokio::fs::read_dir(&full_path)
+        .await
+        .map_err(|e| format!("Failed to list directory: {e}"))?;
+    let mut files = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("Failed to read entry: {e}"))?
+    {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let metadata = entry.metadata().await;
+        let suffix = match metadata {
+            Ok(m) if m.is_dir() => "/",
+            _ => "",
+        };
+        files.push(format!("{name}{suffix}"));
+    }
+    files.sort();
+    Ok(files.join("\n"))
+}
+
+async fn tool_train_knowledge_add(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    let title = input["title"]
+        .as_str()
+        .ok_or("Missing 'title' parameter")?;
+    let content = input["content"]
+        .as_str()
+        .ok_or("Missing 'content' parameter")?;
+    let filename = opencarrier_lifecycle::evolution::sanitize_filename(title);
+    let knowledge_dir = target_root.join("data/knowledge");
+    tokio::fs::create_dir_all(&knowledge_dir)
+        .await
+        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+    let path = knowledge_dir.join(format!("{filename}.md"));
+    let full = format!(
+        "---\nname: {}\ndescription: {}\nconfidence: EXTRACTED\n---\n{}\n---\n",
+        title, title, content
+    );
+    tokio::fs::write(&path, &full)
+        .await
+        .map_err(|e| format!("Failed to write knowledge file: {e}"))?;
+    let _ = opencarrier_lifecycle::version::record_version(
+        &target_root,
+        "create",
+        &format!("{filename}.md"),
+        None,
+        Some(&full),
+        "train",
+    );
+    Ok(format!("Knowledge added to target: {filename}.md"))
+}
+
+async fn tool_train_knowledge_import(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    let data = input["data"]
+        .as_str()
+        .ok_or("Missing 'data' parameter")?;
+    let data_type = input["data_type"].as_str().unwrap_or("auto");
+    let result = opencarrier_lifecycle::parsers::parse_import_data(data, data_type)
+        .map_err(|e| format!("Parse failed: {e}"))?;
+    let knowledge_dir = target_root.join("data/knowledge");
+    tokio::fs::create_dir_all(&knowledge_dir)
+        .await
+        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+    let mut saved = Vec::new();
+    for entry in &result.entries {
+        let filename = opencarrier_lifecycle::evolution::sanitize_filename(&entry.title);
+        let path = knowledge_dir.join(format!("{filename}.md"));
+        let full = format!(
+            "---\nname: {}\ndescription: {}\nconfidence: INFERRED\n---\n{}\n---\n",
+            entry.title, entry.title, entry.content
+        );
+        tokio::fs::write(&path, &full)
+            .await
+            .map_err(|e| format!("Failed to write {}: {e}", filename))?;
+        saved.push(filename);
+    }
+    Ok(format!(
+        "Imported {} entries to target. Quality: {:?}",
+        saved.len(),
+        result.quality
+    ))
+}
+
+async fn tool_train_knowledge_list(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    tool_knowledge_list(Some(&target_root)).await
+}
+
+async fn tool_train_knowledge_read(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    tool_knowledge_read(input, Some(&target_root)).await
+}
+
+async fn tool_train_knowledge_lint(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    tool_knowledge_lint(Some(&target_root)).await
+}
+
+async fn tool_train_knowledge_heal(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    tool_knowledge_heal(Some(&target_root)).await
+}
+
+async fn tool_train_evaluate(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let target_root = resolve_target_workspace(input, kernel)?;
+    tool_clone_evaluate(Some(&target_root)).await
+}
+
+// ---------------------------------------------------------------------------
+// User profile tool (multi-tenancy)
+// ---------------------------------------------------------------------------
+
+async fn tool_user_profile(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
+) -> Result<String, String> {
+    let sender = sender_id.ok_or("user_profile requires a sender context (sender_id). This tool is only available when a user identity is provided.")?;
+    let root = workspace_root.ok_or("user_profile requires a workspace root")?;
+
+    let action = input["action"].as_str().unwrap_or("read");
+    let profile_path = root.join("users").join(sender).join("profile.json");
+
+    match action {
+        "read" => {
+            if profile_path.exists() {
+                let content = tokio::fs::read_to_string(&profile_path)
+                    .await
+                    .map_err(|e| format!("Failed to read profile: {e}"))?;
+                Ok(content)
+            } else {
+                // Return empty profile template
+                let template = serde_json::json!({
+                    "sender_id": sender,
+                    "display_name": null,
+                    "preferences": {},
+                    "interaction_patterns": {},
+                    "notes": null,
+                    "conversation_count": 0,
+                    "first_seen": null,
+                    "last_seen": null,
+                });
+                Ok(serde_json::to_string_pretty(&template)
+                    .unwrap_or_else(|_| "{}".to_string()))
+            }
+        }
+        "update" => {
+            // Load existing profile or create new
+            let mut profile: serde_json::Value = if profile_path.exists() {
+                let content = tokio::fs::read_to_string(&profile_path)
+                    .await
+                    .map_err(|e| format!("Failed to read profile: {e}"))?;
+                serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+            } else {
+                serde_json::json!({
+                    "sender_id": sender,
+                    "conversation_count": 0,
+                    "first_seen": chrono::Utc::now().to_rfc3339(),
+                })
+            };
+
+            // Ensure sender_id is set
+            profile["sender_id"] = serde_json::Value::String(sender.to_string());
+            profile["last_seen"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
+
+            // Merge updates
+            if let Some(updates) = input.get("updates").and_then(|u| u.as_object()) {
+                for (key, value) in updates {
+                    // Only allow known safe keys
+                    match key.as_str() {
+                        "display_name" | "preferences" | "interaction_patterns" | "notes" => {
+                            profile[key] = value.clone();
+                        }
+                        _ => {} // ignore unknown keys
+                    }
+                }
+            }
+
+            // Ensure directory exists
+            if let Some(parent) = profile_path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| format!("Failed to create user directory: {e}"))?;
+            }
+
+            let output = serde_json::to_string_pretty(&profile)
+                .map_err(|e| format!("Failed to serialize profile: {e}"))?;
+            tokio::fs::write(&profile_path, &output)
+                .await
+                .map_err(|e| format!("Failed to write profile: {e}"))?;
+            Ok(format!("Profile updated for user '{}'", sender))
+        }
+        _ => Err(format!("Unknown action '{}'. Use 'read' or 'update'.", action)),
+    }
 }
 
 /// Fuzzy-match a knowledge file by name (exact → prefix → substring).
@@ -3646,6 +4094,12 @@ mod tests {
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        // Training tools (cross-workspace)
+        assert!(names.contains(&"train_read"), "Missing train_read in: {:?}", names);
+        assert!(names.contains(&"train_write"), "Missing train_write");
+        assert!(names.contains(&"train_list"), "Missing train_list");
+        assert!(names.contains(&"train_knowledge_add"), "Missing train_knowledge_add");
+        assert!(names.contains(&"train_evaluate"), "Missing train_evaluate");
         // Original 12
         assert!(names.contains(&"file_read"));
         assert!(names.contains(&"shell_exec"));
@@ -3756,6 +4210,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(
@@ -3785,6 +4240,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3811,6 +4267,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3837,6 +4294,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3863,6 +4321,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         // web_search now attempts a real fetch; may succeed or fail depending on network
@@ -3889,6 +4348,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3915,6 +4375,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3942,6 +4403,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3973,6 +4435,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         // Should fail for file-not-found, NOT for permission denied
@@ -4018,6 +4481,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         // Should NOT be "Permission denied" — it should normalize to file_write
@@ -4051,6 +4515,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -4220,6 +4685,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -4265,6 +4731,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
