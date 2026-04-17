@@ -6717,6 +6717,22 @@ impl KernelHandle for OpenCarrierKernel {
     async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
         use opencarrier_clone::{load_agx, install_clone_to_workspace, convert_to_manifest};
 
+        // Validate name: only lowercase alphanumeric and hyphens
+        if name.is_empty() || name.len() > 64 || name.starts_with('-') || name.ends_with('-')
+            || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(format!(
+                "Invalid clone name '{}': must be 1-64 lowercase alphanumeric/hyphen characters",
+                name
+            ));
+        }
+
+        // Verify workspace path doesn't escape workspaces root
+        let workspace_dir = self.config.effective_workspaces_dir().join(name);
+        if !workspace_dir.starts_with(self.config.effective_workspaces_dir()) {
+            return Err("Path traversal denied".to_string());
+        }
+
         // Write uploaded bytes to temp file
         let tmp_dir = std::env::temp_dir().join(format!("opencarrier-clone-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
@@ -6730,18 +6746,19 @@ impl KernelHandle for OpenCarrierKernel {
         })?;
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
-        // Override name if caller specified one
-        let clone_name = if name.is_empty() { clone_data.name.clone() } else { name.to_string() };
+        let clone_name = name.to_string();
 
         // Check for name collision
         if self.registry.find_by_name(&clone_name).is_some() {
             return Err(format!("Agent '{}' already exists", clone_name));
         }
 
-        // Create workspace directory
-        let workspace_dir = self.config.effective_workspaces_dir().join(&clone_name);
-        if workspace_dir.exists() {
-            return Err(format!("Workspace for '{}' already exists", clone_name));
+        // Atomically create workspace directory (fails if already exists)
+        if let Err(e) = std::fs::create_dir(&workspace_dir) {
+            return Err(format!(
+                "Workspace for '{}' already exists or cannot be created: {e}",
+                clone_name
+            ));
         }
 
         // Install clone files to workspace
@@ -6790,22 +6807,21 @@ impl KernelHandle for OpenCarrierKernel {
         let profile = read_file(&workspace.join("profile.md"));
 
         // Read template.json
-        let manifest: Option<opencarrier_clone::TemplateManifest> = None; // Not stored separately
+        // Read template.json if present (written during install)
+        let manifest = workspace.join("template.json")
+            .exists()
+            .then(|| {
+                std::fs::read_to_string(workspace.join("template.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<opencarrier_clone::TemplateManifest>(&s).ok())
+            })
+            .flatten();
 
-        // Read knowledge/
+        // Read knowledge/ (recursive)
         let mut knowledge = HashMap::new();
         let knowledge_dir = workspace.join("data").join("knowledge");
         if knowledge_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&knowledge_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map(|e| e == "md").unwrap_or(false) {
-                        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-                            knowledge.insert(fname.to_string(), read_file(&path));
-                        }
-                    }
-                }
-            }
+            collect_files_recursive(&knowledge_dir, &knowledge_dir, &mut knowledge);
         }
 
         // Read skills/
@@ -6819,7 +6835,7 @@ impl KernelHandle for OpenCarrierKernel {
                         let skill_md_path = skill_path.join("SKILL.md");
                         if skill_md_path.exists() {
                             let content = read_file(&skill_md_path);
-                            let (fm, body) = parse_frontmatter_simple(&content);
+                            let (fm, body) = opencarrier_clone::parse_frontmatter(&content);
                             let skill_name = fm.get("name")
                                 .cloned()
                                 .unwrap_or_else(|| {
@@ -6827,7 +6843,7 @@ impl KernelHandle for OpenCarrierKernel {
                                 });
                             let when_to_use = fm.get("when_to_use").cloned().unwrap_or_default();
                             let allowed_tools = fm.get("allowed_tools")
-                                .map(|s| parse_string_array_simple(s))
+                                .map(|s| opencarrier_clone::parse_string_array(s))
                                 .unwrap_or_default();
 
                             // Read scripts
@@ -6843,7 +6859,7 @@ impl KernelHandle for OpenCarrierKernel {
                                                 .and_then(|n| n.to_str())
                                                 .unwrap_or("unknown")
                                                 .to_string();
-                                            let desc = extract_toml_description(&toml_content);
+                                            let desc = opencarrier_clone::parse_toml_description(&toml_content);
                                             scripts.push(SkillScriptData {
                                                 name: script_name,
                                                 description: desc,
@@ -6876,14 +6892,14 @@ impl KernelHandle for OpenCarrierKernel {
                     let path = entry.path();
                     if path.extension().map(|e| e == "md").unwrap_or(false) {
                         let content = read_file(&path);
-                        let (fm, body) = parse_frontmatter_simple(&content);
+                        let (fm, body) = opencarrier_clone::parse_frontmatter(&content);
                         let agent_name = fm.get("name").cloned().unwrap_or_else(|| {
                             path.file_stem().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
                         });
                         agents.push(AgentData {
                             name: agent_name,
                             description: fm.get("description").cloned().unwrap_or_default(),
-                            tools: fm.get("tools").map(|s| parse_string_array_simple(s)).unwrap_or_default(),
+                            tools: fm.get("tools").map(|s| opencarrier_clone::parse_string_array(s)).unwrap_or_default(),
                             model: fm.get("model").cloned().unwrap_or_else(|| "sonnet".to_string()),
                             color: fm.get("color").cloned(),
                             prompt: body.trim().to_string(),
@@ -6909,10 +6925,28 @@ impl KernelHandle for OpenCarrierKernel {
             }
         }
 
+        // Extract description from profile.md frontmatter
+        let description = if profile.starts_with("---") {
+            if let Some(end) = profile[3..].find("---") {
+                let fm = &profile[3..3 + end];
+                fm.lines()
+                    .find_map(|line| {
+                        let trimmed = line.trim();
+                        trimmed.strip_prefix("description:")
+                            .map(|v| v.trim().trim_matches('"').to_string())
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
         let clone_data = CloneData {
             manifest,
             name: name.to_string(),
-            description: String::new(),
+            description,
             soul,
             system_prompt,
             memory_index,
@@ -6960,59 +6994,27 @@ impl KernelHandle for OpenCarrierKernel {
 }
 
 /// Simple frontmatter parser for clone_export — extracts key: value pairs.
-fn parse_frontmatter_simple(content: &str) -> (std::collections::HashMap<String, String>, String) {
-    let mut map = std::collections::HashMap::new();
-    if !content.starts_with("---") {
-        return (map, content.to_string());
-    }
-    let rest = &content[3..];
-    let Some(end) = rest.find("---") else {
-        return (map, content.to_string());
-    };
-    let frontmatter = &rest[..end];
-    let body = &rest[end + 3..];
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(colon_pos) = trimmed.find(':') {
-            let key = trimmed[..colon_pos].trim().to_string();
-            let val = trimmed[colon_pos + 1..].trim().trim_matches('"').to_string();
-            if !key.is_empty() {
-                map.insert(key, val);
-            }
-        }
-    }
-    (map, body.to_string())
-}
-
-/// Parse a string like `["tool1", "tool2"]` into a Vec.
-fn parse_string_array_simple(s: &str) -> Vec<String> {
-    let s = s.trim();
-    if !s.starts_with('[') {
-        return vec![s.trim_matches('"').to_string()];
-    }
-    s.trim_start_matches('[')
-        .trim_end_matches(']')
-        .split(',')
-        .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
-}
-
-/// Extract description from a TOML script file.
-fn extract_toml_description(content: &str) -> String {
-    for line in content.lines() {
-        if let Some(val) = line.trim().strip_prefix("description") {
-            if let Some(val) = val.trim_start_matches('=').trim().strip_prefix('"') {
-                if let Some(val) = val.strip_suffix('"') {
-                    return val.to_string();
+/// Recursively collect .md files under `dir`, storing relative paths from `base`.
+fn collect_files_recursive(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    result: &mut std::collections::HashMap<String, String>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_files_recursive(&path, base, result);
+            } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+                if let Ok(relative) = path.strip_prefix(base) {
+                    if let Some(rel_str) = relative.to_str() {
+                        let content = std::fs::read_to_string(&path).unwrap_or_default();
+                        result.insert(rel_str.to_string(), content);
+                    }
                 }
             }
         }
     }
-    String::new()
 }
 
 // --- OFP Wire Protocol integration (DISABLED - P2P removed) ---

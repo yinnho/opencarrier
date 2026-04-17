@@ -394,6 +394,12 @@ pub fn pack_agx(data: &CloneData) -> Result<Vec<u8>> {
             let content = format_skill_md(skill);
             let path = format!("skills/{}.md", skill.name);
             append_file(&mut tar, &path, content.as_bytes())?;
+
+            // Write scripts if any
+            for script in &skill.scripts {
+                let script_path = format!("skills/{}/scripts/{}.toml", skill.name, script.name);
+                append_file(&mut tar, &script_path, script.toml_content.as_bytes())?;
+            }
         }
 
         // agents/*.md
@@ -431,7 +437,9 @@ fn format_skill_md(skill: &SkillData) -> String {
     buf.push_str("---\n");
     buf.push_str(&format!("name: {}\n", skill.name));
     buf.push_str(&format!("when_to_use: {}\n", skill.when_to_use));
-    buf.push_str(&format!("allowed_tools: {:?}\n", skill.allowed_tools));
+    if !skill.allowed_tools.is_empty() {
+        buf.push_str(&format!("allowed_tools: {}\n", format_string_array(&skill.allowed_tools)));
+    }
     buf.push_str("---\n\n");
     buf.push_str(&skill.prompt);
     buf
@@ -443,7 +451,7 @@ fn format_agent_md(agent: &AgentData) -> String {
     buf.push_str(&format!("name: {}\n", agent.name));
     buf.push_str(&format!("description: {}\n", agent.description));
     if !agent.tools.is_empty() {
-        buf.push_str(&format!("tools: {:?}\n", agent.tools));
+        buf.push_str(&format!("tools: {}\n", format_string_array(&agent.tools)));
     }
     if !agent.model.is_empty() {
         buf.push_str(&format!("model: {}\n", agent.model));
@@ -456,8 +464,14 @@ fn format_agent_md(agent: &AgentData) -> String {
     buf
 }
 
+/// Format a string slice as `["a", "b"]` — safe for YAML frontmatter.
+pub fn format_string_array(items: &[String]) -> String {
+    let quoted: Vec<String> = items.iter().map(|s| format!("\"{}\"", s.replace('"', "\\\""))).collect();
+    format!("[{}]", quoted.join(", "))
+}
+
 /// Parse YAML frontmatter from markdown content.
-fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
+pub fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
     let mut map = HashMap::new();
     if !content.starts_with("---") {
         return (map, content.to_string());
@@ -513,7 +527,7 @@ fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
 }
 
 /// Parse a string like `["tool1", "tool2"]` or `["tool1","tool2"]` into a Vec.
-fn parse_string_array(s: &str) -> Vec<String> {
+pub fn parse_string_array(s: &str) -> Vec<String> {
     let s = s.trim();
     if !s.starts_with('[') {
         return vec![s.trim_matches('"').to_string()];
@@ -528,7 +542,7 @@ fn parse_string_array(s: &str) -> Vec<String> {
 }
 
 /// Extract description from a TOML script file.
-fn parse_toml_description(content: &str) -> String {
+pub fn parse_toml_description(content: &str) -> String {
     for line in content.lines() {
         if let Some(val) = line.trim().strip_prefix("description") {
             if let Some(val) = val.trim_start_matches('=').trim().strip_prefix('"') {

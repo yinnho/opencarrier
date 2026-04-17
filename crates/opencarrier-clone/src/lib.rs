@@ -7,5 +7,5 @@ mod loader;
 mod converter;
 pub mod hub;
 
-pub use loader::{CloneData, load_agx, pack_agx, SkillData, SkillScriptData, AgentData, TemplateManifest};
+pub use loader::{CloneData, load_agx, pack_agx, SkillData, SkillScriptData, AgentData, TemplateManifest, format_string_array, parse_frontmatter, parse_string_array, parse_toml_description};
 pub use converter::{convert_to_manifest, install_clone_to_workspace};
