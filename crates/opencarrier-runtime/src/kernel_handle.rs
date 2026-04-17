@@ -257,6 +257,16 @@ pub trait KernelHandle: Send + Sync {
         Err("Clone export not available".to_string())
     }
 
+    /// Publish a clone to Hub. Returns the Hub template ID.
+    async fn clone_publish(
+        &self,
+        name: &str,
+        agx_bytes: &[u8],
+    ) -> Result<String, String> {
+        let _ = (name, agx_bytes);
+        Err("Clone publish not available".to_string())
+    }
+
     /// Spawn an agent with capability inheritance enforcement.
     /// `parent_caps` are the parent's granted capabilities. The kernel MUST verify
     /// that every capability in the child manifest is covered by `parent_caps`.

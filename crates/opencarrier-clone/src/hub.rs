@@ -158,6 +158,54 @@ pub fn read_api_key(env_var: &str) -> Result<String> {
     ))
 }
 
+/// Publish (upload) a clone .agx to Hub.
+/// Uses multipart form upload with API key auth.
+pub async fn publish(
+    hub_url: &str,
+    api_key: &str,
+    name: &str,
+    agx_bytes: &[u8],
+    version: &str,
+    description: &str,
+    tags: &[String],
+) -> Result<String> {
+    let base = hub_url.trim_end_matches('/');
+    let url = format!("{}/api/templates", base);
+
+    let file_part = reqwest::multipart::Part::bytes(agx_bytes.to_vec())
+        .file_name(format!("{}.agx", name))
+        .mime_str("application/gzip")
+        .context("Failed to set MIME type")?;
+
+    let mut form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("name", name.to_string())
+        .text("version", version.to_string())
+        .text("description", description.to_string());
+
+    for tag in tags {
+        form = form.text("tags[]", tag.clone());
+    }
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(api_key)
+        .multipart(form)
+        .send()
+        .await
+        .context("无法连接 Hub")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("发布失败: {} — {}", status, body);
+    }
+
+    let body: serde_json::Value = resp.json().await.context("解析 Hub 响应失败")?;
+    let template_id = body["id"].as_str().unwrap_or("unknown");
+    Ok(template_id.to_string())
+}
+
 fn format_stars(avg: f64) -> String {
     let full = (avg / 1.0).round() as i32;
     (0..5)
