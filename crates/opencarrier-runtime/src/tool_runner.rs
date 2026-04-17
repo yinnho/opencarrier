@@ -10,7 +10,7 @@ use opencarrier_skills::registry::SkillRegistry;
 use opencarrier_types::taint::{TaintLabel, TaintSink, TaintedValue};
 use opencarrier_types::tool::{ToolDefinition, ToolResult};
 use opencarrier_types::tool_compat::normalize_tool_name;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -203,6 +203,10 @@ pub async fn execute_tool(
         "train_knowledge_heal" => tool_train_knowledge_heal(input, kernel).await,
         "train_evaluate" => tool_train_evaluate(input, kernel).await,
         "user_profile" => tool_user_profile(input, workspace_root, sender_id).await,
+
+        // Clone management tools
+        "clone_install" => tool_clone_install(input, kernel).await,
+        "clone_export" => tool_clone_export(input, kernel).await,
 
         // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
         "web_fetch" => {
@@ -1463,6 +1467,34 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": []
             }),
         },
+        // --- Clone management tools (system-level install/export) ---
+        ToolDefinition {
+            name: "clone_install".to_string(),
+            description: "Install a new clone from file contents. The system handles packaging into .agx format and spawning. No shell access needed.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Clone name (lowercase, hyphens, e.g. 'customer-support')"},
+                    "files": {
+                        "type": "object",
+                        "description": "File contents keyed by path. Required: SOUL.md, system_prompt.md. Optional: profile.md, MEMORY.md, EVOLUTION.md, knowledge/*.md, skills/*.md, agents/*.md, style/*.md",
+                        "additionalProperties": {"type": "string"}
+                    }
+                },
+                "required": ["name", "files"]
+            }),
+        },
+        ToolDefinition {
+            name: "clone_export".to_string(),
+            description: "Export an installed clone as a downloadable .agx archive. Returns the file size and a download path.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the installed clone to export"}
+                },
+                "required": ["name"]
+            }),
+        },
         // --- Canvas / A2UI tool ---
         ToolDefinition {
             name: "canvas_present".to_string(),
@@ -2121,6 +2153,205 @@ async fn tool_user_profile(
         }
         _ => Err(format!("Unknown action '{}'. Use 'read' or 'update'.", action)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Clone management tools
+// ---------------------------------------------------------------------------
+
+async fn tool_clone_install(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
+) -> Result<String, String> {
+    let kernel = kernel.ok_or("clone_install requires kernel access")?;
+    let name = input["name"].as_str()
+        .ok_or("Missing 'name' parameter")?
+        .to_string();
+
+    let files = input.get("files")
+        .and_then(|v| v.as_object())
+        .ok_or("Missing 'files' parameter (must be a JSON object of path→content)")?;
+
+    if files.is_empty() {
+        return Err("No files provided. At minimum, SOUL.md and system_prompt.md are required.".to_string());
+    }
+
+    // Build CloneData from the file map
+    use opencarrier_clone::{CloneData, SkillData, AgentData, pack_agx};
+    use std::collections::HashMap;
+
+    let soul = files.get("SOUL.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
+    let system_prompt = files.get("system_prompt.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
+    let memory_index = files.get("MEMORY.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
+    let profile = files.get("profile.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
+    let evolution = files.get("EVOLUTION.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
+
+    if soul.is_empty() {
+        return Err("SOUL.md is required in files".to_string());
+    }
+    if system_prompt.is_empty() {
+        return Err("system_prompt.md is required in files".to_string());
+    }
+
+    // Parse knowledge files
+    let mut knowledge = HashMap::new();
+    for (path, val) in files {
+        if path.starts_with("knowledge/") && path.ends_with(".md") {
+            let filename = path.strip_prefix("knowledge/").unwrap_or(path);
+            knowledge.insert(filename.to_string(), val.as_str().unwrap_or("").to_string());
+        }
+    }
+
+    // Parse skills (simple: skills/<name>.md files with frontmatter)
+    let mut skills = Vec::new();
+    for (path, val) in files {
+        if path.starts_with("skills/") && path.ends_with(".md") {
+            let content = val.as_str().unwrap_or("");
+            let (fm, body) = parse_simple_frontmatter(content);
+            let skill_name = fm.get("name")
+                .cloned()
+                .unwrap_or_else(|| {
+                    path.strip_prefix("skills/")
+                        .unwrap_or(path)
+                        .strip_suffix(".md")
+                        .unwrap_or("unknown")
+                        .to_string()
+                });
+            skills.push(SkillData {
+                name: skill_name,
+                when_to_use: fm.get("when_to_use").cloned().unwrap_or_default(),
+                allowed_tools: fm.get("allowed_tools")
+                    .map(|s| parse_simple_string_array(s))
+                    .unwrap_or_default(),
+                prompt: body.trim().to_string(),
+                scripts: Vec::new(),
+            });
+        }
+    }
+
+    // Parse agents
+    let mut agents = Vec::new();
+    for (path, val) in files {
+        if path.starts_with("agents/") && path.ends_with(".md") {
+            let content = val.as_str().unwrap_or("");
+            let (fm, body) = parse_simple_frontmatter(content);
+            agents.push(AgentData {
+                name: fm.get("name").cloned().unwrap_or_else(|| {
+                    path.strip_prefix("agents/")
+                        .unwrap_or(path)
+                        .strip_suffix(".md")
+                        .unwrap_or("unknown")
+                        .to_string()
+                }),
+                description: fm.get("description").cloned().unwrap_or_default(),
+                tools: fm.get("tools").map(|s| parse_simple_string_array(s)).unwrap_or_default(),
+                model: fm.get("model").cloned().unwrap_or_else(|| "sonnet".to_string()),
+                color: fm.get("color").cloned(),
+                prompt: body.trim().to_string(),
+            });
+        }
+    }
+
+    // Parse style
+    let mut style = HashMap::new();
+    for (path, val) in files {
+        if path.starts_with("style/") && path.ends_with(".md") {
+            let filename = path.strip_prefix("style/").unwrap_or(path);
+            style.insert(filename.to_string(), val.as_str().unwrap_or("").to_string());
+        }
+    }
+
+    let clone_data = CloneData {
+        manifest: None,
+        name: name.clone(),
+        description: String::new(),
+        soul,
+        system_prompt,
+        memory_index,
+        knowledge,
+        skills,
+        profile,
+        security_warnings: Vec::new(),
+        agents,
+        evolution,
+        style,
+    };
+
+    // Pack into .agx bytes
+    let agx_bytes = pack_agx(&clone_data)
+        .map_err(|e| format!("Failed to pack .agx: {e}"))?;
+
+    // Install via kernel
+    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes).await?;
+
+    Ok(format!(
+        "Clone '{}' installed successfully. Agent ID: {}. {} knowledge files, {} skills, {} agents.",
+        agent_name, agent_id,
+        clone_data.knowledge.len(),
+        clone_data.skills.len(),
+        clone_data.agents.len(),
+    ))
+}
+
+async fn tool_clone_export(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
+) -> Result<String, String> {
+    let kernel = kernel.ok_or("clone_export requires kernel access")?;
+    let name = input["name"].as_str()
+        .ok_or("Missing 'name' parameter")?
+        .to_string();
+
+    let agx_bytes = kernel.clone_export(&name)?;
+
+    Ok(format!(
+        "Clone '{}' exported as .agx archive ({} bytes / {:.1} KB). The archive contains all workspace files: SOUL.md, system_prompt.md, knowledge/, skills/, agents/, style/, EVOLUTION.md.",
+        name,
+        agx_bytes.len(),
+        agx_bytes.len() as f64 / 1024.0,
+    ))
+}
+
+/// Simple frontmatter parser for tool_clone_install.
+fn parse_simple_frontmatter(content: &str) -> (HashMap<String, String>, String) {
+    let mut map = HashMap::new();
+    if !content.starts_with("---") {
+        return (map, content.to_string());
+    }
+    let rest = &content[3..];
+    let Some(end) = rest.find("---") else {
+        return (map, content.to_string());
+    };
+    let frontmatter = &rest[..end];
+    let body = &rest[end + 3..];
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(colon_pos) = trimmed.find(':') {
+            let key = trimmed[..colon_pos].trim().to_string();
+            let val = trimmed[colon_pos + 1..].trim().trim_matches('"').to_string();
+            if !key.is_empty() {
+                map.insert(key, val);
+            }
+        }
+    }
+    (map, body.to_string())
+}
+
+/// Parse a string like `["tool1", "tool2"]` into a Vec.
+fn parse_simple_string_array(s: &str) -> Vec<String> {
+    let s = s.trim();
+    if !s.starts_with('[') {
+        return vec![s.trim_matches('"').to_string()];
+    }
+    s.trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
 }
 
 /// Fuzzy-match a knowledge file by name (exact → prefix → substring).

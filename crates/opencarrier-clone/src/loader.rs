@@ -6,11 +6,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 /// Parsed template.json from the .agx archive.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TemplateManifest {
     #[serde(default)]
@@ -341,6 +342,118 @@ fn parse_agent_file(path: &str, content: &str) -> Option<AgentData> {
         color,
         prompt,
     })
+}
+
+/// Pack CloneData into .agx bytes (tar.gz).
+pub fn pack_agx(data: &CloneData) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    {
+        let enc = GzEncoder::new(&mut buf, flate2::Compression::default());
+        let mut tar = tar::Builder::new(enc);
+
+        // template.json
+        if let Some(ref manifest) = data.manifest {
+            let json = serde_json::to_string_pretty(manifest)
+                .context("Failed to serialize template.json")?;
+            append_file(&mut tar, "template.json", json.as_bytes())?;
+        }
+
+        // profile.md
+        if !data.profile.is_empty() {
+            append_file(&mut tar, "profile.md", data.profile.as_bytes())?;
+        }
+
+        // SOUL.md
+        if !data.soul.is_empty() {
+            append_file(&mut tar, "SOUL.md", data.soul.as_bytes())?;
+        }
+
+        // system_prompt.md
+        if !data.system_prompt.is_empty() {
+            append_file(&mut tar, "system_prompt.md", data.system_prompt.as_bytes())?;
+        }
+
+        // MEMORY.md
+        if !data.memory_index.is_empty() {
+            append_file(&mut tar, "MEMORY.md", data.memory_index.as_bytes())?;
+        }
+
+        // EVOLUTION.md
+        if !data.evolution.is_empty() {
+            append_file(&mut tar, "EVOLUTION.md", data.evolution.as_bytes())?;
+        }
+
+        // knowledge/*.md
+        for (name, content) in &data.knowledge {
+            let path = format!("knowledge/{}", name);
+            append_file(&mut tar, &path, content.as_bytes())?;
+        }
+
+        // skills/*.md (with scripts)
+        for skill in &data.skills {
+            let content = format_skill_md(skill);
+            let path = format!("skills/{}.md", skill.name);
+            append_file(&mut tar, &path, content.as_bytes())?;
+        }
+
+        // agents/*.md
+        for agent in &data.agents {
+            let content = format_agent_md(agent);
+            let path = format!("agents/{}.md", agent.name);
+            append_file(&mut tar, &path, content.as_bytes())?;
+        }
+
+        // style/*.md
+        for (name, content) in &data.style {
+            let path = format!("style/{}", name);
+            append_file(&mut tar, &path, content.as_bytes())?;
+        }
+
+        tar.into_inner()
+            .context("Failed to finalize tar archive")?
+            .finish()
+            .context("Failed to finalize gzip")?;
+    }
+    Ok(buf)
+}
+
+fn append_file<W: std::io::Write>(tar: &mut tar::Builder<W>, path: &str, data: &[u8]) -> Result<()> {
+    let mut header = tar::Header::new_gnu();
+    header.set_size(data.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, path, data)
+        .with_context(|| format!("Failed to add {} to archive", path))
+}
+
+fn format_skill_md(skill: &SkillData) -> String {
+    let mut buf = String::new();
+    buf.push_str("---\n");
+    buf.push_str(&format!("name: {}\n", skill.name));
+    buf.push_str(&format!("when_to_use: {}\n", skill.when_to_use));
+    buf.push_str(&format!("allowed_tools: {:?}\n", skill.allowed_tools));
+    buf.push_str("---\n\n");
+    buf.push_str(&skill.prompt);
+    buf
+}
+
+fn format_agent_md(agent: &AgentData) -> String {
+    let mut buf = String::new();
+    buf.push_str("---\n");
+    buf.push_str(&format!("name: {}\n", agent.name));
+    buf.push_str(&format!("description: {}\n", agent.description));
+    if !agent.tools.is_empty() {
+        buf.push_str(&format!("tools: {:?}\n", agent.tools));
+    }
+    if !agent.model.is_empty() {
+        buf.push_str(&format!("model: {}\n", agent.model));
+    }
+    if let Some(ref color) = agent.color {
+        buf.push_str(&format!("color: {}\n", color));
+    }
+    buf.push_str("---\n\n");
+    buf.push_str(&agent.prompt);
+    buf
 }
 
 /// Parse YAML frontmatter from markdown content.

@@ -245,6 +245,18 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
+    /// Install a clone from raw .agx bytes. Returns (agent_id, agent_name).
+    async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
+        let _ = (name, agx_data);
+        Err("Clone install not available".to_string())
+    }
+
+    /// Export an installed clone as .agx bytes.
+    fn clone_export(&self, name: &str) -> Result<Vec<u8>, String> {
+        let _ = name;
+        Err("Clone export not available".to_string())
+    }
+
     /// Spawn an agent with capability inheritance enforcement.
     /// `parent_caps` are the parent's granted capabilities. The kernel MUST verify
     /// that every capability in the child manifest is covered by `parent_caps`.

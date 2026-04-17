@@ -1,9 +1,7 @@
 ---
 name: clone-generate
 when_to_use: 用户要求创建一个新的分身，或描述了一个需要分身来完成的需求
-allowed_tools: ["file_write", "file_read", "file_list", "shell_exec", "web_fetch", "knowledge_lint", "clone_evaluate"]
-version: 2
-usage_count: 0
+allowed_tools: ["file_write", "file_read", "file_list", "clone_install", "clone_export", "web_fetch", "knowledge_lint", "clone_evaluate"]
 ---
 
 # 分身生成技能
@@ -26,27 +24,17 @@ usage_count: 0
 
 ### 2. 文件生成
 
-信息收集完毕后，按以下结构生成文件：
+信息收集完毕后，使用 `clone_install` 工具一次性安装。需要准备以下文件内容：
 
-```
-/tmp/<clone-name>/
-├── template.json
-├── profile.md
-├── SOUL.md
-├── system_prompt.md
-├── MEMORY.md
-├── EVOLUTION.md
-├── knowledge/
-│   └── *.md          # 每个文件使用双层格式 + 完整 frontmatter
-├── skills/
-│   └── *.md
-├── agents/            (可选，复杂分身需要子代理时)
-│   └── *.md
-└── style/            (可选，如有风格数据)
-    └── *.md
-```
-
-使用 file_write 工具写入每个文件。
+- **SOUL.md**（必需）：人格定义
+- **system_prompt.md**（必需）：行为指令
+- **profile.md**（可选）：基本信息
+- **MEMORY.md**（可选）：初始知识索引
+- **EVOLUTION.md**（推荐）：进化策略
+- **knowledge/*.md**：知识文件（路径以 `knowledge/` 开头）
+- **skills/*.md**：技能文件（路径以 `skills/` 开头）
+- **agents/*.md**：子代理（路径以 `agents/` 开头，可选）
+- **style/*.md**：风格文件（路径以 `style/` 开头，可选）
 
 #### 知识文件格式（严格遵守）
 
@@ -76,6 +64,18 @@ status: active
 - `description` — 一句话概括内容
 - 第二个 `---` 分隔符 — 分隔编译层和时间线
 
+#### 技能文件格式
+
+```markdown
+---
+name: <技能名>
+when_to_use: <明确的触发条件>
+allowed_tools: ["tool1", "tool2"]
+---
+
+<技能 prompt 正文>
+```
+
 #### EVOLUTION.md 格式
 
 ```markdown
@@ -100,55 +100,60 @@ feedback_to_hub: false
 - 销售分身：`conservative`，提取话术和异议处理
 - 研究/创意分身：`aggressive`，广泛提取相关知识
 
-### 3. 打包
+### 3. 安装
 
-```bash
-cd /tmp && tar czf <clone-name>.agx -C <clone-name> .
+使用 `clone_install` 工具一次性完成打包和安装：
+
+```json
+{
+  "name": "<clone-name>",
+  "files": {
+    "SOUL.md": "<人格内容>",
+    "system_prompt.md": "<系统指令内容>",
+    "profile.md": "<基本信息>",
+    "EVOLUTION.md": "<进化策略>",
+    "knowledge/faq.md": "<FAQ 知识内容>",
+    "skills/answer.md": "<技能定义内容>"
+  }
+}
 ```
 
-### 4. 安装
+系统会自动完成：
+1. 打包为 .agx 格式
+2. 创建工作区
+3. 安装所有文件
+4. 启动分身 agent
 
-将 .agx 文件 base64 编码后通过 API 安装：
+**不需要 `shell_exec`，不需要 `tar`，不需要 `curl`。**
 
-```bash
-BASE64_DATA=$(base64 -i /tmp/<clone-name>.agx)
-curl -s -X POST http://localhost:4200/api/clones/install \
-  -H "Content-Type: application/json" \
-  -d "{\"data\": \"$BASE64_DATA\"}"
-```
+### 4. 安装后验证
 
-或者如果需要指定用户：
-```bash
-curl -s -X POST http://localhost:4200/api/clones/install \
-  -H "Content-Type: application/json" \
-  -d "{\"data\": \"$BASE64_DATA\", \"user_id\": \"<user_id>\"}"
-```
+安装成功后，执行质量评估：
 
-### 5. 安装后验证
+使用 `clone_evaluate` 工具评估分身质量得分。
 
-安装成功后，执行健康检查和质量评估：
-
-```bash
-# 检查知识库健康状态
-curl -s http://localhost:4200/api/clones/<name>/health
-
-# 评估分身质量得分
-curl -s http://localhost:4200/api/clones/<name>/evaluate
-```
-
-### 6. 确认
+### 5. 确认
 
 安装和验证完成后告诉用户：
 - 分身名称和 ID
-- 质量评分（来自 evaluate）
-- 如有健康问题，列出需要修复的项
-- 可以通过 `/api/clones` 查看已安装分身
-- 可以通过 `/api/clones/<name>/start` 启动分身
+- 质量评分（来自 clone_evaluate）
+- 如有健康问题，使用 `knowledge_lint` 检查并列出需要修复的项
 - 分身运行后会自动学习新知识（evolution），自动优化（compile）
+
+## 导出已有分身
+
+如果用户要求导出已安装的分身，使用 `clone_export` 工具：
+
+```json
+{
+  "name": "<clone-name>"
+}
+```
+
+返回 .agx 归档信息。
 
 ## 生成规则
 
-- template.json 的 version 固定为 "1"
 - profile.md 必须有 YAML frontmatter
 - SOUL.md 用自然语言描述人格，**不包含**工作规则
 - system_prompt.md 是最关键的文件，要详细且可操作

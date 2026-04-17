@@ -6713,6 +6713,276 @@ impl KernelHandle for OpenCarrierKernel {
             .and_then(|entry| entry.manifest.workspace.clone())
             .map(|p| p.to_string_lossy().to_string())
     }
+
+    async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
+        use opencarrier_clone::{load_agx, install_clone_to_workspace, convert_to_manifest};
+
+        // Write uploaded bytes to temp file
+        let tmp_dir = std::env::temp_dir().join(format!("opencarrier-clone-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+        let tmp_path = tmp_dir.join("clone.agx");
+        std::fs::write(&tmp_path, agx_data).map_err(|e| format!("Failed to write temp file: {e}"))?;
+
+        // Load and parse .agx
+        let clone_data = load_agx(&tmp_path).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            format!("Failed to parse .agx: {e}")
+        })?;
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        // Override name if caller specified one
+        let clone_name = if name.is_empty() { clone_data.name.clone() } else { name.to_string() };
+
+        // Check for name collision
+        if self.registry.find_by_name(&clone_name).is_some() {
+            return Err(format!("Agent '{}' already exists", clone_name));
+        }
+
+        // Create workspace directory
+        let workspace_dir = self.config.effective_workspaces_dir().join(&clone_name);
+        if workspace_dir.exists() {
+            return Err(format!("Workspace for '{}' already exists", clone_name));
+        }
+
+        // Install clone files to workspace
+        install_clone_to_workspace(&clone_data, &workspace_dir).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&workspace_dir);
+            format!("Failed to install clone: {e}")
+        })?;
+
+        // Convert to AgentManifest
+        let mut manifest = convert_to_manifest(&clone_data);
+        manifest.name = clone_name.clone();
+        manifest.workspace = Some(workspace_dir);
+
+        // Spawn agent
+        let agent_name = manifest.name.clone();
+        let id = self.spawn_agent(manifest).map_err(|e| format!("Spawn failed: {e}"))?;
+
+        tracing::info!(
+            name = %agent_name,
+            id = %id,
+            warnings = clone_data.security_warnings.len(),
+            "Clone installed via clone_install tool"
+        );
+
+        Ok((id.to_string(), agent_name))
+    }
+
+    fn clone_export(&self, name: &str) -> Result<Vec<u8>, String> {
+        use opencarrier_clone::{CloneData, SkillData, SkillScriptData, AgentData, pack_agx};
+        use std::collections::HashMap;
+
+        let workspace_str = self.resolve_agent_workspace(name)
+            .ok_or_else(|| format!("Agent '{}' not found or has no workspace", name))?;
+        let workspace = std::path::Path::new(&workspace_str);
+
+        // Helper to read a file from workspace
+        let read_file = |path: &std::path::Path| -> String {
+            std::fs::read_to_string(path).unwrap_or_default()
+        };
+
+        // Read core files
+        let soul = read_file(&workspace.join("SOUL.md"));
+        let system_prompt = read_file(&workspace.join("system_prompt.md"));
+        let memory_index = read_file(&workspace.join("MEMORY.md"));
+        let evolution = read_file(&workspace.join("EVOLUTION.md"));
+        let profile = read_file(&workspace.join("profile.md"));
+
+        // Read template.json
+        let manifest: Option<opencarrier_clone::TemplateManifest> = None; // Not stored separately
+
+        // Read knowledge/
+        let mut knowledge = HashMap::new();
+        let knowledge_dir = workspace.join("data").join("knowledge");
+        if knowledge_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&knowledge_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().map(|e| e == "md").unwrap_or(false) {
+                        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+                            knowledge.insert(fname.to_string(), read_file(&path));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Read skills/
+        let mut skills = Vec::new();
+        let skills_dir = workspace.join("skills");
+        if skills_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+                for entry in entries.flatten() {
+                    let skill_path = entry.path();
+                    if skill_path.is_dir() {
+                        let skill_md_path = skill_path.join("SKILL.md");
+                        if skill_md_path.exists() {
+                            let content = read_file(&skill_md_path);
+                            let (fm, body) = parse_frontmatter_simple(&content);
+                            let skill_name = fm.get("name")
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    skill_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
+                                });
+                            let when_to_use = fm.get("when_to_use").cloned().unwrap_or_default();
+                            let allowed_tools = fm.get("allowed_tools")
+                                .map(|s| parse_string_array_simple(s))
+                                .unwrap_or_default();
+
+                            // Read scripts
+                            let mut scripts = Vec::new();
+                            let scripts_dir = skill_path.join("scripts");
+                            if scripts_dir.exists() {
+                                if let Ok(script_entries) = std::fs::read_dir(&scripts_dir) {
+                                    for se in script_entries.flatten() {
+                                        let sp = se.path();
+                                        if sp.extension().map(|e| e == "toml").unwrap_or(false) {
+                                            let toml_content = read_file(&sp);
+                                            let script_name = sp.file_stem()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("unknown")
+                                                .to_string();
+                                            let desc = extract_toml_description(&toml_content);
+                                            scripts.push(SkillScriptData {
+                                                name: script_name,
+                                                description: desc,
+                                                toml_content,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+
+                            skills.push(SkillData {
+                                name: skill_name,
+                                when_to_use,
+                                allowed_tools,
+                                prompt: body.trim().to_string(),
+                                scripts,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Read agents/
+        let mut agents = Vec::new();
+        let agents_dir = workspace.join("agents");
+        if agents_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().map(|e| e == "md").unwrap_or(false) {
+                        let content = read_file(&path);
+                        let (fm, body) = parse_frontmatter_simple(&content);
+                        let agent_name = fm.get("name").cloned().unwrap_or_else(|| {
+                            path.file_stem().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
+                        });
+                        agents.push(AgentData {
+                            name: agent_name,
+                            description: fm.get("description").cloned().unwrap_or_default(),
+                            tools: fm.get("tools").map(|s| parse_string_array_simple(s)).unwrap_or_default(),
+                            model: fm.get("model").cloned().unwrap_or_else(|| "sonnet".to_string()),
+                            color: fm.get("color").cloned(),
+                            prompt: body.trim().to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Read style/
+        let mut style = HashMap::new();
+        let style_dir = workspace.join("style");
+        if style_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&style_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().map(|e| e == "md").unwrap_or(false) {
+                        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+                            style.insert(fname.to_string(), read_file(&path));
+                        }
+                    }
+                }
+            }
+        }
+
+        let clone_data = CloneData {
+            manifest,
+            name: name.to_string(),
+            description: String::new(),
+            soul,
+            system_prompt,
+            memory_index,
+            knowledge,
+            skills,
+            profile,
+            security_warnings: Vec::new(),
+            agents,
+            evolution,
+            style,
+        };
+
+        pack_agx(&clone_data).map_err(|e| format!("Failed to pack .agx: {e}"))
+    }
+}
+
+/// Simple frontmatter parser for clone_export — extracts key: value pairs.
+fn parse_frontmatter_simple(content: &str) -> (std::collections::HashMap<String, String>, String) {
+    let mut map = std::collections::HashMap::new();
+    if !content.starts_with("---") {
+        return (map, content.to_string());
+    }
+    let rest = &content[3..];
+    let Some(end) = rest.find("---") else {
+        return (map, content.to_string());
+    };
+    let frontmatter = &rest[..end];
+    let body = &rest[end + 3..];
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(colon_pos) = trimmed.find(':') {
+            let key = trimmed[..colon_pos].trim().to_string();
+            let val = trimmed[colon_pos + 1..].trim().trim_matches('"').to_string();
+            if !key.is_empty() {
+                map.insert(key, val);
+            }
+        }
+    }
+    (map, body.to_string())
+}
+
+/// Parse a string like `["tool1", "tool2"]` into a Vec.
+fn parse_string_array_simple(s: &str) -> Vec<String> {
+    let s = s.trim();
+    if !s.starts_with('[') {
+        return vec![s.trim_matches('"').to_string()];
+    }
+    s.trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+/// Extract description from a TOML script file.
+fn extract_toml_description(content: &str) -> String {
+    for line in content.lines() {
+        if let Some(val) = line.trim().strip_prefix("description") {
+            if let Some(val) = val.trim_start_matches('=').trim().strip_prefix('"') {
+                if let Some(val) = val.strip_suffix('"') {
+                    return val.to_string();
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 // --- OFP Wire Protocol integration (DISABLED - P2P removed) ---

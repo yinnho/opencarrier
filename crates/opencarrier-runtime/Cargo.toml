@@ -7,6 +7,7 @@ description = "Agent runtime and execution environment for OpenCarrier"
 
 [dependencies]
 opencarrier-types = { path = "../opencarrier-types" }
+opencarrier-clone = { path = "../opencarrier-clone" }
 opencarrier-memory = { path = "../opencarrier-memory" }
 opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
