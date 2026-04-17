@@ -207,6 +207,7 @@ pub async fn execute_tool(
         // Clone management tools
         "clone_install" => tool_clone_install(input, kernel).await,
         "clone_export" => tool_clone_export(input, kernel).await,
+        "clone_publish" => tool_clone_publish(input, kernel).await,
 
         // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
         "web_fetch" => {
@@ -1495,6 +1496,17 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["name"]
             }),
         },
+        ToolDefinition {
+            name: "clone_publish".to_string(),
+            description: "Publish (upload) an installed clone to Hub. Requires Hub API key to be configured. Returns the template ID on Hub.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the installed clone to publish"}
+                },
+                "required": ["name"]
+            }),
+        },
         // --- Canvas / A2UI tool ---
         ToolDefinition {
             name: "canvas_present".to_string(),
@@ -2308,6 +2320,29 @@ async fn tool_clone_export(
         "Clone '{}' exported as .agx archive ({} bytes / {:.1} KB). The archive contains all workspace files: SOUL.md, system_prompt.md, knowledge/, skills/, agents/, style/, EVOLUTION.md.",
         name,
         agx_bytes.len(),
+        agx_bytes.len() as f64 / 1024.0,
+    ))
+}
+
+async fn tool_clone_publish(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
+) -> Result<String, String> {
+    let kernel = kernel.ok_or("clone_publish requires kernel access")?;
+    let name = input["name"].as_str()
+        .ok_or("Missing 'name' parameter")?
+        .to_string();
+
+    // Export the clone first
+    let agx_bytes = kernel.clone_export(&name)?;
+
+    // Publish to Hub
+    let template_id = kernel.clone_publish(&name, &agx_bytes).await?;
+
+    Ok(format!(
+        "Clone '{}' published to Hub successfully. Template ID: {}. Archive size: {:.1} KB.",
+        name,
+        template_id,
         agx_bytes.len() as f64 / 1024.0,
     ))
 }

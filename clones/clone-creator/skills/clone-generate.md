@@ -1,7 +1,7 @@
 ---
 name: clone-generate
 when_to_use: 用户要求创建一个新的分身，或描述了一个需要分身来完成的需求
-allowed_tools: ["file_write", "file_read", "file_list", "clone_install", "clone_export", "web_fetch", "knowledge_lint", "clone_evaluate"]
+allowed_tools: ["file_write", "file_read", "file_list", "clone_install", "clone_export", "clone_publish", "web_fetch", "knowledge_lint", "clone_evaluate"]
 ---
 
 # 分身生成技能
@@ -151,6 +151,23 @@ feedback_to_hub: false
 ```
 
 返回 .agx 归档信息。
+
+## 发布分身到 Hub
+
+如果用户要求将分身发布到 Hub（分享给其他用户使用），使用 `clone_publish` 工具：
+
+```json
+{
+  "name": "<clone-name>"
+}
+```
+
+系统会自动：
+1. 导出分身为 .agx 归档
+2. 使用配置的 Hub API Key 上传到 Hub
+3. 返回 Hub 上的模板 ID
+
+前提：需要在 config.toml 配置 `[hub]` 的 `url` 和 `api_key_env`，并设置对应的环境变量。
 
 ## 生成规则
 

@@ -6927,6 +6927,44 @@ impl KernelHandle for OpenCarrierKernel {
 
         pack_agx(&clone_data).map_err(|e| format!("Failed to pack .agx: {e}"))
     }
+
+    async fn clone_publish(&self, name: &str, agx_bytes: &[u8]) -> Result<String, String> {
+        let hub_url = self.config.hub.url.clone();
+        let api_key = opencarrier_clone::hub::read_api_key(&self.config.hub.api_key_env)
+            .map_err(|e| format!("Hub API Key 未配置: {e}"))?;
+
+        // Gather metadata from the agent manifest
+        let entry = self.registry.find_by_name(name)
+            .ok_or_else(|| format!("Agent '{}' not found", name))?;
+        let manifest = &entry.manifest;
+        let version = manifest.version.clone();
+        let description = if manifest.description.is_empty() {
+            format!("Clone: {}", name)
+        } else {
+            manifest.description.clone()
+        };
+        let tags = manifest.tags.clone();
+
+        let template_id = opencarrier_clone::hub::publish(
+            &hub_url,
+            &api_key,
+            name,
+            agx_bytes,
+            &version,
+            &description,
+            &tags,
+        )
+        .await
+        .map_err(|e| format!("Hub publish failed: {e}"))?;
+
+        tracing::info!(
+            name = %name,
+            template_id = %template_id,
+            "Clone published to Hub"
+        );
+
+        Ok(template_id)
+    }
 }
 
 /// Simple frontmatter parser for clone_export — extracts key: value pairs.
