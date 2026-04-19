@@ -4,9 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Deserialize a `Vec<String>` that tolerates both string and integer elements.
-///
-/// When channel configs are saved from the web dashboard, numeric IDs (e.g. Discord
 /// Controls what usage info appears in response footers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -770,8 +767,6 @@ pub struct KernelConfig {
     /// API listen address (e.g., "0.0.0.0:4200").
     #[serde(alias = "listen_addr")]
     pub api_listen: String,
-    /// Whether to enable the OFP network layer.
-    pub network_enabled: bool,
     /// Default LLM provider configuration (legacy — replaced by brain).
     #[serde(default)]
     pub default_model: DefaultModelConfig,
@@ -780,8 +775,6 @@ pub struct KernelConfig {
     pub brain: BrainSourceConfig,
     /// Memory substrate configuration.
     pub memory: MemoryConfig,
-    /// Network configuration.
-    pub network: NetworkConfig,
     /// API authentication key. When set, all API endpoints (except /api/health)
     /// require a `Authorization: Bearer <key>` header.
     /// If empty, the API is unauthenticated (local development only).
@@ -884,9 +877,6 @@ pub struct KernelConfig {
     #[serde(default)]
     pub auth: AuthConfig,
     /// Directory for auto-loading workflow JSON files on startup.
-    /// Defaults to `~/.opencarrier/workflows`. Set to empty string to disable.
-    #[serde(default)]
-    pub workflows_dir: Option<PathBuf>,
     /// Clone lifecycle configuration (evolution, version tracking).
     #[serde(default)]
     pub clone_lifecycle: CloneLifecycleConfig,
@@ -1068,11 +1058,9 @@ impl Default for KernelConfig {
             home_dir,
             log_level: "info".to_string(),
             api_listen: "127.0.0.1:50051".to_string(),
-            network_enabled: false,
             default_model: DefaultModelConfig::default(),
             brain: BrainSourceConfig::default(),
             memory: MemoryConfig::default(),
-            network: NetworkConfig::default(),
             api_key: String::new(),
             mode: KernelMode::default(),
             language: "en".to_string(),
@@ -1104,7 +1092,6 @@ impl Default for KernelConfig {
             provider_api_keys: HashMap::new(),
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
-            workflows_dir: None,
             clone_lifecycle: CloneLifecycleConfig::default(),
         }
     }
@@ -1148,10 +1135,8 @@ impl std::fmt::Debug for KernelConfig {
             .field("data_dir", &self.data_dir)
             .field("log_level", &self.log_level)
             .field("api_listen", &self.api_listen)
-            .field("network_enabled", &self.network_enabled)
             .field("default_model", &self.default_model)
             .field("memory", &self.memory)
-            .field("network", &self.network)
             .field(
                 "api_key",
                 &if self.api_key.is_empty() {
@@ -1311,54 +1296,6 @@ impl Default for MemoryConfig {
     }
 }
 
-/// Network layer configuration.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct NetworkConfig {
-    /// libp2p listen addresses.
-    pub listen_addresses: Vec<String>,
-    /// Bootstrap peers for DHT.
-    pub bootstrap_peers: Vec<String>,
-    /// Enable mDNS for local discovery.
-    pub mdns_enabled: bool,
-    /// Maximum number of connected peers.
-    pub max_peers: u32,
-    /// Pre-shared secret for OFP HMAC authentication (required when network is enabled).
-    pub shared_secret: String,
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".to_string()],
-            bootstrap_peers: vec![],
-            mdns_enabled: true,
-            max_peers: 50,
-            shared_secret: String::new(),
-        }
-    }
-}
-
-/// SECURITY: Custom Debug impl redacts sensitive fields (shared_secret).
-impl std::fmt::Debug for NetworkConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NetworkConfig")
-            .field("listen_addresses", &self.listen_addresses)
-            .field("bootstrap_peers", &self.bootstrap_peers)
-            .field("mdns_enabled", &self.mdns_enabled)
-            .field("max_peers", &self.max_peers)
-            .field(
-                "shared_secret",
-                &if self.shared_secret.is_empty() {
-                    "<empty>"
-                } else {
-                    "<redacted>"
-                },
-            )
-            .finish()
-    }
-}
-
 impl KernelConfig {
     /// Validate the configuration, returning a list of warnings.
     pub fn validate(&self) -> Vec<String> {
@@ -1451,7 +1388,6 @@ mod tests {
         let config = KernelConfig::default();
         assert_eq!(config.log_level, "info");
         assert_eq!(config.api_listen, "127.0.0.1:50051");
-        assert!(!config.network_enabled);
     }
 
     #[test]
@@ -1459,16 +1395,6 @@ mod tests {
         let config = KernelConfig::default();
         let toml_str = toml::to_string_pretty(&config).unwrap();
         assert!(toml_str.contains("log_level"));
-    }
-
-
-
-
-    #[test]
-    fn test_validate_no_channels() {
-        let config = KernelConfig::default();
-        let warnings = config.validate();
-        assert!(warnings.is_empty());
     }
 
     #[test]

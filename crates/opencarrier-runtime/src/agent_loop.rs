@@ -1092,12 +1092,11 @@ async fn stream_with_retry(
 // Unified fallback — tries Brain endpoints in order with report()
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Unified fallback — tries Brain endpoints in order with report()
+// ---------------------------------------------------------------------------
+
 /// Call LLM with unified fallback across Brain endpoints (non-streaming).
-///
-/// If Brain is present, gets the ordered endpoint list and tries each in turn,
-/// reporting results back to Brain. Falls back to the raw driver if Brain is
-/// absent or returns no endpoints.
-#[allow(dead_code)] // Will be wired up in Phase 3
 async fn call_with_fallback(
     brain: Option<&Arc<dyn Brain>>,
     fallback_driver: &dyn LlmDriver,
@@ -1158,9 +1157,6 @@ async fn call_with_fallback(
 }
 
 /// Call LLM with unified fallback across Brain endpoints (streaming).
-///
-/// Same logic as `call_with_fallback` but uses `stream_with_retry`.
-#[allow(dead_code)] // Will be wired up in Phase 3
 async fn stream_with_fallback(
     brain: Option<&Arc<dyn Brain>>,
     fallback_driver: &dyn LlmDriver,

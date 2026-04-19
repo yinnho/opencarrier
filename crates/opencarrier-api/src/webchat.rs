@@ -10,7 +10,7 @@
 //! - Responsive layout with collapsible sidebar
 //! - Markdown rendering + syntax highlighting (bundled locally)
 //! - WebSocket real-time chat with HTTP fallback
-//! - Agent management, workflows, memory browser, audit log, and more
+//! - Agent management, memory browser, audit log, and more
 
 use axum::http::header;
 use axum::response::IntoResponse;

@@ -975,8 +975,7 @@ async fn handle_command(
             serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
         }
         "peers" => {
-            // P2P disabled - wire crate removed
-            let msg = "P2P networking disabled (wire crate removed)".to_string();
+            let msg = "P2P networking is not enabled.".to_string();
             serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
         }
         "a2a" => {

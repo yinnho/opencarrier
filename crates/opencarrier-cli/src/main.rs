@@ -3137,7 +3137,6 @@ fn cmd_config_set(key: &str, value: &str) {
             "data_dir",
             "log_level",
             "api_listen",
-            "network_enabled",
             "api_key",
             "language",
             "max_cron_jobs",

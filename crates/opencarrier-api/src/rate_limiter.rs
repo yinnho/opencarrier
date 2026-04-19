@@ -98,7 +98,6 @@ mod tests {
         assert_eq!(operation_cost("GET", "/api/tools").get(), 1);
         assert_eq!(operation_cost("POST", "/api/agents/1/message").get(), 30);
         assert_eq!(operation_cost("POST", "/api/agents").get(), 50);
-        assert_eq!(operation_cost("POST", "/api/workflows/1/run").get(), 100);
         assert_eq!(operation_cost("GET", "/api/agents/1/session").get(), 5);
         assert_eq!(operation_cost("GET", "/api/skills").get(), 2);
         assert_eq!(operation_cost("GET", "/api/peers").get(), 2);
@@ -111,20 +110,15 @@ mod tests {
     fn test_sensitive_endpoint_costs() {
         // SECURITY: Install-deps should have high cost to prevent abuse
         assert_eq!(
-            operation_cost("POST", "/api/hands/browser/install-deps").get(),
-            100
-        );
-        assert_eq!(
-            operation_cost("POST", "/api/hands/ffmpeg/install-deps").get(),
+            operation_cost("POST", "/api/custom/install-deps").get(),
             100
         );
         // Check-deps should also have elevated cost
         assert_eq!(
-            operation_cost("POST", "/api/hands/browser/check-deps").get(),
+            operation_cost("POST", "/api/custom/check-deps").get(),
             20
         );
         // Regular install endpoints
         assert_eq!(operation_cost("POST", "/api/skills/install").get(), 50);
-        assert_eq!(operation_cost("POST", "/api/hands/install").get(), 50);
     }
 }

@@ -3,7 +3,7 @@
 //! Supports three autonomous modes:
 //! - **Continuous**: Agent self-prompts on a fixed interval.
 //! - **Periodic**: Agent wakes on a simplified cron schedule (e.g. "every 5m").
-//! - **Proactive**: Agent wakes when matching events fire (trigger engine removed in batch-1).
+//! - **Proactive**: Agent wakes when matching events fire.
 
 use dashmap::DashMap;
 use opencarrier_types::agent::{AgentId, ScheduleMode};
@@ -40,7 +40,7 @@ impl BackgroundExecutor {
     ///
     /// For `Continuous` and `Periodic` modes, spawns a tokio task that
     /// periodically sends a self-prompt message to the agent.
-    /// For `Proactive` mode, registers triggers — no dedicated task needed.
+    /// For `Proactive` mode, no dedicated task is needed.
     ///
     /// `send_message` is a closure that sends a message to the given agent
     /// and returns a result. It captures an `Arc<OpenCarrierKernel>` from the caller.
@@ -177,9 +177,7 @@ impl BackgroundExecutor {
                 self.tasks.insert(agent_id, handle);
             }
             ScheduleMode::Proactive { .. } => {
-                // Proactive agents rely on triggers, not a dedicated loop.
-                // Triggers are registered by the kernel during spawn_agent / start_background_agents.
-                debug!(agent = %agent_name, "Proactive agent — triggers handle activation");
+                // Proactive agents rely on external triggers, not a dedicated loop.
             }
         }
     }
@@ -197,8 +195,6 @@ impl BackgroundExecutor {
         self.tasks.len()
     }
 }
-
-// batch-1 removed: parse_condition function (triggers engine removed)
 
 /// Parse a simplified cron expression into seconds.
 ///
@@ -274,8 +270,6 @@ mod tests {
         assert_eq!(parse_cron_to_secs("*/5 * * * *"), 300);
         assert_eq!(parse_cron_to_secs("gibberish"), 300);
     }
-
-    // batch-1 removed: parse_condition tests (triggers engine removed)
 
     #[tokio::test]
     async fn test_continuous_shutdown() {

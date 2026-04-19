@@ -238,8 +238,6 @@ const SUBAGENT_DENY_ALWAYS: &[&str] = &[
     "cron_cancel",
     "schedule_create",
     "schedule_delete",
-    "hand_activate",
-    "hand_deactivate",
     "process_start",
 ];
 
@@ -418,8 +416,6 @@ mod tests {
             "cron_cancel",
             "schedule_create",
             "schedule_delete",
-            "hand_activate",
-            "hand_deactivate",
             "process_start",
             "web_search",
             "file_read",
