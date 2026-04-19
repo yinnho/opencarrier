@@ -225,11 +225,6 @@ impl ModelCatalog {
         }
     }
 
-    /// List models filtered by tier.
-    pub fn models_by_tier(&self, tier: ModelTier) -> Vec<&ModelCatalogEntry> {
-        self.models.iter().filter(|m| m.tier == tier).collect()
-    }
-
     /// Merge dynamically discovered models from a local provider.
     ///
     /// Adds models not already in the catalog with `Local` tier and zero cost.
@@ -3810,14 +3805,6 @@ mod tests {
         let anthropic = catalog.models_by_provider("anthropic");
         assert_eq!(anthropic.len(), 7);
         assert!(anthropic.iter().all(|m| m.provider == "anthropic"));
-    }
-
-    #[test]
-    fn test_models_by_tier() {
-        let catalog = ModelCatalog::new();
-        let frontier = catalog.models_by_tier(ModelTier::Frontier);
-        assert!(frontier.len() >= 3); // At least opus, gpt-4.1, gemini-2.5-pro
-        assert!(frontier.iter().all(|m| m.tier == ModelTier::Frontier));
     }
 
     #[test]

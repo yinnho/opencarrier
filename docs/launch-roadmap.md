@@ -401,10 +401,8 @@ These are features where OpenCarrier can leapfrog OpenClaw.
 | Built-in Tools | ~19 | **41** | **OpenCarrier** |
 | Security Systems | Token + sandbox | **16 defense systems** | **OpenCarrier** |
 | Agent Templates | Manual config | **30 pre-configured** | **OpenCarrier** |
-| Hands (autonomous) | None | **7 packages** | **OpenCarrier** |
 | Workflow Engine | Cron + webhooks | **Full DAG with parallel/loops** | **OpenCarrier** |
 | Knowledge Graph | Flat vector store | **Entity-relation graph** | **OpenCarrier** |
-| P2P Networking | None | **OFP wire protocol** | **OpenCarrier** |
 | WASM Sandbox | Docker only | **Dual-metered WASM** | **OpenCarrier** |
 | Desktop App | Electron (~200MB) | **Tauri (~30MB)** | **OpenCarrier** |
 | Migration | N/A | **`migrate --from openclaw`** | **OpenCarrier** |

@@ -8,10 +8,7 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 
 - [Authentication](#authentication)
 - [Agent Endpoints](#agent-endpoints)
-- [Workflow Endpoints](#workflow-endpoints)
-- [Trigger Endpoints](#trigger-endpoints)
 - [Memory Endpoints](#memory-endpoints)
-- [Channel Endpoints](#channel-endpoints)
 - [Template Endpoints](#template-endpoints)
 - [System Endpoints](#system-endpoints)
 - [Model Catalog Endpoints](#model-catalog-endpoints)
@@ -233,234 +230,6 @@ Terminate an agent and remove it from the registry.
 
 ---
 
-## Workflow Endpoints
-
-### GET /api/workflows
-
-List all registered workflows.
-
-**Response** `200 OK`:
-
-```json
-[
-  {
-    "id": "w1b2c3d4-...",
-    "name": "code-review-pipeline",
-    "description": "Automated code review workflow",
-    "steps": 3,
-    "created_at": "2025-01-15T10:30:00Z"
-  }
-]
-```
-
-### POST /api/workflows
-
-Create a new workflow definition.
-
-**Request Body** (JSON):
-
-```json
-{
-  "name": "code-review-pipeline",
-  "description": "Review code changes with multiple agents",
-  "steps": [
-    {
-      "name": "analyze",
-      "agent_name": "coder",
-      "prompt": "Analyze this code for potential issues: {{input}}",
-      "mode": "sequential",
-      "timeout_secs": 120,
-      "error_mode": "fail",
-      "output_var": "analysis"
-    },
-    {
-      "name": "security-check",
-      "agent_name": "security-auditor",
-      "prompt": "Review this code analysis for security vulnerabilities: {{analysis}}",
-      "mode": "sequential",
-      "timeout_secs": 120,
-      "error_mode": "skip"
-    },
-    {
-      "name": "summarize",
-      "agent_name": "writer",
-      "prompt": "Write a concise code review summary based on: {{analysis}}",
-      "mode": "sequential",
-      "timeout_secs": 60,
-      "error_mode": "fail"
-    }
-  ]
-}
-```
-
-**Step configuration options:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Step name |
-| `agent_id` | string | Agent UUID (use either this or `agent_name`) |
-| `agent_name` | string | Agent name (use either this or `agent_id`) |
-| `prompt` | string | Prompt template with `{{input}}` and `{{output_var}}` placeholders |
-| `mode` | string | `"sequential"`, `"fan_out"`, `"collect"`, `"conditional"`, `"loop"` |
-| `timeout_secs` | integer | Timeout per step (default: 120) |
-| `error_mode` | string | `"fail"`, `"skip"`, `"retry"` |
-| `max_retries` | integer | For `"retry"` error mode (default: 3) |
-| `output_var` | string | Variable name to store output for later steps |
-| `condition` | string | For `"conditional"` mode |
-| `max_iterations` | integer | For `"loop"` mode (default: 5) |
-| `until` | string | For `"loop"` mode: stop condition |
-
-**Response** `201 Created`:
-
-```json
-{
-  "workflow_id": "w1b2c3d4-..."
-}
-```
-
-### POST /api/workflows/{id}/run
-
-Execute a workflow.
-
-**Request Body**:
-
-```json
-{
-  "input": "Review this pull request: ..."
-}
-```
-
-**Response** `200 OK`:
-
-```json
-{
-  "run_id": "r1b2c3d4-...",
-  "output": "Code review summary:\n- No critical issues found\n...",
-  "status": "completed"
-}
-```
-
-### GET /api/workflows/{id}/runs
-
-List execution history for a workflow.
-
-**Response** `200 OK`:
-
-```json
-[
-  {
-    "id": "r1b2c3d4-...",
-    "workflow_name": "code-review-pipeline",
-    "state": "Completed",
-    "steps_completed": 3,
-    "started_at": "2025-01-15T10:30:00Z",
-    "completed_at": "2025-01-15T10:32:15Z"
-  }
-]
-```
-
----
-
-## Trigger Endpoints
-
-### GET /api/triggers
-
-List all triggers. Optionally filter by agent.
-
-**Query Parameters:**
-- `agent_id` (optional): Filter by agent UUID
-
-**Response** `200 OK`:
-
-```json
-[
-  {
-    "id": "t1b2c3d4-...",
-    "agent_id": "a1b2c3d4-...",
-    "pattern": {"lifecycle": {}},
-    "prompt_template": "Event: {{event}}",
-    "enabled": true,
-    "fire_count": 5,
-    "max_fires": 0,
-    "created_at": "2025-01-15T10:30:00Z"
-  }
-]
-```
-
-### POST /api/triggers
-
-Create a new event trigger.
-
-**Request Body**:
-
-```json
-{
-  "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "pattern": {
-    "agent_spawned": {
-      "name_pattern": "*"
-    }
-  },
-  "prompt_template": "A new agent was spawned: {{event}}. Review its capabilities.",
-  "max_fires": 0
-}
-```
-
-**Supported pattern types:**
-
-| Pattern | Description |
-|---------|-------------|
-| `{"lifecycle": {}}` | All lifecycle events |
-| `{"agent_spawned": {"name_pattern": "*"}}` | Agent spawn events |
-| `{"agent_terminated": {}}` | Agent termination events |
-| `{"all": {}}` | All events |
-
-**Response** `201 Created`:
-
-```json
-{
-  "trigger_id": "t1b2c3d4-...",
-  "agent_id": "a1b2c3d4-..."
-}
-```
-
-### PUT /api/triggers/{id}
-
-Update an existing trigger's configuration.
-
-**Request Body**:
-
-```json
-{
-  "prompt_template": "Updated template: {{event}}",
-  "enabled": false,
-  "max_fires": 10
-}
-```
-
-**Response** `200 OK`:
-
-```json
-{
-  "status": "updated",
-  "trigger_id": "t1b2c3d4-..."
-}
-```
-
-### DELETE /api/triggers/{id}
-
-Remove a trigger.
-
-**Response** `200 OK`:
-
-```json
-{
-  "status": "removed",
-  "trigger_id": "t1b2c3d4-..."
-}
-```
-
----
 
 ## Memory Endpoints
 
@@ -531,34 +300,6 @@ Delete a key-value pair.
 {
   "status": "deleted",
   "key": "preferences"
-}
-```
-
----
-
-## Channel Endpoints
-
-### GET /api/channels
-
-List configured channel adapters and their status. Supports 40 channel adapters including Telegram, Discord, Slack, WhatsApp, Matrix, Email, Teams, Mattermost, IRC, Google Chat, Twitch, Rocket.Chat, Zulip, XMPP, LINE, Viber, Messenger, Reddit, Mastodon, Bluesky, and more.
-
-**Response** `200 OK`:
-
-```json
-{
-  "channels": [
-    {
-      "name": "telegram",
-      "enabled": true,
-      "has_token": true
-    },
-    {
-      "name": "discord",
-      "enabled": true,
-      "has_token": false
-    }
-  ],
-  "total": 2
 }
 ```
 
@@ -772,7 +513,6 @@ Retrieve current kernel configuration (secrets are redacted).
   "default_model": "llama-3.3-70b-versatile",
   "listen_addr": "127.0.0.1:4200",
   "api_key_set": true,
-  "channels_configured": 2,
   "mcp_servers": 1
 }
 ```
@@ -2090,10 +1830,10 @@ All error responses use a consistent JSON format:
 | Code | Meaning |
 |------|---------|
 | `200` | Success |
-| `201` | Created (spawn agent, create workflow, create trigger, install skill) |
+| `201` | Created (spawn agent, install skill) |
 | `400` | Bad request (invalid UUID, missing required fields, malformed TOML/JSON) |
 | `401` | Unauthorized (missing or invalid `Authorization: Bearer` header) |
-| `404` | Not found (agent, workflow, trigger, template, model, skill, or KV key does not exist) |
+| `404` | Not found (agent, template, model, skill, or KV key does not exist) |
 | `429` | Too many requests (GCRA rate limit exceeded) |
 | `500` | Internal server error (agent loop failure, database error, driver error) |
 
@@ -2166,23 +1906,11 @@ The `Retry-After` header indicates the window duration in seconds.
 | POST | `/api/agents/{id}/session/compact` | LLM-based compaction |
 | POST | `/api/agents/{id}/stop` | Cancel current run |
 | PUT | `/api/agents/{id}/model` | Switch model |
-| **Workflows** | | |
-| GET | `/api/workflows` | List workflows |
-| POST | `/api/workflows` | Create workflow |
-| POST | `/api/workflows/{id}/run` | Run workflow |
-| GET | `/api/workflows/{id}/runs` | List workflow runs |
-| **Triggers** | | |
-| GET | `/api/triggers` | List triggers |
-| POST | `/api/triggers` | Create trigger |
-| PUT | `/api/triggers/{id}` | Update trigger |
-| DELETE | `/api/triggers/{id}` | Delete trigger |
 | **Memory** | | |
 | GET | `/api/memory/agents/{id}/kv` | List KV pairs |
 | GET | `/api/memory/agents/{id}/kv/{key}` | Get KV value |
 | PUT | `/api/memory/agents/{id}/kv/{key}` | Set KV value |
 | DELETE | `/api/memory/agents/{id}/kv/{key}` | Delete KV value |
-| **Channels** | | |
-| GET | `/api/channels` | List channels (40 adapters) |
 | **Templates** | | |
 | GET | `/api/templates` | List templates |
 | GET | `/api/templates/{name}` | Get template |

@@ -25,7 +25,7 @@
 
 ### 任务 1.1: 修复命令注入漏洞 [CRITICAL-001]
 
-**问题**: `/api/hands/install-depend` 端点存在命令注入风险
+**问题**: `/api/hands/install-depend` 端点存在命令注入风险 (hands 功能已移除，该端点不再存在)
 
 **修复步骤**:
 1. [x] 创建 command_security.rs 模块

@@ -150,35 +150,10 @@ impl Default for DeliveryTracker {
 }
 
 impl DeliveryTracker {
-    const MAX_RECEIPTS: usize = 10_000;
-    const MAX_PER_AGENT: usize = 500;
-
     /// Create a new empty delivery tracker.
     pub fn new() -> Self {
         Self {
             receipts: dashmap::DashMap::new(),
-        }
-    }
-
-    /// Record a delivery receipt for an agent.
-    pub fn record(&self, agent_id: AgentId, receipt: DeliveryReceipt) {
-        let mut entry = self.receipts.entry(agent_id).or_default();
-        entry.push(receipt);
-        // Per-agent cap
-        if entry.len() > Self::MAX_PER_AGENT {
-            let drain = entry.len() - Self::MAX_PER_AGENT;
-            entry.drain(..drain);
-        }
-        // Global cap: evict oldest agents' receipts if total exceeds limit
-        drop(entry);
-        let total: usize = self.receipts.iter().map(|e| e.value().len()).sum();
-        if total > Self::MAX_RECEIPTS {
-            // Simple eviction: remove oldest entries from first agent found
-            if let Some(mut oldest) = self.receipts.iter_mut().next() {
-                let to_remove = total - Self::MAX_RECEIPTS;
-                let drain = to_remove.min(oldest.value().len());
-                oldest.value_mut().drain(..drain);
-            }
         }
     }
 
@@ -194,53 +169,6 @@ impl DeliveryTracker {
             .unwrap_or_default()
     }
 
-    /// Create a receipt for a successful send.
-    pub fn sent_receipt(
-        channel: &str,
-        recipient: &str,
-    ) -> DeliveryReceipt {
-        DeliveryReceipt {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            channel: channel.to_string(),
-            recipient: Self::sanitize_recipient(recipient),
-            status: DeliveryStatus::Sent,
-            timestamp: chrono::Utc::now(),
-            error: None,
-        }
-    }
-
-    /// Create a receipt for a failed send.
-    pub fn failed_receipt(
-        channel: &str,
-        recipient: &str,
-        error: &str,
-    ) -> DeliveryReceipt {
-        DeliveryReceipt {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            channel: channel.to_string(),
-            recipient: Self::sanitize_recipient(recipient),
-            status: DeliveryStatus::Failed,
-            timestamp: chrono::Utc::now(),
-            // Sanitize error: no credentials, max 256 chars
-            error: Some(
-                error
-                    .chars()
-                    .take(256)
-                    .collect::<String>()
-                    .replace(|c: char| c.is_control(), ""),
-            ),
-        }
-    }
-
-    /// Sanitize recipient to avoid PII logging.
-    fn sanitize_recipient(recipient: &str) -> String {
-        let s: String = recipient
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(64)
-            .collect();
-        s
-    }
 }
 
 /// Create workspace directory structure for an agent.
@@ -1444,7 +1372,6 @@ impl OpenCarrierKernel {
         }
 
         // Boot validation complete
-        let _ = kernel.registry.list(); // ensure registry is accessible
 
         info!("OpenCarrier kernel booted successfully");
         Ok(kernel)
@@ -1594,30 +1521,6 @@ impl OpenCarrierKernel {
 
     /// Send a multimodal message (text + images) to an agent and get a response.
     ///
-    /// Used by channel bridges when a user sends a photo — the image is downloaded,
-    /// base64 encoded, and passed as `ContentBlock::Image` alongside any caption text.
-    pub async fn send_message_with_blocks(
-        &self,
-        agent_id: AgentId,
-        message: &str,
-        blocks: Vec<opencarrier_types::message::ContentBlock>,
-    ) -> KernelResult<AgentLoopResult> {
-        let handle: Option<Arc<dyn KernelHandle>> = self
-            .self_handle
-            .get()
-            .and_then(|w| w.upgrade())
-            .map(|arc| arc as Arc<dyn KernelHandle>);
-        self.send_message_with_handle_and_blocks(
-            agent_id,
-            message,
-            handle,
-            Some(blocks),
-            None,
-            None,
-        )
-        .await
-    }
-
     /// Send a message with an optional kernel handle for inter-agent tools.
     pub async fn send_message_with_handle(
         &self,
@@ -4014,7 +3917,7 @@ impl OpenCarrierKernel {
         std::env::var(key).ok().filter(|s| !s.is_empty())
     }
 
-    // batch-1 removed: store_credential, remove_credential (vault removed)
+
 
     /// Return a cloned Arc<Brain> for the API (None if not loaded).
     pub fn brain_info(&self) -> Arc<Brain> {
@@ -4444,8 +4347,6 @@ impl OpenCarrierKernel {
         summary
     }
 
-    // inject_user_personalization() — logic moved to prompt_builder::build_user_section()
-
     pub fn collect_prompt_context(&self, skill_allowlist: &[String]) -> String {
         let mut context_parts = Vec::new();
         for skill in self
@@ -4597,90 +4498,7 @@ fn default_embedding_model_for_provider(provider: &str) -> &'static str {
     }
 }
 
-/// Infer provider from a model name when catalog lookup fails.
-///
-/// Uses well-known model name prefixes to map to the correct provider.
-/// This is a defense-in-depth fallback — models should ideally be in the catalog.
-#[expect(dead_code)]
-fn infer_provider_from_model(model: &str) -> Option<String> {
-    let lower = model.to_lowercase();
-    // Check for explicit provider prefix with / or : delimiter
-    // (e.g., "minimax/MiniMax-M2.5" or "qwen:qwen-plus")
-    let (prefix, has_delim) = if let Some(idx) = lower.find('/') {
-        (&lower[..idx], true)
-    } else if let Some(idx) = lower.find(':') {
-        (&lower[..idx], true)
-    } else {
-        (lower.as_str(), false)
-    };
-    if has_delim {
-        // Two or more slashes (e.g. "mlx-lm-lg/mlx-community/Qwen3-4B") means
-        // the first segment is explicitly a provider prefix — HuggingFace repo
-        // IDs only have one slash, so extra slashes are unambiguous.
-        if lower.chars().filter(|&c| c == '/').count() >= 2 {
-            return Some(prefix.to_string());
-        }
-        match prefix {
-            "minimax" | "gemini" | "anthropic" | "openai" | "groq" | "deepseek" | "mistral"
-            | "cohere" | "xai" | "ollama" | "together" | "fireworks" | "perplexity"
-            | "cerebras" | "sambanova" | "replicate" | "huggingface" | "ai21" | "codex"
-            | "claude-code" | "qwen" | "zhipu" | "zai"
-            | "moonshot" | "openrouter" | "volcengine" | "doubao" | "dashscope" => {
-                return Some(prefix.to_string());
-            }
-            // "kimi" is a brand alias for moonshot
-            "kimi" => {
-                return Some("moonshot".to_string());
-            }
-            _ => {}
-        }
-    }
-    // Infer from well-known model name patterns
-    if lower.starts_with("minimax") {
-        Some("minimax".to_string())
-    } else if lower.starts_with("gemini") {
-        Some("gemini".to_string())
-    } else if lower.starts_with("claude") {
-        Some("anthropic".to_string())
-    } else if lower.starts_with("gpt")
-        || lower.starts_with("o1")
-        || lower.starts_with("o3")
-        || lower.starts_with("o4")
-    {
-        Some("openai".to_string())
-    } else if lower.starts_with("llama")
-        || lower.starts_with("mixtral")
-        || lower.starts_with("qwen")
-    {
-        // These could be on multiple providers; don't infer
-        None
-    } else if lower.starts_with("grok") {
-        Some("xai".to_string())
-    } else if lower.starts_with("deepseek") {
-        Some("deepseek".to_string())
-    } else if lower.starts_with("mistral")
-        || lower.starts_with("codestral")
-        || lower.starts_with("pixtral")
-    {
-        Some("mistral".to_string())
-    } else if lower.starts_with("command") || lower.starts_with("embed-") {
-        Some("cohere".to_string())
-    } else if lower.starts_with("jamba") {
-        Some("ai21".to_string())
-    } else if lower.starts_with("sonar") {
-        Some("perplexity".to_string())
-    } else if lower.starts_with("glm") {
-        Some("zhipu".to_string())
-    } else if lower.starts_with("ernie") {
-        Some("qianfan".to_string())
-    } else if lower.starts_with("abab") {
-        Some("minimax".to_string())
-    } else if lower.starts_with("moonshot") || lower.starts_with("kimi") {
-        Some("moonshot".to_string())
-    } else {
-        None
-    }
-}
+
 
 /// A well-known agent ID used for shared memory operations across agents.
 /// This is a fixed UUID so all agents read/write to the same namespace.
