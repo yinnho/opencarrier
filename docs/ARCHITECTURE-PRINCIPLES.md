@@ -123,6 +123,111 @@ SOUL.md（人格 — 最高优先级）
 
 这样 lifecycle 系统修改 workspace 文件后，不需要重新安装分身，下次对话自动生效。
 
+### 1.8 五层系统架构
+
+opencarrier 由五个核心层组成，每层职责清晰：
+
+```
+┌──────────────────────────────────────────┐
+│  分身 (Clone) — WHO: 身份 + 工作空间     │
+│  SOUL.md / agent.toml / skills / knowledge│
+├──────────────────────────────────────────┤
+│  大脑 (Brain) — THINK: LLM 路由          │
+│  Provider → Endpoint → Modality + 熔断   │
+├──────────────────────────────────────────┤
+│  工具 (Tool) — DO: 内置能力              │
+│  file / web / shell / browser / knowledge │
+├──────────────────────────────────────────┤
+│  MCP — EXTEND: 外部工具接入              │
+│  stdio / SSE 连接，per-agent 过滤        │
+├──────────────────────────────────────────┤
+│  记忆 (Memory) — REMEMBER                │
+│  衰减 / 压缩 / 膨胀控制 / 溢出恢复       │
+│  semantic + structured + knowledge graph │
+└──────────────────────────────────────────┘
+```
+
+#### 分身层 (Clone) — WHO
+
+分身是系统的核心实体，决定"做什么"：
+
+- **身份**: SOUL.md（人格）、system_prompt.md（行为指令）
+- **技能**: skills/ 目录中的 per-agent 技能定义（唯一能让分身自定义能力的层）
+- **知识**: knowledge/ 目录中的知识文件 + MEMORY.md 索引
+- **工作空间**: 独立的文件系统沙箱
+
+分身是唯一能让系统"做不同事情"的层。同样的工具 + 同样的大脑，不同的分身做完全不同的事。
+
+#### 大脑层 (Brain) — THINK
+
+大脑负责 LLM 调用的智能路由，配置在 brain.json 中：
+
+- **三层路由**: Provider → Endpoint → Modality
+- **熔断器**: 连续失败 ≥ 3 次触发熔断，60 秒冷却后重试
+- **热重载**: `Arc<RwLock<Arc<Brain>>>` 三层包装，原子 Arc swap 无缝切换
+
+大脑不关心"谁在调用"，只关心"用哪个模型"。所有分身共享同一个大脑。
+
+#### 工具层 (Tool) — DO
+
+系统级内置工具，所有分身共享，分身改不了：
+
+- **文件**: file_read, file_write, file_list
+- **网络**: web_fetch, web_search
+- **执行**: shell_exec
+- **浏览器**: browser_* 系列
+- **知识**: knowledge_add, knowledge_import, knowledge_compile 等
+- **记忆**: memory_store, memory_recall, user_profile
+
+通过 `capabilities.tools` 白名单控制哪些分身能用哪些工具。
+
+#### MCP 层 — EXTEND
+
+外部工具接入层：
+
+- **连接方式**: stdio（本地进程）或 SSE（HTTP 长连接）
+- **命名空间**: 工具命名为 `mcp_{server}_{tool}` 防冲突
+- **per-agent 过滤**: 通过 `mcp_servers` 白名单控制哪些分身能用哪些 MCP 服务器
+- **健康监控**: 后台 60 秒 ping 一次，自动重连断开的服务器
+- **热重载**: 配置变更时自动重连
+
+Tool 与 MCP 的边界：
+
+| | Tool | MCP |
+|---|---|---|
+| 来源 | 内置（Rust 代码） | 外部（第三方服务器） |
+| 配置 | 不需要 | 需要 config.toml 配置连接 |
+| 作用域 | 全局可用 | 全局连接 + per-agent 过滤 |
+| 扩展 | 改代码 | 改配置，热重载 |
+| 稳定性 | 高（编译时保证） | 低（依赖外部进程） |
+
+#### 记忆层 (Memory) — REMEMBER
+
+独立的记忆生命周期管理层，跨分身的基础设施，不挂在分身下面：
+
+**记忆整理（系统级，自动运行）**：
+- **ConsolidationEngine**: 每 24 小时对 7 天未访问的记忆降低 confidence（衰减率 0.1，最低 0.1）
+- **Usage 清理**: 每 24 小时删除 90 天前的用量记录
+
+**会话管理（per-agent）**：
+- **Session Compaction**: 三阶段 LLM 压缩（完整摘要 → 分块摘要 → 纯截断），>30 条消息或 >70% context window 触发
+- **Context Overflow Recovery**: 4 级渐进恢复（中等裁剪 → 激进裁剪 → 工具结果截断 → 报错）
+- **Context Guard**: 工具结果动态截断，防止单个结果超过 context window 30%
+- **Session Repair**: 消息历史修复（去孤立、去空、去重、重排序）
+- **Canonical Session**: 跨渠道持久会话，>100 条自动压缩
+
+**知识膨胀控制（per-clone）**：
+- 两步过期：30 天标记 stale → 60 天删除
+- 容量裁剪：超限时优先删最冷的文件
+- 合并候选：标签重叠度 ≥ 0.7 的文件建议合并
+
+**记忆存储（per-agent）**：
+- **Structured KV**: JSON 键值存储，写入不可变（历史版本保留）
+- **Semantic**: 向量嵌入 + 余弦相似度搜索
+- **Knowledge Graph**: 实体-关系图谱
+
+记忆层是独立的基础设施，有自己的生命周期管理（衰减、压缩、清理），独立于分身的创建和销毁。
+
 ---
 
 ## 2. 三层能力架构

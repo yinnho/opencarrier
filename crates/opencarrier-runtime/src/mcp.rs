@@ -46,7 +46,9 @@ pub enum McpTransport {
         #[serde(default)]
         args: Vec<String>,
     },
-    /// HTTP Server-Sent Events.
+    /// HTTP POST to a remote MCP server endpoint.
+    /// Despite the name "sse", this is a synchronous HTTP POST (JSON-RPC over HTTP),
+    /// not true Server-Sent Events streaming. Named "sse" for config compatibility.
     Sse { url: String },
 }
 
@@ -288,6 +290,18 @@ impl McpConnection {
     /// Get the server name.
     pub fn name(&self) -> &str {
         &self.config.name
+    }
+
+    /// Get a clone of the server config (for reconnection).
+    pub fn config(&self) -> &McpServerConfig {
+        &self.config
+    }
+
+    /// Ping the server to check if it's still alive.
+    /// Sends a `tools/list` request as a lightweight health check.
+    pub async fn ping(&mut self) -> Result<(), String> {
+        self.send_request("tools/list", None).await?;
+        Ok(())
     }
 
     // --- Transport helpers ---

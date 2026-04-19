@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use crate::tui::theme;
 use opencarrier_runtime::model_catalog::ModelCatalog;
-use opencarrier_types::model_catalog::ModelTier;
 
 // ── Provider metadata ──────────────────────────────────────────────────────
 
@@ -267,8 +266,6 @@ enum KeyTestState {
 struct ModelEntry {
     id: String,
     display_name: String,
-    tier: &'static str,
-    cost: String,
 }
 
 const ROUTING_TIER_NAMES: [&str; 3] = ["Fast", "Balanced", "Frontier"];
@@ -415,26 +412,20 @@ impl State {
             None => return,
         };
 
-        let models = self.model_catalog.models_by_provider(p.name);
+        let models = self.model_catalog.list_models()
+            .iter()
+            .filter(|m| m.provider == p.name)
+            .collect::<Vec<_>>();
         let mut default_idx = 0usize;
 
         for (i, m) in models.iter().enumerate() {
-            let tier = tier_label(m.tier);
-            let cost = if m.input_cost_per_m == 0.0 && m.output_cost_per_m == 0.0 {
-                "free".to_string()
-            } else {
-                format!("${:.2}/${:.2}", m.input_cost_per_m, m.output_cost_per_m)
-            };
-
             if m.id == p.default_model {
                 default_idx = i;
             }
 
             self.model_entries.push(ModelEntry {
                 id: m.id.clone(),
-                display_name: m.display_name.clone(),
-                tier,
-                cost,
+                display_name: m.id.clone(),
             });
         }
 
@@ -442,8 +433,6 @@ impl State {
             self.model_entries.push(ModelEntry {
                 id: p.default_model.to_string(),
                 display_name: p.default_model.to_string(),
-                tier: "default",
-                cost: String::new(),
             });
         }
 
@@ -468,39 +457,23 @@ impl State {
             None => return,
         };
 
-        let models = self.model_catalog.models_by_provider(p.name);
+        let models = self.model_catalog.list_models()
+            .iter()
+            .filter(|m| m.provider == p.name)
+            .collect::<Vec<_>>();
 
-        // Find best candidates per target tier
+        // Use the first 3 available models as routing candidates
         let mut fast: Option<&str> = None;
         let mut balanced: Option<&str> = None;
         let mut frontier: Option<&str> = None;
 
         for m in &models {
-            match m.tier {
-                ModelTier::Fast | ModelTier::Local | ModelTier::Custom => {
-                    if fast.is_none() {
-                        fast = Some(&m.id);
-                    }
-                }
-                ModelTier::Balanced => {
-                    if balanced.is_none() {
-                        balanced = Some(&m.id);
-                    }
-                }
-                ModelTier::Smart => {
-                    // Smart is a good balanced pick; also good frontier if no frontier exists
-                    if balanced.is_none() {
-                        balanced = Some(&m.id);
-                    }
-                    if frontier.is_none() {
-                        frontier = Some(&m.id);
-                    }
-                }
-                ModelTier::Frontier => {
-                    if frontier.is_none() {
-                        frontier = Some(&m.id);
-                    }
-                }
+            if fast.is_none() {
+                fast = Some(&m.id);
+            } else if balanced.is_none() {
+                balanced = Some(&m.id);
+            } else if frontier.is_none() {
+                frontier = Some(&m.id);
             }
         }
 
@@ -523,16 +496,6 @@ impl State {
     }
 }
 
-fn tier_label(tier: ModelTier) -> &'static str {
-    match tier {
-        ModelTier::Frontier => "frontier",
-        ModelTier::Smart => "smart",
-        ModelTier::Balanced => "balanced",
-        ModelTier::Fast => "fast",
-        ModelTier::Local => "local",
-        ModelTier::Custom => "custom",
-    }
-}
 
 // ── Entry point ────────────────────────────────────────────────────────────
 
@@ -1555,25 +1518,8 @@ fn build_model_list_items<'a>(
                 Span::raw("  ")
             };
 
-            let tier_style = match entry.tier {
-                "frontier" => Style::default().fg(theme::PURPLE),
-                "smart" => Style::default().fg(theme::BLUE),
-                "balanced" => Style::default().fg(theme::YELLOW),
-                "fast" => Style::default().fg(theme::GREEN),
-                "local" => Style::default().fg(theme::TEXT_SECONDARY),
-                _ => theme::dim_style(),
-            };
-
-            let cost_text = if entry.cost.is_empty() {
-                String::new()
-            } else {
-                format!("  {}", entry.cost)
-            };
-
             ListItem::new(Line::from(vec![
                 Span::raw(format!("  {:<32}", entry.display_name)),
-                Span::styled(entry.tier, tier_style),
-                Span::styled(cost_text, theme::dim_style()),
                 default_marker,
             ]))
         })

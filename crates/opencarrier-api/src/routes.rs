@@ -56,6 +56,37 @@ fn get_agent_or_404(
     })
 }
 
+/// Parse agent ID from path and look up the agent. Returns (AgentId, AgentEntry) or an error response.
+fn parse_and_get_agent(
+    id: &str,
+    registry: &opencarrier_kernel::registry::AgentRegistry,
+) -> Result<(AgentId, opencarrier_types::agent::AgentEntry), (StatusCode, Json<serde_json::Value>)> {
+    let agent_id = parse_agent_id(id)?;
+    let entry = get_agent_or_404(registry, &agent_id)?;
+    Ok((agent_id, entry))
+}
+
+/// Look up a clone by name and extract its workspace path.
+/// Returns (AgentEntry, PathBuf) or an error response.
+fn get_clone_workspace(
+    name: &str,
+    registry: &opencarrier_kernel::registry::AgentRegistry,
+) -> Result<(opencarrier_types::agent::AgentEntry, std::path::PathBuf), (StatusCode, Json<serde_json::Value>)> {
+    let entry = registry.find_by_name(name).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
+        )
+    })?;
+    let workspace = entry.manifest.workspace.clone().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Agent has no workspace"})),
+        )
+    })?;
+    Ok((entry, workspace))
+}
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -371,7 +402,6 @@ pub async fn send_message(
                     input_tokens: result.total_usage.input_tokens,
                     output_tokens: result.total_usage.output_tokens,
                     iterations: result.iterations,
-                    cost_usd: result.cost_usd,
                 })),
             )
         }
@@ -397,12 +427,10 @@ pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
 
     match state.kernel.memory.get_session(entry.session_id) {
         Ok(Some(session)) => {
@@ -446,10 +474,6 @@ pub async fn get_agent_session(
                                         UPLOAD_REGISTRY.insert(
                                             file_id.clone(),
                                             UploadMeta {
-                                                filename: format!(
-                                                    "image.{}",
-                                                    media_type.rsplit('/').next().unwrap_or("png")
-                                                ),
                                                 content_type: media_type.clone(),
                                             },
                                         );
@@ -604,13 +628,10 @@ pub async fn restart_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-
-    // Check agent exists
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
 
     let agent_name = entry.name.clone();
     let previous_state = format!("{:?}", entry.state);
@@ -717,6 +738,44 @@ pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse
         "modalities": modalities,
         "endpoints": endpoints,
     }))
+}
+
+/// GET /api/brain/status — Brain health status (driver readiness, latency, success/failure).
+pub async fn brain_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let brain = state.kernel.brain_info();
+    let status = brain.status();
+    Json(serde_json::to_value(&status).unwrap_or_default())
+}
+
+/// GET /api/brain/modalities/{name} — Resolved endpoint chain for a single modality.
+pub async fn brain_modality_detail(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let brain = state.kernel.brain_info();
+    let endpoints = brain.endpoints_for(&name);
+    if endpoints.is_empty() {
+        // Check if modality exists at all
+        let config = brain.config();
+        if !config.modalities.contains_key(&name) {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("Modality '{}' not found", name)})),
+            );
+        }
+    }
+    let config = brain.config();
+    let mc = config.modalities.get(&name);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "modality": name,
+            "description": mc.map(|m| m.description.clone()).unwrap_or_default(),
+            "primary": mc.map(|m| m.primary.clone()).unwrap_or_default(),
+            "fallbacks": mc.map(|m| m.fallbacks.clone()).unwrap_or_default(),
+            "endpoints": endpoints,
+        })),
+    )
 }
 
 // ── Brain config management ────────────────────────────────────────────────
@@ -1249,12 +1308,10 @@ pub async fn get_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
 
     (
         StatusCode::OK,
@@ -1424,8 +1481,28 @@ pub async fn list_templates() -> impl IntoResponse {
 
 /// GET /api/templates/:name — Get template details.
 pub async fn get_template(Path(name): Path<String>) -> impl IntoResponse {
+    // Reject path traversal attempts
+    if name.contains('.') || name.contains(std::path::MAIN_SEPARATOR) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid template name"})),
+        );
+    }
+
     let agents_dir = opencarrier_kernel::config::opencarrier_home().join("agents");
     let manifest_path = agents_dir.join(&name).join("agent.toml");
+
+    // Verify resolved path stays within agents_dir
+    if let (Ok(canonical_agents), Ok(canonical_manifest)) =
+        (agents_dir.canonicalize(), manifest_path.canonicalize())
+    {
+        if !canonical_manifest.starts_with(&canonical_agents) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid template name"})),
+            );
+        }
+    }
 
     if !manifest_path.exists() {
         return (
@@ -2101,14 +2178,12 @@ pub async fn usage_summary(State(state): State<Arc<AppState>>) -> impl IntoRespo
         Ok(s) => Json(serde_json::json!({
             "total_input_tokens": s.total_input_tokens,
             "total_output_tokens": s.total_output_tokens,
-            "total_cost_usd": s.total_cost_usd,
             "call_count": s.call_count,
             "total_tool_calls": s.total_tool_calls,
         })),
         Err(_) => Json(serde_json::json!({
             "total_input_tokens": 0,
             "total_output_tokens": 0,
-            "total_cost_usd": 0.0,
             "call_count": 0,
             "total_tool_calls": 0,
         })),
@@ -2124,7 +2199,6 @@ pub async fn usage_by_model(State(state): State<Arc<AppState>>) -> impl IntoResp
                 .map(|m| {
                     serde_json::json!({
                         "model": m.model,
-                        "total_cost_usd": m.total_cost_usd,
                         "total_input_tokens": m.total_input_tokens,
                         "total_output_tokens": m.total_output_tokens,
                         "call_count": m.call_count,
@@ -2140,7 +2214,6 @@ pub async fn usage_by_model(State(state): State<Arc<AppState>>) -> impl IntoResp
 /// GET /api/usage/daily — Get daily usage breakdown for the last 7 days.
 pub async fn usage_daily(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let days = state.kernel.memory.usage().query_daily_breakdown(7);
-    let today_cost = state.kernel.memory.usage().query_today_cost();
     let first_event = state.kernel.memory.usage().query_first_event_date();
 
     let days_list = match days {
@@ -2149,7 +2222,6 @@ pub async fn usage_daily(State(state): State<Arc<AppState>>) -> impl IntoRespons
             .map(|day| {
                 serde_json::json!({
                     "date": day.date,
-                    "cost_usd": day.cost_usd,
                     "tokens": day.tokens,
                     "calls": day.calls,
                 })
@@ -2160,185 +2232,8 @@ pub async fn usage_daily(State(state): State<Arc<AppState>>) -> impl IntoRespons
 
     Json(serde_json::json!({
         "days": days_list,
-        "today_cost_usd": today_cost.unwrap_or(0.0),
         "first_event_date": first_event.unwrap_or(None),
     }))
-}
-
-// ---------------------------------------------------------------------------
-// Budget endpoints
-// ---------------------------------------------------------------------------
-
-/// GET /api/budget — Current budget status (limits, spend, % used).
-pub async fn budget_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let status = state
-        .kernel
-        .metering
-        .budget_status(&state.kernel.config.budget);
-    Json(serde_json::to_value(&status).unwrap_or_default())
-}
-
-/// PUT /api/budget — Update global budget limits (in-memory only, not persisted to config.toml).
-pub async fn update_budget(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    // SAFETY: Budget config is updated in-place. Since KernelConfig is behind
-    // an Arc and we only have &self, we use ptr mutation (same pattern as OFP).
-    let config_ptr = &state.kernel.config as *const opencarrier_types::config::KernelConfig
-        as *mut opencarrier_types::config::KernelConfig;
-
-    // Apply updates
-    unsafe {
-        if let Some(v) = body["max_hourly_usd"].as_f64() {
-            (*config_ptr).budget.max_hourly_usd = v;
-        }
-        if let Some(v) = body["max_daily_usd"].as_f64() {
-            (*config_ptr).budget.max_daily_usd = v;
-        }
-        if let Some(v) = body["max_monthly_usd"].as_f64() {
-            (*config_ptr).budget.max_monthly_usd = v;
-        }
-        if let Some(v) = body["alert_threshold"].as_f64() {
-            (*config_ptr).budget.alert_threshold = v.clamp(0.0, 1.0);
-        }
-        if let Some(v) = body["default_max_llm_tokens_per_hour"].as_u64() {
-            (*config_ptr).budget.default_max_llm_tokens_per_hour = v;
-        }
-    }
-
-    let status = state
-        .kernel
-        .metering
-        .budget_status(&state.kernel.config.budget);
-    Json(serde_json::to_value(&status).unwrap_or_default())
-}
-
-/// GET /api/budget/agents/{id} — Per-agent budget/quota status.
-pub async fn agent_budget_status(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
-        Err(resp) => return resp,
-    };
-
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
-
-    let quota = &entry.manifest.resources;
-    let usage_store = opencarrier_memory::usage::UsageStore::new(state.kernel.memory.usage_conn());
-    let hourly = usage_store.query_hourly(agent_id).unwrap_or(0.0);
-    let daily = usage_store.query_daily(agent_id).unwrap_or(0.0);
-    let monthly = usage_store.query_monthly(agent_id).unwrap_or(0.0);
-
-    // Token usage from scheduler
-    let token_usage = state.kernel.scheduler.get_usage(agent_id);
-    let tokens_used = token_usage.map(|(t, _)| t).unwrap_or(0);
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "agent_id": agent_id.to_string(),
-            "agent_name": entry.name,
-            "hourly": {
-                "spend": hourly,
-                "limit": quota.max_cost_per_hour_usd,
-                "pct": if quota.max_cost_per_hour_usd > 0.0 { hourly / quota.max_cost_per_hour_usd } else { 0.0 },
-            },
-            "daily": {
-                "spend": daily,
-                "limit": quota.max_cost_per_day_usd,
-                "pct": if quota.max_cost_per_day_usd > 0.0 { daily / quota.max_cost_per_day_usd } else { 0.0 },
-            },
-            "monthly": {
-                "spend": monthly,
-                "limit": quota.max_cost_per_month_usd,
-                "pct": if quota.max_cost_per_month_usd > 0.0 { monthly / quota.max_cost_per_month_usd } else { 0.0 },
-            },
-            "tokens": {
-                "used": tokens_used,
-                "limit": quota.max_llm_tokens_per_hour,
-                "pct": if quota.max_llm_tokens_per_hour > 0 { tokens_used as f64 / quota.max_llm_tokens_per_hour as f64 } else { 0.0 },
-            },
-        })),
-    )
-}
-
-/// GET /api/budget/agents — Per-agent cost ranking (top spenders).
-pub async fn agent_budget_ranking(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let usage_store = opencarrier_memory::usage::UsageStore::new(state.kernel.memory.usage_conn());
-    let agents: Vec<serde_json::Value> = state
-        .kernel
-        .registry
-        .list()
-        .iter()
-        .filter_map(|entry| {
-            let daily = usage_store.query_daily(entry.id).unwrap_or(0.0);
-            if daily > 0.0 {
-                Some(serde_json::json!({
-                    "agent_id": entry.id.to_string(),
-                    "name": entry.name,
-                    "daily_cost_usd": daily,
-                    "hourly_limit": entry.manifest.resources.max_cost_per_hour_usd,
-                    "daily_limit": entry.manifest.resources.max_cost_per_day_usd,
-                    "monthly_limit": entry.manifest.resources.max_cost_per_month_usd,
-                    "max_llm_tokens_per_hour": entry.manifest.resources.max_llm_tokens_per_hour,
-                }))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    Json(serde_json::json!({"agents": agents, "total": agents.len()}))
-}
-
-/// PUT /api/budget/agents/{id} — Update per-agent budget limits at runtime.
-pub async fn update_agent_budget(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
-        Err(resp) => return resp,
-    };
-
-    let hourly = body["max_cost_per_hour_usd"].as_f64();
-    let daily = body["max_cost_per_day_usd"].as_f64();
-    let monthly = body["max_cost_per_month_usd"].as_f64();
-    let tokens = body["max_llm_tokens_per_hour"].as_u64();
-
-    if hourly.is_none() && daily.is_none() && monthly.is_none() && tokens.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Provide at least one of: max_cost_per_hour_usd, max_cost_per_day_usd, max_cost_per_month_usd, max_llm_tokens_per_hour"}),
-            ),
-        );
-    }
-
-    match state
-        .kernel
-        .registry
-        .update_resources(agent_id, hourly, daily, monthly, tokens)
-    {
-        Ok(()) => {
-            // Persist updated entry
-            if let Some(entry) = state.kernel.registry.get(agent_id) {
-                let _ = state.kernel.memory.save_agent(&entry);
-            }
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "ok", "message": "Agent budget updated"})),
-            )
-        }
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        ),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2474,33 +2369,16 @@ pub async fn find_session_by_label(
 pub async fn update_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(req): Json<AgentUpdateRequest>,
+    Json(_req): Json<AgentUpdateRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
-        Err(resp) => return resp,
-    };
+    // Validate agent exists
+    let _ = parse_and_get_agent(&id, &state.kernel.registry);
 
-    match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(_) => (), Err(r) => return r };
-
-    // Parse the new manifest
-    let _manifest: AgentManifest = match toml::from_str(&req.manifest_toml) {
-        Ok(m) => m,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Invalid manifest: {e}")})),
-            );
-        }
-    };
-
-    // Note: Full manifest update requires kill + respawn. For now, acknowledge receipt.
     (
-        StatusCode::OK,
+        StatusCode::GONE,
         Json(serde_json::json!({
-            "status": "acknowledged",
+            "error": "In-place manifest update is not supported. Use DELETE + POST (kill and respawn) to apply changes.",
             "agent_id": id,
-            "note": "Full manifest update requires agent restart. Use DELETE + POST to apply.",
         })),
     )
 }
@@ -2511,12 +2389,10 @@ pub async fn patch_agent(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-
-    match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(_) => (), Err(r) => return r };
 
     // Apply partial updates using dedicated registry methods
     if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
@@ -2658,379 +2534,6 @@ pub async fn security_status(State(state): State<Arc<AppState>>) -> impl IntoRes
     }))
 }
 
-// ── Model Catalog Endpoints ─────────────────────────────────────────
-
-/// GET /api/models — List all models in the catalog.
-///
-/// Query parameters:
-/// - `provider` — filter by provider (e.g. `?provider=anthropic`)
-/// - `tier` — filter by tier (e.g. `?tier=smart`)
-/// - `available` — only show models from configured providers (`?available=true`)
-pub async fn list_models(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let catalog = state
-        .kernel
-        .model_catalog
-        .read()
-        .unwrap_or_else(|e| e.into_inner());
-    let provider_filter = params.get("provider").map(|s| s.to_lowercase());
-    let tier_filter = params.get("tier").map(|s| s.to_lowercase());
-    let available_only = params
-        .get("available")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
-
-    let models: Vec<serde_json::Value> = catalog
-        .list_models()
-        .iter()
-        .filter(|m| {
-            if let Some(ref p) = provider_filter {
-                if m.provider.to_lowercase() != *p {
-                    return false;
-                }
-            }
-            if let Some(ref t) = tier_filter {
-                if m.tier.to_string() != *t {
-                    return false;
-                }
-            }
-            if available_only {
-                let provider = catalog.get_provider(&m.provider);
-                if let Some(p) = provider {
-                    if p.auth_status == opencarrier_types::model_catalog::AuthStatus::Missing {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
-        .map(|m| {
-            // Custom models from unknown providers are assumed available
-            let available = catalog
-                .get_provider(&m.provider)
-                .map(|p| p.auth_status != opencarrier_types::model_catalog::AuthStatus::Missing)
-                .unwrap_or(m.tier == opencarrier_types::model_catalog::ModelTier::Custom);
-            serde_json::json!({
-                "id": m.id,
-                "display_name": m.display_name,
-                "provider": m.provider,
-                "tier": m.tier,
-                "context_window": m.context_window,
-                "max_output_tokens": m.max_output_tokens,
-                "input_cost_per_m": m.input_cost_per_m,
-                "output_cost_per_m": m.output_cost_per_m,
-                "supports_tools": m.supports_tools,
-                "supports_vision": m.supports_vision,
-                "supports_streaming": m.supports_streaming,
-                "available": available,
-            })
-        })
-        .collect();
-
-    let total = catalog.list_models().len();
-    let available_count = catalog.available_models().len();
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "models": models,
-            "total": total,
-            "available": available_count,
-        })),
-    )
-}
-
-/// GET /api/models/aliases — List all alias-to-model mappings.
-pub async fn list_aliases(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let aliases = state
-        .kernel
-        .model_catalog
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .list_aliases()
-        .clone();
-    let entries: Vec<serde_json::Value> = aliases
-        .iter()
-        .map(|(alias, model_id)| {
-            serde_json::json!({
-                "alias": alias,
-                "model_id": model_id,
-            })
-        })
-        .collect();
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "aliases": entries,
-            "total": entries.len(),
-        })),
-    )
-}
-
-/// GET /api/models/{id} — Get a single model by ID or alias.
-pub async fn get_model(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let catalog = state
-        .kernel
-        .model_catalog
-        .read()
-        .unwrap_or_else(|e| e.into_inner());
-    match catalog.find_model(&id) {
-        Some(m) => {
-            let available = catalog
-                .get_provider(&m.provider)
-                .map(|p| p.auth_status != opencarrier_types::model_catalog::AuthStatus::Missing)
-                .unwrap_or(m.tier == opencarrier_types::model_catalog::ModelTier::Custom);
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "id": m.id,
-                    "display_name": m.display_name,
-                    "provider": m.provider,
-                    "tier": m.tier,
-                    "context_window": m.context_window,
-                    "max_output_tokens": m.max_output_tokens,
-                    "input_cost_per_m": m.input_cost_per_m,
-                    "output_cost_per_m": m.output_cost_per_m,
-                    "supports_tools": m.supports_tools,
-                    "supports_vision": m.supports_vision,
-                    "supports_streaming": m.supports_streaming,
-                    "aliases": m.aliases,
-                    "available": available,
-                })),
-            )
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Model '{}' not found", id)})),
-        ),
-    }
-}
-
-/// GET /api/providers — List all providers with auth status.
-///
-/// For local providers (ollama, vllm, lmstudio), also probes reachability and
-/// discovers available models via their health endpoints.
-///
-/// Probes run **concurrently** and results are **cached for 60 seconds** so the
-/// endpoint responds instantly on repeated dashboard loads even when local
-/// providers are unreachable (fixes #474).
-pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let provider_list: Vec<opencarrier_types::model_catalog::ProviderInfo> = {
-        let catalog = state
-            .kernel
-            .model_catalog
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        catalog.list_providers().to_vec()
-    };
-
-    // Collect local providers that need probing
-    let local_providers: Vec<(usize, String, String)> = provider_list
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.key_required && !p.base_url.is_empty())
-        .map(|(i, p)| (i, p.id.clone(), p.base_url.clone()))
-        .collect();
-
-    // Fire all probes concurrently (cached results return instantly)
-    let cache = &state.provider_probe_cache;
-    let probe_futures: Vec<_> = local_providers
-        .iter()
-        .map(|(_, id, url)| {
-            opencarrier_runtime::provider_health::probe_provider_cached(id, url, cache)
-        })
-        .collect();
-    let probe_results = futures::future::join_all(probe_futures).await;
-
-    // Index probe results by provider list position for O(1) lookup
-    let mut probe_map: HashMap<usize, opencarrier_runtime::provider_health::ProbeResult> =
-        HashMap::with_capacity(local_providers.len());
-    for ((idx, _, _), result) in local_providers.iter().zip(probe_results.into_iter()) {
-        probe_map.insert(*idx, result);
-    }
-
-    let mut providers: Vec<serde_json::Value> = Vec::with_capacity(provider_list.len());
-
-    for (i, p) in provider_list.iter().enumerate() {
-        let mut entry = serde_json::json!({
-            "id": p.id,
-            "display_name": p.display_name,
-            "auth_status": p.auth_status,
-            "model_count": p.model_count,
-            "key_required": p.key_required,
-            "api_key_env": p.api_key_env,
-            "base_url": p.base_url,
-        });
-
-        // For local providers, attach the probe result
-        if let Some(probe) = probe_map.remove(&i) {
-            entry["is_local"] = serde_json::json!(true);
-            entry["reachable"] = serde_json::json!(probe.reachable);
-            entry["latency_ms"] = serde_json::json!(probe.latency_ms);
-            if !probe.discovered_models.is_empty() {
-                entry["discovered_models"] = serde_json::json!(probe.discovered_models);
-                // Merge discovered models into the catalog so agents can use them
-                if let Ok(mut catalog) = state.kernel.model_catalog.write() {
-                    catalog.merge_discovered_models(&p.id, &probe.discovered_models);
-                }
-            }
-            if let Some(err) = &probe.error {
-                entry["error"] = serde_json::json!(err);
-            }
-        } else if !p.key_required {
-            // Local provider with empty base_url (e.g. claude-code) — skip probing
-            entry["is_local"] = serde_json::json!(true);
-        }
-
-        providers.push(entry);
-    }
-
-    let total = providers.len();
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "providers": providers,
-            "total": total,
-        })),
-    )
-}
-
-/// POST /api/models/custom — Add a custom model to the catalog.
-///
-/// Persists to `~/.opencarrier/custom_models.json` and makes the model immediately
-/// available for agent assignment.
-pub async fn add_custom_model(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let id = body
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let provider = body
-        .get("provider")
-        .and_then(|v| v.as_str())
-        .unwrap_or("openrouter")
-        .to_string();
-    let context_window = body
-        .get("context_window")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(128_000);
-    let max_output = body
-        .get("max_output_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(8_192);
-
-    if id.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing required field: id"})),
-        );
-    }
-
-    let display = body
-        .get("display_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&id)
-        .to_string();
-
-    let entry = opencarrier_types::model_catalog::ModelCatalogEntry {
-        id: id.clone(),
-        display_name: display,
-        provider: provider.clone(),
-        tier: opencarrier_types::model_catalog::ModelTier::Custom,
-        context_window,
-        max_output_tokens: max_output,
-        input_cost_per_m: body
-            .get("input_cost_per_m")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0),
-        output_cost_per_m: body
-            .get("output_cost_per_m")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0),
-        supports_tools: body
-            .get("supports_tools")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        supports_vision: body
-            .get("supports_vision")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        supports_streaming: body
-            .get("supports_streaming")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        aliases: vec![],
-    };
-
-    let mut catalog = state
-        .kernel
-        .model_catalog
-        .write()
-        .unwrap_or_else(|e| e.into_inner());
-
-    if !catalog.add_custom_model(entry) {
-        return (
-            StatusCode::CONFLICT,
-            Json(
-                serde_json::json!({"error": format!("Model '{}' already exists for provider '{}'", id, provider)}),
-            ),
-        );
-    }
-
-    // Persist to disk
-    let custom_path = state.kernel.config.home_dir.join("custom_models.json");
-    if let Err(e) = catalog.save_custom_models(&custom_path) {
-        tracing::warn!("Failed to persist custom models: {e}");
-    }
-
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "id": id,
-            "provider": provider,
-            "status": "added"
-        })),
-    )
-}
-
-/// DELETE /api/models/custom/{id} — Remove a custom model.
-pub async fn remove_custom_model(
-    State(state): State<Arc<AppState>>,
-    axum::extract::Path(model_id): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    let mut catalog = state
-        .kernel
-        .model_catalog
-        .write()
-        .unwrap_or_else(|e| e.into_inner());
-
-    if !catalog.remove_custom_model(&model_id) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Custom model '{}' not found", model_id)})),
-        );
-    }
-
-    let custom_path = state.kernel.config.home_dir.join("custom_models.json");
-    if let Err(e) = catalog.save_custom_models(&custom_path) {
-        tracing::warn!("Failed to persist custom models: {e}");
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "removed"})),
-    )
-}
-
 // ── MCP HTTP Endpoint ───────────────────────────────────────────────────
 
 /// POST /mcp — Handle MCP JSON-RPC requests over HTTP.
@@ -3104,7 +2607,7 @@ pub async fn mcp_http(
             None,
             None,
             Some(&state.kernel.media_engine),
-            None, // exec_policy
+            Some(&state.kernel.config.exec_policy),
             if state.kernel.config.tts.enabled {
                 Some(&state.kernel.tts_engine)
             } else {
@@ -3236,11 +2739,10 @@ pub async fn clear_agent_history(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-    match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(_) => (), Err(r) => return r };
     match state.kernel.clear_agent_history(agent_id) {
         Ok(()) => (
             StatusCode::OK,
@@ -3351,11 +2853,10 @@ pub async fn get_agent_tools(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -3418,11 +2919,10 @@ pub async fn get_agent_skills(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
     let available = state
         .kernel
         .skill_registry
@@ -3479,11 +2979,10 @@ pub async fn get_agent_mcp_servers(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
     // Collect known MCP server names from connected tools
     let mut available: Vec<String> = Vec::new();
     if let Ok(mcp_tools) = state.kernel.mcp_tools.lock() {
@@ -3542,491 +3041,6 @@ pub async fn set_agent_mcp_servers(
             Json(serde_json::json!({"error": format!("{e}")})),
         ),
     }
-}
-
-// ── Provider Key Management Endpoints ──────────────────────────────────
-
-/// Write a key=value line to a secrets.env file.
-/// Creates the file if it doesn't exist; updates the value if the key already exists.
-fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<(), String> {
-    let existing = if path.exists() {
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read secrets.env: {e}"))?
-    } else {
-        String::new()
-    };
-    let mut lines: Vec<String> = existing.lines().map(|l| l.to_string()).collect();
-    let pattern = format!("{key}=");
-    let mut found = false;
-    for line in &mut lines {
-        let trimmed = line.trim();
-        if trimmed.starts_with(&pattern) && !trimmed.starts_with('#') {
-            *line = format!("{key}={value}");
-            found = true;
-            break;
-        }
-    }
-    if !found {
-        lines.push(format!("{key}={value}"));
-    }
-    let content = lines.join("\n");
-    std::fs::write(path, content).map_err(|e| format!("Failed to write secrets.env: {e}"))
-}
-
-/// Remove a key=value line from a secrets.env file.
-fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let existing = std::fs::read_to_string(path).map_err(|e| format!("Failed to read secrets.env: {e}"))?;
-    let pattern = format!("{key}=");
-    let lines: Vec<String> = existing
-        .lines()
-        .filter(|l| {
-            let trimmed = l.trim();
-            !trimmed.starts_with(&pattern) || trimmed.starts_with('#')
-        })
-        .map(|l| l.to_string())
-        .collect();
-    let content = lines.join("\n");
-    std::fs::write(path, content).map_err(|e| format!("Failed to write secrets.env: {e}"))
-}
-
-/// POST /api/providers/{name}/key — Save an API key for a provider.
-///
-/// SECURITY: Writes to `~/.opencarrier/secrets.env`, sets env var in process,
-/// and refreshes auth detection. Key is zeroized after use.
-pub async fn set_provider_key(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let key = match body["key"].as_str() {
-        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing or empty 'key' field"})),
-            );
-        }
-    };
-
-    // Look up env var from catalog; for unknown/custom providers derive one.
-    let env_var = {
-        let catalog = state
-            .kernel
-            .model_catalog
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        catalog
-            .get_provider(&name)
-            .map(|p| p.api_key_env.clone())
-            .unwrap_or_else(|| {
-                // Custom provider — derive env var: MY_PROVIDER → MY_PROVIDER_API_KEY
-                format!("{}_API_KEY", name.to_uppercase().replace('-', "_"))
-            })
-    };
-
-    // Write to secrets.env file
-    let secrets_path = state.kernel.config.home_dir.join("secrets.env");
-    if let Err(e) = write_secret_env(&secrets_path, &env_var, &key) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write secrets.env: {e}")})),
-        );
-    }
-
-    // Set env var in current process so detect_auth picks it up
-    std::env::set_var(&env_var, &key);
-
-    // Refresh auth detection
-    state
-        .kernel
-        .model_catalog
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .detect_auth();
-
-    // Auto-switch default provider if current default has no working key.
-    // This fixes the common case where a user adds e.g. a Gemini key via dashboard
-    // but their agent still tries to use the previous provider (which has no key).
-    //
-    // Read the effective default from the hot-reload override (if set) rather than
-    // the stale boot-time config — a previous set_provider_key call may have already
-    // switched the default.
-    let (current_provider, current_key_env) = {
-        let guard = state
-            .kernel
-            .default_model_override
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        match guard.as_ref() {
-            Some(dm) => (dm.provider.clone(), dm.api_key_env.clone()),
-            None => (
-                state.kernel.config.default_model.provider.clone(),
-                state.kernel.config.default_model.api_key_env.clone(),
-            ),
-        }
-    };
-    let current_has_key = if current_key_env.is_empty() {
-        false
-    } else {
-        std::env::var(&current_key_env)
-            .ok()
-            .filter(|v| !v.is_empty())
-            .is_some()
-    };
-    let switched = if !current_has_key && current_provider != name {
-        // Find a default model for the newly-keyed provider
-        let default_model = {
-            let catalog = state
-                .kernel
-                .model_catalog
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
-            catalog.default_model_for_provider(&name)
-        };
-        if let Some(model_id) = default_model {
-            // Update config.toml to persist the switch
-            let config_path = state.kernel.config.home_dir.join("config.toml");
-            let update_toml = format!(
-                "\n[default_model]\nprovider = \"{}\"\nmodel = \"{}\"\napi_key_env = \"{}\"\n",
-                name, model_id, env_var
-            );
-            backup_config(&config_path);
-            if let Ok(existing) = std::fs::read_to_string(&config_path) {
-                let cleaned = remove_toml_section(&existing, "default_model");
-                let _ =
-                    std::fs::write(&config_path, format!("{}\n{}", cleaned.trim(), update_toml));
-            } else {
-                let _ = std::fs::write(&config_path, update_toml);
-            }
-
-            // Hot-update the in-memory default model override so resolve_driver()
-            // immediately creates drivers for the new provider — no restart needed.
-            {
-                let new_dm = opencarrier_types::config::DefaultModelConfig {
-                    provider: name.clone(),
-                    model: model_id,
-                    api_key_env: env_var.clone(),
-                    base_url: None,
-                };
-                let mut guard = state
-                    .kernel
-                    .default_model_override
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner());
-                *guard = Some(new_dm);
-            }
-            true
-        } else {
-            false
-        }
-    } else if current_provider == name {
-        // User is saving a key for the CURRENT default provider. The env var is
-        // already set (set_var above), but we must ensure default_model_override
-        // has the correct api_key_env so resolve_driver reads the right variable.
-        let needs_update = {
-            let guard = state
-                .kernel
-                .default_model_override
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
-            match guard.as_ref() {
-                Some(dm) => dm.api_key_env != env_var,
-                None => state.kernel.config.default_model.api_key_env != env_var,
-            }
-        };
-        if needs_update {
-            let mut guard = state
-                .kernel
-                .default_model_override
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            let base = guard
-                .clone()
-                .unwrap_or_else(|| state.kernel.config.default_model.clone());
-            *guard = Some(opencarrier_types::config::DefaultModelConfig {
-                api_key_env: env_var.clone(),
-                ..base
-            });
-        }
-        false
-    } else {
-        false
-    };
-
-    let mut resp = serde_json::json!({"status": "saved", "provider": name});
-    if switched {
-        resp["switched_default"] = serde_json::json!(true);
-        resp["message"] = serde_json::json!(format!(
-            "API key saved and default provider switched to '{}'.",
-            name
-        ));
-    }
-
-    (StatusCode::OK, Json(resp))
-}
-
-/// DELETE /api/providers/{name}/key — Remove an API key for a provider.
-pub async fn delete_provider_key(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> impl IntoResponse {
-    let env_var = {
-        let catalog = state
-            .kernel
-            .model_catalog
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        catalog
-            .get_provider(&name)
-            .map(|p| p.api_key_env.clone())
-            .unwrap_or_else(|| {
-                // Custom/unknown provider — derive env var from convention
-                format!("{}_API_KEY", name.to_uppercase().replace('-', "_"))
-            })
-    };
-
-    if env_var.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Provider does not require an API key"})),
-        );
-    }
-
-    // Remove from secrets.env
-    let secrets_path = state.kernel.config.home_dir.join("secrets.env");
-    if let Err(e) = remove_secret_env(&secrets_path, &env_var) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to update secrets.env: {e}")})),
-        );
-    }
-
-    // Remove from process environment
-    std::env::remove_var(&env_var);
-
-    // Refresh auth detection
-    state
-        .kernel
-        .model_catalog
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .detect_auth();
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "removed", "provider": name})),
-    )
-}
-
-/// POST /api/providers/{name}/test — Test a provider's connectivity.
-pub async fn test_provider(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> impl IntoResponse {
-    let (env_var, base_url, key_required, default_model) = {
-        let catalog = state
-            .kernel
-            .model_catalog
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        match catalog.get_provider(&name) {
-            Some(p) => {
-                // Find a default model for this provider to use in the test request
-                let model_id = catalog
-                    .default_model_for_provider(&name)
-                    .unwrap_or_default();
-                (
-                    p.api_key_env.clone(),
-                    p.base_url.clone(),
-                    p.key_required,
-                    model_id,
-                )
-            }
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": format!("Unknown provider '{}'", name)})),
-                );
-            }
-        }
-    };
-
-    let api_key = std::env::var(&env_var).ok();
-    // Only require API key for providers that need one (skip local providers like ollama/vllm/lmstudio)
-    if key_required && api_key.is_none() && !env_var.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Provider API key not configured"})),
-        );
-    }
-
-    // Attempt a lightweight connectivity test
-    let start = std::time::Instant::now();
-    let driver_config = opencarrier_runtime::llm_driver::DriverConfig {
-        provider: name.clone(),
-        api_key,
-        base_url: if base_url.is_empty() {
-            None
-        } else {
-            Some(base_url)
-        },
-        skip_permissions: true,
-    };
-
-    match opencarrier_runtime::drivers::create_driver(&driver_config) {
-        Ok(driver) => {
-            // Send a minimal completion request to test connectivity
-            let test_req = opencarrier_runtime::llm_driver::CompletionRequest {
-                model: default_model.clone(),
-                messages: vec![opencarrier_types::message::Message::user("Hi")],
-                tools: vec![],
-                max_tokens: 1,
-                temperature: 0.0,
-                system: None,
-                thinking: None,
-            };
-            match driver.complete(test_req).await {
-                Ok(_) => {
-                    let latency_ms = start.elapsed().as_millis();
-                    (
-                        StatusCode::OK,
-                        Json(serde_json::json!({
-                            "status": "ok",
-                            "provider": name,
-                            "latency_ms": latency_ms,
-                        })),
-                    )
-                }
-                Err(e) => (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "status": "error",
-                        "provider": name,
-                        "error": format!("{e}"),
-                    })),
-                ),
-            }
-        }
-        Err(e) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "error",
-                "provider": name,
-                "error": format!("Failed to create driver: {e}"),
-            })),
-        ),
-    }
-}
-
-/// PUT /api/providers/{name}/url — Set a custom base URL for a provider.
-pub async fn set_provider_url(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    // Accept any provider name — custom providers are supported via OpenAI-compatible format.
-    let base_url = match body["base_url"].as_str() {
-        Some(u) if !u.trim().is_empty() => u.trim().to_string(),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing or empty 'base_url' field"})),
-            );
-        }
-    };
-
-    // Validate URL scheme
-    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "base_url must start with http:// or https://"})),
-        );
-    }
-
-    // Update catalog in memory
-    {
-        let mut catalog = state
-            .kernel
-            .model_catalog
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        catalog.set_provider_url(&name, &base_url);
-    }
-
-    // Persist to config.toml [provider_urls] section
-    let config_path = state.kernel.config.home_dir.join("config.toml");
-    if let Err(e) = upsert_provider_url(&config_path, &name, &base_url) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to save config: {e}")})),
-        );
-    }
-
-    // Probe reachability at the new URL
-    let probe = opencarrier_runtime::provider_health::probe_provider(&name, &base_url).await;
-
-    // Merge discovered models into catalog
-    if !probe.discovered_models.is_empty() {
-        if let Ok(mut catalog) = state.kernel.model_catalog.write() {
-            catalog.merge_discovered_models(&name, &probe.discovered_models);
-        }
-    }
-
-    let mut resp = serde_json::json!({
-        "status": "saved",
-        "provider": name,
-        "base_url": base_url,
-        "reachable": probe.reachable,
-        "latency_ms": probe.latency_ms,
-    });
-    if !probe.discovered_models.is_empty() {
-        resp["discovered_models"] = serde_json::json!(probe.discovered_models);
-    }
-
-    (StatusCode::OK, Json(resp))
-}
-
-/// Upsert a provider URL in the `[provider_urls]` section of config.toml.
-fn upsert_provider_url(
-    config_path: &std::path::Path,
-    provider: &str,
-    url: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let content = if config_path.exists() {
-        std::fs::read_to_string(config_path)?
-    } else {
-        String::new()
-    };
-
-    let mut doc: toml::Value = if content.trim().is_empty() {
-        toml::Value::Table(toml::map::Map::new())
-    } else {
-        toml::from_str(&content)?
-    };
-
-    let root = doc.as_table_mut().ok_or("Config is not a TOML table")?;
-
-    if !root.contains_key("provider_urls") {
-        root.insert(
-            "provider_urls".to_string(),
-            toml::Value::Table(toml::map::Map::new()),
-        );
-    }
-    let urls_table = root
-        .get_mut("provider_urls")
-        .and_then(|v| v.as_table_mut())
-        .ok_or("provider_urls is not a table")?;
-
-    urls_table.insert(provider.to_string(), toml::Value::String(url.to_string()));
-
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
-    Ok(())
 }
 
 /// POST /api/skills/create — Create a local prompt-only skill.
@@ -4506,12 +3520,10 @@ pub async fn list_agent_files(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
         Err(resp) => return resp,
     };
-
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
 
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
@@ -4762,8 +3774,6 @@ struct UploadResponse {
 
 /// Metadata stored alongside uploaded files.
 struct UploadMeta {
-    #[allow(dead_code)]
-    filename: String,
     content_type: String,
 }
 
@@ -4863,7 +3873,6 @@ pub async fn upload_file(
     UPLOAD_REGISTRY.insert(
         file_id.clone(),
         UploadMeta {
-            filename: filename.clone(),
             content_type: content_type.clone(),
         },
     );
@@ -5108,6 +4117,26 @@ pub async fn config_set(
         }
     };
 
+    // Block sensitive keys that should not be changed via API
+    const BLOCKED_KEYS: &[&str] = &[
+        "api_key",
+        "auth",
+        "exec_policy",
+        "docker",
+    ];
+    let lower = path.to_lowercase();
+    for blocked in BLOCKED_KEYS {
+        if lower.starts_with(blocked) || lower.contains(&format!(".{blocked}")) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "status": "error",
+                    "error": format!("Cannot modify '{blocked}' via API — edit config.toml directly")
+                })),
+            );
+        }
+    }
+
     let config_path = state.kernel.config.home_dir.join("config.toml");
 
     // Read existing config as a TOML table, or start fresh
@@ -5224,48 +4253,6 @@ fn json_to_toml_value(value: &serde_json::Value) -> toml::Value {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Delivery tracking endpoints
-// ---------------------------------------------------------------------------
-
-/// GET /api/agents/:id/deliveries — List recent delivery receipts for an agent.
-pub async fn get_agent_deliveries(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let agent_id: AgentId = match id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            // Try name lookup
-            match state.kernel.registry.find_by_name(&id) {
-                Some(entry) => entry.id,
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        Json(serde_json::json!({"error": "Agent not found"})),
-                    );
-                }
-            }
-        }
-    };
-
-    let limit = params
-        .get("limit")
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(50)
-        .min(500);
-
-    let receipts = state.kernel.delivery_tracker.get_receipts(agent_id, limit);
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "agent_id": agent_id.to_string(),
-            "count": receipts.len(),
-            "receipts": receipts,
-        })),
-    )
-}
 
 // ---------------------------------------------------------------------------
 // Cron job management endpoints
@@ -6214,32 +5201,6 @@ pub async fn auth_check(
     }
 }
 
-fn backup_config(config_path: &std::path::Path) {
-    let backup = config_path.with_extension("toml.bak");
-    let _ = std::fs::copy(config_path, backup);
-}
-
-fn remove_toml_section(content: &str, section: &str) -> String {
-    let header = format!("[{}]", section);
-    let mut result = String::new();
-    let mut skipping = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed == header {
-            skipping = true;
-            continue;
-        }
-        if skipping && trimmed.starts_with('[') {
-            skipping = false;
-        }
-        if !skipping {
-            result.push_str(line);
-            result.push('\n');
-        }
-    }
-    result
-}
-
 // ========== Clone (.agx) endpoints ==========
 
 /// POST /api/clones/install — Install a .agx clone from uploaded bytes.
@@ -6262,7 +5223,12 @@ pub async fn install_clone(
 
     // Write uploaded bytes to temp file
     let tmp_dir = std::env::temp_dir().join(format!("opencarrier-clone-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&tmp_dir).unwrap();
+    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create temp dir: {e}")})),
+        );
+    }
     let tmp_path = tmp_dir.join("clone.agx");
     if let Err(e) = std::fs::write(&tmp_path, &raw_data) {
         return (
@@ -6476,24 +5442,9 @@ pub async fn clone_compile(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let entry = match state.kernel.registry.find_by_name(&name) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
-            )
-        }
-    };
-
-    let workspace = match &entry.manifest.workspace {
-        Some(ws) => ws.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
-            )
-        }
+    let (entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     // Resolve an LLM driver for compile operations
@@ -6579,24 +5530,9 @@ pub async fn clone_health(
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let entry = match state.kernel.registry.find_by_name(&name) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
-            )
-        }
-    };
-
-    let workspace = match &entry.manifest.workspace {
-        Some(ws) => ws.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
-            )
-        }
+    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     let do_fix = params
@@ -6630,24 +5566,9 @@ pub async fn clone_feedback_push(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let entry = match state.kernel.registry.find_by_name(&name) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
-            )
-        }
-    };
-
-    let workspace = match &entry.manifest.workspace {
-        Some(ws) => ws.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
-            )
-        }
+    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     let entries = match opencarrier_lifecycle::feedback::collect_feedback(&workspace) {
@@ -6710,24 +5631,9 @@ pub async fn clone_evaluate(
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let entry = match state.kernel.registry.find_by_name(&name) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
-            )
-        }
-    };
-
-    let workspace = match &entry.manifest.workspace {
-        Some(ws) => ws.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
-            )
-        }
+    let (entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     let metrics = opencarrier_lifecycle::evaluate::compute_deterministic_metrics(&workspace);
@@ -6869,24 +5775,9 @@ pub async fn clone_rollback(
         }
     };
 
-    let entry = match state.kernel.registry.find_by_name(&name) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
-            )
-        }
-    };
-
-    let workspace = match &entry.manifest.workspace {
-        Some(ws) => ws.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
-            )
-        }
+    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     match opencarrier_lifecycle::version::rollback_file(&workspace, &filename) {
@@ -6923,24 +5814,9 @@ pub async fn clone_verify(
         }
     };
 
-    let entry = match state.kernel.registry.find_by_name(&name) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
-            )
-        }
-    };
-
-    let workspace = match &entry.manifest.workspace {
-        Some(ws) => ws.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
-            )
-        }
+    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     match opencarrier_lifecycle::version::verify_version(&workspace, &filename) {

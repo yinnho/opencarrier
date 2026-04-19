@@ -4,12 +4,9 @@
 //! Otherwise, commands boot an in-process kernel (single-shot mode).
 
 mod dotenv;
-mod launcher;
 mod mcp;
-pub mod progress;
 pub mod serve;
 mod acp;
-pub mod table;
 mod templates;
 mod tui;
 mod ui;
@@ -60,6 +57,25 @@ fn install_ctrlc_handler() {
     }
 }
 
+/// Print a JSON value as pretty-printed output.
+fn print_json(value: &serde_json::Value) {
+    println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+}
+
+/// Default config.toml content written to ~/.opencarrier/config.toml when missing.
+const DEFAULT_CONFIG_TOML: &str = r#"# OpenCarrier Agent OS configuration
+# See https://github.com/RightNow-AI/opencarrier for documentation
+
+# For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
+api_listen = "127.0.0.1:4200"
+
+[brain]
+config = "brain.json"
+
+[memory]
+decay_rate = 0.05
+"#;
+
 const AFTER_HELP: &str = "\
 \x1b[1mQuick Start:\x1b[0m
   yinghe                    直接启动
@@ -90,15 +106,6 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Commands>,
-}
-
-impl Default for Cli {
-    fn default() -> Self {
-        Self {
-            config: None,
-            command: Some(Commands::Start),
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -963,20 +970,7 @@ fn write_config_if_missing(
     if config_path.exists() {
         ui::check_ok(&format!("Config already exists: {}", config_path.display()));
     } else {
-        let default_config = r#"# OpenCarrier Agent OS configuration
-# See https://github.com/RightNow-AI/opencarrier for documentation
-
-# For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
-api_listen = "127.0.0.1:4200"
-
-[brain]
-config = "brain.json"
-
-[memory]
-decay_rate = 0.05
-"#
-        .to_string();
-        std::fs::write(&config_path, &default_config).unwrap_or_else(|e| {
+        std::fs::write(&config_path, DEFAULT_CONFIG_TOML).unwrap_or_else(|e| {
             ui::error_with_fix("Failed to write config", &e.to_string());
             std::process::exit(1);
         });
@@ -1221,10 +1215,7 @@ fn cmd_agent_list(config: Option<PathBuf>, json: bool) {
         let body = daemon_json(client.get(format!("{base}/api/agents")).send());
 
         if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
+            print_json(&body);
             return;
         }
 
@@ -1267,10 +1258,7 @@ fn cmd_agent_list(config: Option<PathBuf>, json: bool) {
                     })
                 })
                 .collect();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&list).unwrap_or_default()
-            );
+            print_json(&serde_json::Value::Array(list));
             return;
         }
 
@@ -1366,20 +1354,18 @@ fn cmd_chat_once(
                 .send(),
         );
         if json {
-            println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+            print_json(&body);
         } else if let Some(reply) = body["reply"].as_str() {
             println!("{reply}");
         } else if let Some(reply) = body["response"].as_str() {
             println!("{reply}");
         } else {
-            println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+            print_json(&body);
         }
         return;
     }
 
     // Fallback: boot in-process kernel
-    use opencarrier_kernel::OpenCarrierKernel;
-    use opencarrier_types::agent::AgentId;
 
     let config_path = config.or_else(|| {
         let home = opencarrier_home();
@@ -1427,16 +1413,12 @@ fn cmd_chat_once(
             if json {
                 let output = serde_json::json!({
                     "response": result.response,
-                    "cost_usd": result.cost_usd,
                     "iterations": result.iterations,
                 });
-                println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+                print_json(&output);
             } else {
                 if !result.silent {
                     println!("{}", result.response);
-                }
-                if let Some(cost) = result.cost_usd {
-                    eprintln!("[cost: ${:.4}, {} iterations]", cost, result.iterations);
                 }
             }
         }
@@ -1597,10 +1579,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
         let body = daemon_json(client.get(format!("{base}/api/status")).send());
 
         if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
+            print_json(&body);
             return;
         }
 
@@ -1642,18 +1621,15 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
         let agent_count = kernel.registry.count();
 
         if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "status": "in-process",
-                    "agent_count": agent_count,
-                    "data_dir": kernel.config.data_dir.display().to_string(),
-                    "default_provider": kernel.config.default_model.provider,
-                    "default_model": kernel.config.default_model.model,
-                    "daemon": false,
-                }))
-                .unwrap_or_default()
-            );
+            let info = serde_json::json!({
+                "status": "in-process",
+                "agent_count": agent_count,
+                "data_dir": kernel.config.data_dir.display().to_string(),
+                "default_provider": kernel.config.default_model.provider,
+                "default_model": kernel.config.default_model.model,
+                "daemon": false,
+            });
+            print_json(&info);
             return;
         }
 
@@ -1811,21 +1787,8 @@ fn cmd_doctor(json: bool, repair: bool) {
             let answer = prompt_input("    Create default config? [Y/n] ");
             if answer.is_empty() || answer.starts_with('y') || answer.starts_with('Y') {
                 let (_provider, _api_key_env, _model) = detect_best_provider();
-                let default_config = r#"# OpenCarrier Agent OS configuration
-# See https://github.com/RightNow-AI/opencarrier for documentation
-
-# For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
-api_listen = "127.0.0.1:4200"
-
-[brain]
-config = "brain.json"
-
-[memory]
-decay_rate = 0.05
-"#
-                .to_string();
                 let _ = std::fs::create_dir_all(&opencarrier_dir);
-                if std::fs::write(&config_path, default_config).is_ok() {
+                if std::fs::write(&config_path, DEFAULT_CONFIG_TOML).is_ok() {
                     restrict_file_permissions(&config_path);
                     if !json {
                         ui::check_ok("Created default config.toml");
@@ -2488,14 +2451,11 @@ decay_rate = 0.05
     }
 
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "all_ok": all_ok,
-                "checks": checks,
-            }))
-            .unwrap_or_default()
-        );
+        let result = serde_json::json!({
+            "all_ok": all_ok,
+            "checks": checks,
+        });
+        print_json(&result);
     } else {
         println!();
         if all_ok {
@@ -2697,10 +2657,6 @@ fn boot_kernel(config: Option<PathBuf>) -> OpenCarrierKernel {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Skill commands
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Provider / API key helpers
@@ -3300,10 +3256,6 @@ fn cmd_config_unset(key: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// Quick chat (OpenCarrier alias)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -3340,10 +3292,7 @@ fn cmd_models_list(provider_filter: Option<&str>, json: bool) {
         };
         let body = daemon_json(client.get(&url).send());
         if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
+            print_json(&body);
             return;
         }
         if let Some(arr) = body.as_array() {
@@ -3363,10 +3312,7 @@ fn cmd_models_list(provider_filter: Option<&str>, json: bool) {
                 );
             }
         } else {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
+            print_json(&body);
         }
     } else {
         // Standalone: use ModelCatalog directly
@@ -3380,20 +3326,18 @@ fn cmd_models_list(provider_filter: Option<&str>, json: bool) {
                     serde_json::json!({
                         "id": m.id,
                         "provider": m.provider,
-                        "tier": format!("{:?}", m.tier),
-                        "context_window": m.context_window,
                     })
                 })
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&arr).unwrap_or_default());
+            print_json(&serde_json::Value::Array(arr));
             return;
         }
         if models.is_empty() {
             println!("No models in catalog.");
             return;
         }
-        println!("{:<40} {:<16} {:<8} CONTEXT", "MODEL", "PROVIDER", "TIER");
-        println!("{}", "-".repeat(80));
+        println!("{:<40} {:<16}", "MODEL", "PROVIDER");
+        println!("{}", "-".repeat(60));
         for m in models {
             if let Some(p) = provider_filter {
                 if m.provider != p {
@@ -3401,11 +3345,9 @@ fn cmd_models_list(provider_filter: Option<&str>, json: bool) {
                 }
             }
             println!(
-                "{:<40} {:<16} {:<8} {}",
+                "{:<40} {:<16}",
                 m.id,
                 m.provider,
-                format!("{:?}", m.tier),
-                m.context_window,
             );
         }
     }
@@ -3416,10 +3358,7 @@ fn cmd_models_aliases(json: bool) {
         let client = daemon_client();
         let body = daemon_json(client.get(format!("{base}/api/models/aliases")).send());
         if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
+            print_json(&body);
             return;
         }
         if let Some(obj) = body.as_object() {
@@ -3429,10 +3368,7 @@ fn cmd_models_aliases(json: bool) {
                 println!("{:<30} {}", alias, target.as_str().unwrap_or("?"));
             }
         } else {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
+            print_json(&body);
         }
     } else {
         let catalog = opencarrier_runtime::model_catalog::ModelCatalog::new();
@@ -3442,7 +3378,7 @@ fn cmd_models_aliases(json: bool) {
                 .iter()
                 .map(|(a, t)| (a.to_string(), serde_json::Value::String(t.to_string())))
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
+            print_json(&serde_json::Value::Object(obj));
             return;
         }
         println!("{:<30} RESOLVES TO", "ALIAS");
@@ -3504,7 +3440,7 @@ fn pick_model() -> String {
     for (provider, provider_models) in &by_provider {
         println!("  {}:", provider.bold());
         for m in provider_models {
-            println!("    {idx:>3}. {:<36} {:?}", m.id, m.tier);
+            println!("    {idx:>3}. {:<36}", m.id);
             numbered.push(&m.id);
             idx += 1;
         }
@@ -3542,10 +3478,7 @@ fn cmd_cron_list(json: bool) {
     let client = daemon_client();
     let body = daemon_json(client.get(format!("{base}/api/cron/jobs")).send());
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
         return;
     }
     if let Some(arr) = body.as_array() {
@@ -3578,10 +3511,7 @@ fn cmd_cron_list(json: bool) {
             );
         }
     } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
     }
 }
 
@@ -3682,10 +3612,7 @@ fn cmd_sessions(agent: Option<&str>, json: bool) {
     };
     let body = daemon_json(client.get(&url).send());
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
         return;
     }
     if let Some(arr) = body.as_array() {
@@ -3705,10 +3632,7 @@ fn cmd_sessions(agent: Option<&str>, json: bool) {
             );
         }
     } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
     }
 }
 
@@ -3778,10 +3702,7 @@ fn cmd_security_status(json: bool) {
             "manifests": "ed25519_signed",
             "agent_count": body.get("agent_count").and_then(|v| v.as_u64()),
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&data).unwrap_or_default()
-        );
+        print_json(&data);
         return;
     }
     ui::section("Security Status");
@@ -3806,10 +3727,7 @@ fn cmd_security_audit(limit: usize, json: bool) {
             .send(),
     );
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
         return;
     }
     if let Some(arr) = body.as_array() {
@@ -3829,10 +3747,7 @@ fn cmd_security_audit(limit: usize, json: bool) {
             );
         }
     } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
     }
 }
 
@@ -3860,10 +3775,7 @@ fn cmd_memory_list(agent: &str, json: bool) {
             .send(),
     );
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
         return;
     }
     if let Some(arr) = body.as_array() {
@@ -3886,10 +3798,7 @@ fn cmd_memory_list(agent: &str, json: bool) {
             );
         }
     } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
     }
 }
 
@@ -3902,19 +3811,13 @@ fn cmd_memory_get(agent: &str, key: &str, json: bool) {
             .send(),
     );
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
         return;
     }
     if let Some(val) = body["value"].as_str() {
         println!("{val}");
     } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
+        print_json(&body);
     }
 }
 

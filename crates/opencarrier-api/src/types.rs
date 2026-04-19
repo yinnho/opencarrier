@@ -57,8 +57,6 @@ pub struct MessageResponse {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub iterations: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
 }
 
 /// Request to update an agent's manifest.
@@ -71,20 +69,4 @@ pub struct AgentUpdateRequest {
 #[derive(Debug, Deserialize)]
 pub struct SetModeRequest {
     pub mode: opencarrier_types::agent::AgentMode,
-}
-
-/// Request to run a migration.
-#[derive(Debug, Deserialize)]
-pub struct MigrateRequest {
-    pub source: String,
-    pub source_dir: String,
-    pub target_dir: String,
-    #[serde(default)]
-    pub dry_run: bool,
-}
-
-/// Request to scan a directory for migration.
-#[derive(Debug, Deserialize)]
-pub struct MigrateScanRequest {
-    pub path: String,
 }

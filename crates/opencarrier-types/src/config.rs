@@ -857,9 +857,6 @@ pub struct KernelConfig {
     /// Extended thinking configuration.
     #[serde(default)]
     pub thinking: Option<ThinkingConfig>,
-    /// Global spending budget configuration.
-    #[serde(default)]
-    pub budget: BudgetConfig,
     /// Provider base URL overrides (provider ID → custom base URL).
     /// e.g. `ollama = "http://192.168.1.100:11434/v1"`
     #[serde(default)]
@@ -945,38 +942,6 @@ pub struct OAuthConfig {
     pub microsoft_client_id: Option<String>,
     /// Slack OAuth client ID.
     pub slack_client_id: Option<String>,
-}
-
-/// Global spending budget configuration.
-///
-/// Set limits to 0.0 for unlimited. All limits apply across all agents.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BudgetConfig {
-    /// Maximum total cost in USD per hour (0.0 = unlimited).
-    pub max_hourly_usd: f64,
-    /// Maximum total cost in USD per day (0.0 = unlimited).
-    pub max_daily_usd: f64,
-    /// Maximum total cost in USD per month (0.0 = unlimited).
-    pub max_monthly_usd: f64,
-    /// Alert threshold as a fraction (0.0 - 1.0). Trigger warnings at this % of any limit.
-    pub alert_threshold: f64,
-    /// Default per-agent hourly token limit override. When set (> 0), all agents
-    /// will be overridden to this value. Set to 0 to keep each agent's own limit.
-    /// Use this to globally raise or lower the token budget for all agents.
-    pub default_max_llm_tokens_per_hour: u64,
-}
-
-impl Default for BudgetConfig {
-    fn default() -> Self {
-        Self {
-            max_hourly_usd: 0.0,
-            max_daily_usd: 0.0,
-            max_monthly_usd: 0.0,
-            alert_threshold: 0.8,
-            default_max_llm_tokens_per_hour: 0,
-        }
-    }
 }
 
 fn default_max_cron_jobs() -> usize {
@@ -1087,7 +1052,6 @@ impl Default for KernelConfig {
             docker: DockerSandboxConfig::default(),
             auth_profiles: HashMap::new(),
             thinking: None,
-            budget: BudgetConfig::default(),
             provider_urls: HashMap::new(),
             provider_api_keys: HashMap::new(),
             oauth: OAuthConfig::default(),

@@ -93,8 +93,6 @@ pub struct OpenCarrierKernel {
     pub effective_mcp_servers:
         std::sync::RwLock<Vec<opencarrier_types::config::McpServerConfigEntry>>,
 
-    /// Delivery receipt tracker (bounded LRU, max 10K entries).
-    pub delivery_tracker: DeliveryTracker,
     /// Cron job scheduler.
     pub cron_scheduler: crate::cron::CronScheduler,
     /// Agent bindings for multi-account routing (Mutex for runtime add/remove).
@@ -107,68 +105,12 @@ pub struct OpenCarrierKernel {
     pub process_manager: Arc<opencarrier_runtime::process_manager::ProcessManager>,
     /// Boot timestamp for uptime calculation.
     pub booted_at: std::time::Instant,
-    /// Hot-reloadable default model override (set via config hot-reload, read at agent spawn).
-    pub default_model_override:
-        std::sync::RwLock<Option<opencarrier_types::config::DefaultModelConfig>>,
     /// Per-agent message locks — serializes LLM calls for the same agent to prevent
     /// session corruption when multiple messages arrive concurrently (e.g. rapid voice
     /// messages via Telegram). Different agents can still run in parallel.
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
     self_handle: OnceLock<Weak<OpenCarrierKernel>>,
-}
-
-/// Delivery receipt for message tracking.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DeliveryReceipt {
-    pub message_id: String,
-    pub channel: String,
-    pub recipient: String,
-    pub status: DeliveryStatus,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub error: Option<String>,
-}
-
-/// Delivery status for a message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum DeliveryStatus {
-    Sent,
-    Delivered,
-    Failed,
-}
-
-/// Bounded in-memory delivery receipt tracker.
-/// Stores up to `MAX_RECEIPTS` most recent delivery receipts per agent.
-pub struct DeliveryTracker {
-    receipts: dashmap::DashMap<AgentId, Vec<DeliveryReceipt>>,
-}
-
-impl Default for DeliveryTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DeliveryTracker {
-    /// Create a new empty delivery tracker.
-    pub fn new() -> Self {
-        Self {
-            receipts: dashmap::DashMap::new(),
-        }
-    }
-
-    /// Get recent delivery receipts for an agent (newest first).
-    pub fn get_receipts(
-        &self,
-        agent_id: AgentId,
-        limit: usize,
-    ) -> Vec<DeliveryReceipt> {
-        self.receipts
-            .get(&agent_id)
-            .map(|entries| entries.iter().rev().take(limit).cloned().collect())
-            .unwrap_or_default()
-    }
-
 }
 
 /// Create workspace directory structure for an agent.
@@ -1046,15 +988,10 @@ impl OpenCarrierKernel {
         // Load user's custom models from ~/.opencarrier/custom_models.json
         let custom_models_path = config.home_dir.join("custom_models.json");
         model_catalog.load_custom_models(&custom_models_path);
-        let available_count = model_catalog.available_models().len();
         let total_count = model_catalog.list_models().len();
-        let local_count = model_catalog
-            .list_providers()
-            .iter()
-            .filter(|p| !p.key_required)
-            .count();
+        let provider_count = model_catalog.list_providers().len();
         info!(
-            "Model catalog: {total_count} models, {available_count} available from configured providers ({local_count} local)"
+            "Model catalog: {total_count} models, {provider_count} providers"
         );
 
         // Initialize skill registry
@@ -1215,14 +1152,12 @@ impl OpenCarrierKernel {
             tts_engine,
             embedding_driver,
             effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
-            delivery_tracker: DeliveryTracker::new(),
             cron_scheduler,
             bindings: std::sync::Mutex::new(initial_bindings),
             broadcast: initial_broadcast,
             hooks: opencarrier_runtime::hooks::HookRegistry::new(),
             process_manager: Arc::new(opencarrier_runtime::process_manager::ProcessManager::new(5)),
             booted_at: std::time::Instant::now(),
-            default_model_override: std::sync::RwLock::new(None),
             agent_msg_locks: dashmap::DashMap::new(),
             self_handle: OnceLock::new(),
         };
@@ -1325,12 +1260,6 @@ impl OpenCarrierKernel {
                             Some(kernel.config.exec_policy.clone());
                     }
 
-                    // Apply global budget defaults to restored agents
-                    apply_budget_defaults(
-                        &kernel.config.budget,
-                        &mut restored_entry.manifest.resources,
-                    );
-
                     // Apply default modality to restored agents if empty.
                     {
                         if restored_entry.manifest.model.modality.is_empty() {
@@ -1413,9 +1342,6 @@ impl OpenCarrierKernel {
         // This allows bundled agents to defer to the user's configured provider/model,
         // even if the agent manifest specifies an api_key_env (which is just a hint
         // about which env var to check, not a hard lock on provider/model).
-        // Apply global budget defaults to agent resource quotas
-        apply_budget_defaults(&self.config.budget, &mut manifest.resources);
-
         // Create workspace directory for the agent (name-based, so SOUL.md survives recreation)
         let workspace_dir = manifest
             .workspace
@@ -1800,156 +1726,11 @@ impl OpenCarrierKernel {
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
         let mut manifest = entry.manifest.clone();
 
-        // Lazy backfill: create workspace for existing agents spawned before workspaces
-        if manifest.workspace.is_none() {
-            let workspace_dir = self.config.effective_workspaces_dir().join(&manifest.name);
-            if let Err(e) = ensure_workspace(&workspace_dir) {
-                warn!(agent_id = %agent_id, "Failed to backfill workspace (streaming): {e}");
-            } else {
-                manifest.workspace = Some(workspace_dir);
-                let _ = self
-                    .registry
-                    .update_workspace(agent_id, manifest.workspace.clone());
-            }
-        }
+        self.ensure_workspace_backfill(&agent_id, &mut manifest, "non-streaming");
 
         // Build the structured system prompt via prompt_builder
         {
-            let mcp_tool_count = self.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
-            let shared_id = shared_memory_agent_id();
-            let user_name = self
-                .memory
-                .structured_get(shared_id, "user_name")
-                .ok()
-                .flatten()
-                .and_then(|v| v.as_str().map(String::from));
-
-            let peer_agents: Vec<(String, String, String)> = self
-                .registry
-                .list()
-                .iter()
-                .map(|a| {
-                    (
-                        a.name.clone(),
-                        format!("{:?}", a.state),
-                        a.manifest.model.modality.clone(),
-                    )
-                })
-                .collect();
-
-            let prompt_ctx = opencarrier_runtime::prompt_builder::PromptContext {
-                agent_name: manifest.name.clone(),
-                agent_description: manifest.description.clone(),
-                base_system_prompt: manifest.model.system_prompt.clone(),
-                granted_tools: tools.iter().map(|t| t.name.clone()).collect(),
-                recalled_memories: vec![],
-                skill_summary: self.build_skill_summary(&manifest.skills),
-                skill_prompt_context: self.collect_prompt_context(&manifest.skills),
-                mcp_summary: if mcp_tool_count > 0 {
-                    self.build_mcp_summary(&manifest.mcp_servers)
-                } else {
-                    String::new()
-                },
-                workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
-                soul_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "SOUL.md")),
-                user_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "USER.md")),
-                memory_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "MEMORY.md")),
-                canonical_context: self
-                    .memory
-                    .canonical_context(agent_id, None)
-                    .ok()
-                    .and_then(|(s, _)| s),
-                user_name,
-                channel_type: None,
-                is_subagent: manifest
-                    .metadata
-                    .get("is_subagent")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-                is_autonomous: manifest.autonomous.is_some(),
-                agents_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "AGENTS.md")),
-                bootstrap_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "BOOTSTRAP.md")),
-                workspace_context: manifest.workspace.as_ref().map(|w| {
-                    let mut ws_ctx =
-                        opencarrier_runtime::workspace_context::WorkspaceContext::detect(w);
-                    ws_ctx.build_context_section()
-                }),
-                identity_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "IDENTITY.md")),
-                heartbeat_md: if manifest.autonomous.is_some() {
-                    manifest
-                        .workspace
-                        .as_ref()
-                        .and_then(|w| read_identity_file(w, "HEARTBEAT.md"))
-                } else {
-                    None
-                },
-                peer_agents,
-                current_date: Some(
-                    chrono::Local::now()
-                        .format("%A, %B %d, %Y (%Y-%m-%d %H:%M %Z)")
-                        .to_string(),
-                ),
-                sender_id: sender_id.clone(),
-                sender_name,
-                user_profile_summary: sender_id.as_ref().and_then(|sid| {
-                    manifest.workspace.as_ref().and_then(|w| read_user_profile_summary(w, sid))
-                }),
-                // Clone identity files (分身特有)
-                clone_system_prompt_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "system_prompt.md")),
-                clone_skills_catalog: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_skills_catalog(w)),
-                clone_style_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_style_samples(w)),
-                clone_skills_prompts: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_workspace_skills_prompts(w)),
-                knowledge_content: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_knowledge_content(w)),
-                clone_agents_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_agents_directory(w)),
-            };
-            manifest.model.system_prompt =
-                opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
-            // Store canonical context separately for injection as user message
-            // (keeps system prompt stable across turns for provider prompt caching)
-            if let Some(cc_msg) =
-                opencarrier_runtime::prompt_builder::build_canonical_context_message(&prompt_ctx)
-            {
-                manifest.metadata.insert(
-                    "canonical_context_msg".to_string(),
-                    serde_json::Value::String(cc_msg),
-                );
-            }
+            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name);
         }
 
         let memory = Arc::clone(&self.memory);
@@ -2104,15 +1885,6 @@ impl OpenCarrierKernel {
 
                     // Persist usage to database (same as non-streaming path)
                     let model = manifest.model.modality.clone();
-                    let cost = MeteringEngine::estimate_cost_with_catalog(
-                        &kernel_clone
-                            .model_catalog
-                            .read()
-                            .unwrap_or_else(|e| e.into_inner()),
-                        &model,
-                        result.total_usage.input_tokens,
-                        result.total_usage.output_tokens,
-                    );
                     let _ = kernel_clone
                         .metering
                         .record(&opencarrier_memory::usage::UsageRecord {
@@ -2120,7 +1892,6 @@ impl OpenCarrierKernel {
                             model: model.clone(),
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
-                            cost_usd: cost,
                             tool_calls: result.iterations.saturating_sub(1),
                         });
 
@@ -2243,7 +2014,6 @@ impl OpenCarrierKernel {
                 output_tokens: 0,
             },
             iterations: 1,
-            cost_usd: None,
             silent: false,
             directives: Default::default(),
         })
@@ -2302,7 +2072,6 @@ impl OpenCarrierKernel {
                 input_tokens: 0,
                 output_tokens: 0,
             },
-            cost_usd: None,
             iterations: 1,
             silent: false,
             directives: Default::default(),
@@ -2324,11 +2093,6 @@ impl OpenCarrierKernel {
         // Clone Brain Arc early so the RwLockReadGuard is dropped before any .await.
         let brain_ref: Option<Arc<dyn opencarrier_runtime::llm_driver::Brain>> =
             Some(Arc::clone(&*self.brain.read().unwrap()) as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
-
-        // Check metering quota before starting
-        self.metering
-            .check_quota(agent_id, &entry.manifest.resources)
-            .map_err(KernelError::OpenCarrier)?;
 
         // Load session: use per-user session when sender_id is present (multi-tenancy),
         // otherwise use the agent's default session.
@@ -2411,158 +2175,9 @@ impl OpenCarrierKernel {
         // Apply model routing if configured (disabled in Stable mode)
         let mut manifest = entry.manifest.clone();
 
-        // Lazy backfill: create workspace for existing agents spawned before workspaces
-        if manifest.workspace.is_none() {
-            let workspace_dir = self.config.effective_workspaces_dir().join(&manifest.name);
-            if let Err(e) = ensure_workspace(&workspace_dir) {
-                warn!(agent_id = %agent_id, "Failed to backfill workspace: {e}");
-            } else {
-                manifest.workspace = Some(workspace_dir);
-                // Persist updated workspace in registry
-                let _ = self
-                    .registry
-                    .update_workspace(agent_id, manifest.workspace.clone());
-            }
-        }
+        self.ensure_workspace_backfill(&agent_id, &mut manifest, "streaming");
 
-        // Build the structured system prompt via prompt_builder
-        {
-            let mcp_tool_count = self.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
-            let shared_id = shared_memory_agent_id();
-            let user_name = self
-                .memory
-                .structured_get(shared_id, "user_name")
-                .ok()
-                .flatten()
-                .and_then(|v| v.as_str().map(String::from));
-
-            let peer_agents: Vec<(String, String, String)> = self
-                .registry
-                .list()
-                .iter()
-                .map(|a| {
-                    (
-                        a.name.clone(),
-                        format!("{:?}", a.state),
-                        a.manifest.model.modality.clone(),
-                    )
-                })
-                .collect();
-
-            let prompt_ctx = opencarrier_runtime::prompt_builder::PromptContext {
-                agent_name: manifest.name.clone(),
-                agent_description: manifest.description.clone(),
-                base_system_prompt: manifest.model.system_prompt.clone(),
-                granted_tools: tools.iter().map(|t| t.name.clone()).collect(),
-                recalled_memories: vec![], // Recalled in agent_loop, not here
-                skill_summary: self.build_skill_summary(&manifest.skills),
-                skill_prompt_context: self.collect_prompt_context(&manifest.skills),
-                mcp_summary: if mcp_tool_count > 0 {
-                    self.build_mcp_summary(&manifest.mcp_servers)
-                } else {
-                    String::new()
-                },
-                workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
-                soul_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "SOUL.md")),
-                user_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "USER.md")),
-                memory_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "MEMORY.md")),
-                canonical_context: self
-                    .memory
-                    .canonical_context(agent_id, None)
-                    .ok()
-                    .and_then(|(s, _)| s),
-                user_name,
-                channel_type: None,
-                is_subagent: manifest
-                    .metadata
-                    .get("is_subagent")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-                is_autonomous: manifest.autonomous.is_some(),
-                agents_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "AGENTS.md")),
-                bootstrap_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "BOOTSTRAP.md")),
-                workspace_context: manifest.workspace.as_ref().map(|w| {
-                    let mut ws_ctx =
-                        opencarrier_runtime::workspace_context::WorkspaceContext::detect(w);
-                    ws_ctx.build_context_section()
-                }),
-                identity_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "IDENTITY.md")),
-                heartbeat_md: if manifest.autonomous.is_some() {
-                    manifest
-                        .workspace
-                        .as_ref()
-                        .and_then(|w| read_identity_file(w, "HEARTBEAT.md"))
-                } else {
-                    None
-                },
-                peer_agents,
-                current_date: Some(
-                    chrono::Local::now()
-                        .format("%A, %B %d, %Y (%Y-%m-%d %H:%M %Z)")
-                        .to_string(),
-                ),
-                sender_id: sender_id.clone(),
-                sender_name,
-                user_profile_summary: sender_id.as_ref().and_then(|sid| {
-                    manifest.workspace.as_ref().and_then(|w| read_user_profile_summary(w, sid))
-                }),
-                // Clone identity files (分身特有)
-                clone_system_prompt_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_identity_file(w, "system_prompt.md")),
-                clone_skills_catalog: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_skills_catalog(w)),
-                clone_style_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_style_samples(w)),
-                clone_skills_prompts: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_workspace_skills_prompts(w)),
-                knowledge_content: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_knowledge_content(w)),
-                clone_agents_md: manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_agents_directory(w)),
-            };
-            manifest.model.system_prompt =
-                opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
-            // Store canonical context separately for injection as user message
-            // (keeps system prompt stable across turns for provider prompt caching)
-            if let Some(cc_msg) =
-                opencarrier_runtime::prompt_builder::build_canonical_context_message(&prompt_ctx)
-            {
-                manifest.metadata.insert(
-                    "canonical_context_msg".to_string(),
-                    serde_json::Value::String(cc_msg),
-                );
-            }
-        }
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name);
 
         // Model routing is handled by Brain
 
@@ -2661,14 +2276,8 @@ impl OpenCarrierKernel {
             append_daily_memory_log(workspace, &result.response);
         }
 
-        // Record usage in the metering engine (uses catalog pricing as single source of truth)
+        // Record usage in the metering engine
         let model = manifest.model.modality.clone();
-        let cost = MeteringEngine::estimate_cost_with_catalog(
-            &self.model_catalog.read().unwrap_or_else(|e| e.into_inner()),
-            &model,
-            result.total_usage.input_tokens,
-            result.total_usage.output_tokens,
-        );
         let _ = self
             .metering
             .record(&opencarrier_memory::usage::UsageRecord {
@@ -2676,25 +2285,8 @@ impl OpenCarrierKernel {
                 model: model.clone(),
                 input_tokens: result.total_usage.input_tokens,
                 output_tokens: result.total_usage.output_tokens,
-                cost_usd: cost,
                 tool_calls: result.iterations.saturating_sub(1),
             });
-
-        // Populate cost on the result based on usage_footer mode
-        let mut result = result;
-        match self.config.usage_footer {
-            opencarrier_types::config::UsageFooterMode::Off => {
-                result.cost_usd = None;
-            }
-            opencarrier_types::config::UsageFooterMode::Cost
-            | opencarrier_types::config::UsageFooterMode::Full => {
-                result.cost_usd = if cost > 0.0 { Some(cost) } else { None };
-            }
-            opencarrier_types::config::UsageFooterMode::Tokens => {
-                // Tokens are already in result.total_usage, omit cost
-                result.cost_usd = None;
-            }
-        }
 
         Ok(result)
     }
@@ -3063,46 +2655,6 @@ impl OpenCarrierKernel {
         Ok(())
     }
 
-    /// Get session token usage and estimated cost for an agent.
-    pub fn session_usage_cost(&self, agent_id: AgentId) -> KernelResult<(u64, u64, f64)> {
-        let entry = self.registry.get(agent_id).ok_or_else(|| {
-            KernelError::OpenCarrier(OpenCarrierError::AgentNotFound(agent_id.to_string()))
-        })?;
-
-        let session = self
-            .memory
-            .get_session(entry.session_id)
-            .map_err(KernelError::OpenCarrier)?;
-
-        let (input_tokens, output_tokens) = session
-            .map(|s| {
-                let mut input = 0u64;
-                let mut output = 0u64;
-                // Estimate tokens from message content length (rough: 1 token ≈ 4 chars)
-                for msg in &s.messages {
-                    let len = msg.content.text_content().len() as u64;
-                    let tokens = len / 4;
-                    match msg.role {
-                        opencarrier_types::message::Role::User => input += tokens,
-                        opencarrier_types::message::Role::Assistant => output += tokens,
-                        opencarrier_types::message::Role::System => input += tokens,
-                    }
-                }
-                (input, output)
-            })
-            .unwrap_or((0, 0));
-
-        let model = &entry.manifest.model.modality;
-        let cost = MeteringEngine::estimate_cost_with_catalog(
-            &self.model_catalog.read().unwrap_or_else(|e| e.into_inner()),
-            model,
-            input_tokens,
-            output_tokens,
-        );
-
-        Ok((input_tokens, output_tokens, cost))
-    }
-
     /// Cancel an agent's currently running LLM task.
     pub fn stop_agent_run(&self, agent_id: AgentId) -> KernelResult<bool> {
         if let Some((_, handle)) = self.running_tasks.remove(&agent_id) {
@@ -3375,17 +2927,6 @@ impl OpenCarrierKernel {
                         .write()
                         .unwrap_or_else(|e| e.into_inner());
                     catalog.apply_url_overrides(&new_config.provider_urls);
-                }
-                HotAction::UpdateDefaultModel => {
-                    info!(
-                        "Hot-reload: updating default model to {}/{}",
-                        new_config.default_model.provider, new_config.default_model.model
-                    );
-                    let mut guard = self
-                        .default_model_override
-                        .write()
-                        .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
-                    *guard = Some(new_config.default_model.clone());
                 }
                 _ => {
                     // Other hot actions are logged but not applied here — they
@@ -3911,14 +3452,6 @@ impl OpenCarrierKernel {
     /// stored in the model catalog but NOT in `self.config.provider_urls` (which is
     /// the boot-time snapshot). This helper checks both sources so that custom
     /// providers work immediately without a daemon restart.
-    /// Resolve a credential by env var name.
-    /// batch-1 simplified: vault/dotenv chain removed, uses direct env var lookup.
-    pub fn resolve_credential(&self, key: &str) -> Option<String> {
-        std::env::var(key).ok().filter(|s| !s.is_empty())
-    }
-
-
-
     /// Return a cloned Arc<Brain> for the API (None if not loaded).
     pub fn brain_info(&self) -> Arc<Brain> {
         Arc::clone(&*self.brain.read().unwrap())
@@ -3943,15 +3476,40 @@ impl OpenCarrierKernel {
         } else {
             &manifest.model.modality
         };
+
+        // Check if modality exists at all
+        if !brain.has_modality(modality) {
+            return Err(KernelError::OpenCarrier(OpenCarrierError::LlmDriver(
+                format!("Modality '{modality}' not configured in brain.json")
+            )));
+        }
+
         let endpoints = brain.endpoints_for(modality);
         if let Some(ep) = endpoints.first() {
             if let Some(driver) = brain.driver_for_endpoint(&ep.id) {
                 return Ok(driver);
             }
         }
-        Err(KernelError::OpenCarrier(OpenCarrierError::LlmDriver(
-            format!("No driver available for modality '{modality}'")
-        )))
+
+        // endpoints_for returned empty — all circuit-broken or no drivers
+        let status = brain.status();
+        let broken: Vec<String> = status.endpoints.iter()
+            .filter(|e| e.circuit_open)
+            .map(|e| format!("{} ({} consecutive failures)", e.endpoint, e.consecutive_failures))
+            .collect();
+
+        if broken.is_empty() {
+            Err(KernelError::OpenCarrier(OpenCarrierError::LlmDriver(
+                format!("No driver available for modality '{modality}' — endpoints have no live drivers")
+            )))
+        } else {
+            Err(KernelError::OpenCarrier(OpenCarrierError::LlmDriver(
+                format!(
+                    "No available endpoints for modality '{modality}' — circuit-broken: [{}]",
+                    broken.join(", ")
+                )
+            )))
+        }
     }
 
     /// Reload Brain from disk (brain.json). Used by the API to hot-reload after config changes.
@@ -4058,6 +3616,61 @@ impl OpenCarrierKernel {
                 self.mcp_connections.lock().await.len()
             );
         }
+
+        // Start background health-check task for auto-reconnection
+        self.spawn_mcp_health_monitor();
+    }
+
+    /// Background task that periodically checks MCP server health and
+    /// reconnects any server that has gone down.
+    fn spawn_mcp_health_monitor(self: &Arc<Self>) {
+        let kernel = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+
+                // Find dead connections by pinging each one
+                let mut dead_servers = Vec::new();
+                {
+                    let mut conns = kernel.mcp_connections.lock().await;
+                    let mut i = 0;
+                    while i < conns.len() {
+                        if conns[i].ping().await.is_err() {
+                            let name = conns[i].name().to_string();
+                            let config = conns[i].config().clone();
+                            warn!(server = %name, "MCP server health check failed, will reconnect");
+                            dead_servers.push((name, config));
+                            conns.remove(i);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+
+                // Reconnect dead servers
+                for (name, config) in dead_servers {
+                    use opencarrier_runtime::mcp::McpConnection;
+                    info!(server = %name, "Attempting MCP server reconnection");
+                    match McpConnection::connect(config).await {
+                        Ok(conn) => {
+                            let tool_count = conn.tools().len();
+                            // Remove stale tools for this server before re-adding
+                            if let Ok(mut tools) = kernel.mcp_tools.lock() {
+                                let prefix = format!("mcp_{}", opencarrier_runtime::mcp::normalize_name(&name));
+                                tools.retain(|t| !t.name.starts_with(&prefix));
+                                tools.extend(conn.tools().iter().cloned());
+                            }
+                            kernel.mcp_connections.lock().await.push(conn);
+                            info!(server = %name, tools = tool_count, "MCP server reconnected");
+                        }
+                        Err(e) => {
+                            warn!(server = %name, error = %e, "MCP reconnection failed, will retry next cycle");
+                        }
+                    }
+                }
+            }
+        });
     }
 
     /// Get the list of tools available to an agent based on its manifest.
@@ -4295,30 +3908,36 @@ impl OpenCarrierKernel {
             .map(|s| opencarrier_runtime::mcp::normalize_name(s))
             .collect();
 
-        // Group tools by MCP server prefix (mcp_{server}_{tool})
+        // Collect known server names from live connections for correct grouping
+        let conns = self.mcp_connections.blocking_lock();
+        let known_names: Vec<&str> = conns.iter().map(|c| c.name()).collect();
+
+        // Group tools by MCP server using known-names resolver
         let mut servers: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         let mut tool_count = 0usize;
         for tool in &tools {
-            let parts: Vec<&str> = tool.name.splitn(3, '_').collect();
-            if parts.len() >= 3 && parts[0] == "mcp" {
-                let server = parts[1].to_string();
-                // Filter by MCP allowlist if set
-                if !mcp_allowlist.is_empty() && !normalized.iter().any(|n| n == &server) {
-                    continue;
-                }
-                servers
-                    .entry(server)
-                    .or_default()
-                    .push(parts[2..].join("_"));
-                tool_count += 1;
-            } else {
-                servers
-                    .entry("unknown".to_string())
-                    .or_default()
-                    .push(tool.name.clone());
-                tool_count += 1;
+            let server = opencarrier_runtime::mcp::extract_mcp_server_from_known(
+                &tool.name,
+                &known_names,
+            )
+            .map(String::from)
+            .unwrap_or_else(|| "unknown".to_string());
+
+            // Filter by MCP allowlist if set
+            if !mcp_allowlist.is_empty() && !normalized.iter().any(|n| n == &server) {
+                continue;
             }
+
+            // Extract the original tool name (after the mcp_{server}_ prefix)
+            let prefix = format!("mcp_{}_", server);
+            let tool_display = tool.name.strip_prefix(&prefix).unwrap_or(&tool.name);
+
+            servers
+                .entry(server)
+                .or_default()
+                .push(tool_display.to_string());
+            tool_count += 1;
         }
         if tool_count == 0 {
             return String::new();
@@ -4378,6 +3997,171 @@ impl OpenCarrierKernel {
             }
         }
         context_parts.join("\n\n")
+    }
+
+    /// Lazy backfill: create workspace directory for agents spawned before
+    /// the workspaces feature existed. Shared between streaming and non-streaming paths.
+    fn ensure_workspace_backfill(
+        &self,
+        agent_id: &AgentId,
+        manifest: &mut AgentManifest,
+        context: &str,
+    ) {
+        if manifest.workspace.is_none() {
+            let workspace_dir = self.config.effective_workspaces_dir().join(&manifest.name);
+            if let Err(e) = ensure_workspace(&workspace_dir) {
+                warn!(agent_id = %agent_id, "Failed to backfill workspace ({context}): {e}");
+            } else {
+                manifest.workspace = Some(workspace_dir);
+                let _ = self
+                    .registry
+                    .update_workspace(*agent_id, manifest.workspace.clone());
+            }
+        }
+    }
+
+    /// Build PromptContext and apply it to the manifest's system prompt.
+    /// Shared between streaming and non-streaming message paths.
+    fn build_and_apply_prompt(
+        &self,
+        agent_id: &AgentId,
+        manifest: &mut AgentManifest,
+        tools: &[opencarrier_types::tool::ToolDefinition],
+        sender_id: &Option<String>,
+        sender_name: Option<String>,
+    ) {
+        let mcp_tool_count = self.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
+        let shared_id = shared_memory_agent_id();
+        let user_name = self
+            .memory
+            .structured_get(shared_id, "user_name")
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_str().map(String::from));
+
+        let peer_agents: Vec<(String, String, String)> = self
+            .registry
+            .list()
+            .iter()
+            .map(|a| {
+                (
+                    a.name.clone(),
+                    format!("{:?}", a.state),
+                    a.manifest.model.modality.clone(),
+                )
+            })
+            .collect();
+
+        let prompt_ctx = opencarrier_runtime::prompt_builder::PromptContext {
+            agent_name: manifest.name.clone(),
+            agent_description: manifest.description.clone(),
+            base_system_prompt: manifest.model.system_prompt.clone(),
+            granted_tools: tools.iter().map(|t| t.name.clone()).collect(),
+            recalled_memories: vec![],
+            skill_summary: self.build_skill_summary(&manifest.skills),
+            skill_prompt_context: self.collect_prompt_context(&manifest.skills),
+            mcp_summary: if mcp_tool_count > 0 {
+                self.build_mcp_summary(&manifest.mcp_servers)
+            } else {
+                String::new()
+            },
+            workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
+            soul_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "SOUL.md")),
+            user_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "USER.md")),
+            memory_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "MEMORY.md")),
+            canonical_context: self
+                .memory
+                .canonical_context(*agent_id, None)
+                .ok()
+                .and_then(|(s, _)| s),
+            user_name,
+            channel_type: None,
+            is_subagent: manifest
+                .metadata
+                .get("is_subagent")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            is_autonomous: manifest.autonomous.is_some(),
+            agents_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "AGENTS.md")),
+            bootstrap_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "BOOTSTRAP.md")),
+            workspace_context: manifest.workspace.as_ref().map(|w| {
+                let mut ws_ctx =
+                    opencarrier_runtime::workspace_context::WorkspaceContext::detect(w);
+                ws_ctx.build_context_section()
+            }),
+            identity_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "IDENTITY.md")),
+            heartbeat_md: if manifest.autonomous.is_some() {
+                manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_identity_file(w, "HEARTBEAT.md"))
+            } else {
+                None
+            },
+            peer_agents,
+            current_date: Some(
+                chrono::Local::now()
+                    .format("%A, %B %d, %Y (%Y-%m-%d %H:%M %Z)")
+                    .to_string(),
+            ),
+            sender_id: sender_id.clone(),
+            sender_name,
+            user_profile_summary: sender_id.as_ref().and_then(|sid| {
+                manifest.workspace.as_ref().and_then(|w| read_user_profile_summary(w, sid))
+            }),
+            clone_system_prompt_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "system_prompt.md")),
+            clone_skills_catalog: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_skills_catalog(w)),
+            clone_style_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_style_samples(w)),
+            clone_skills_prompts: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_workspace_skills_prompts(w)),
+            knowledge_content: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_knowledge_content(w)),
+            clone_agents_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_agents_directory(w)),
+        };
+        manifest.model.system_prompt =
+            opencarrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
+        if let Some(cc_msg) =
+            opencarrier_runtime::prompt_builder::build_canonical_context_message(&prompt_ctx)
+        {
+            manifest.metadata.insert(
+                "canonical_context_msg".to_string(),
+                serde_json::Value::String(cc_msg),
+            );
+        }
     }
 }
 
@@ -4456,33 +4240,6 @@ fn manifest_to_capabilities(manifest: &AgentManifest) -> Vec<Capability> {
     caps
 }
 
-/// Apply global budget defaults to an agent's resource quota.
-///
-/// When the global budget config specifies limits and the agent still has
-/// the built-in defaults, override them so agents respect the user's config.
-fn apply_budget_defaults(
-    budget: &opencarrier_types::config::BudgetConfig,
-    resources: &mut ResourceQuota,
-) {
-    // Only override hourly if agent has unlimited (0.0) and global is set
-    if budget.max_hourly_usd > 0.0 && resources.max_cost_per_hour_usd == 0.0 {
-        resources.max_cost_per_hour_usd = budget.max_hourly_usd;
-    }
-    // Only override daily/monthly if agent has unlimited (0.0) and global is set
-    if budget.max_daily_usd > 0.0 && resources.max_cost_per_day_usd == 0.0 {
-        resources.max_cost_per_day_usd = budget.max_daily_usd;
-    }
-    if budget.max_monthly_usd > 0.0 && resources.max_cost_per_month_usd == 0.0 {
-        resources.max_cost_per_month_usd = budget.max_monthly_usd;
-    }
-    // Override per-agent hourly token limit when the global default is set.
-    // This lets users raise (or lower) the token budget for all agents at once
-    // via config.toml [budget] default_max_llm_tokens_per_hour = 10000000
-    if budget.default_max_llm_tokens_per_hour > 0 {
-        resources.max_llm_tokens_per_hour = budget.default_max_llm_tokens_per_hour;
-    }
-}
-
 /// Pick a sensible default embedding model for a given provider when the user
 /// configured an explicit `embedding_provider` but left `embedding_model` at the
 /// default value (which is a local model name that cloud APIs wouldn't recognise).
@@ -4524,6 +4281,7 @@ async fn cron_deliver_response(
 
     match delivery {
         CronDelivery::None => Ok(()),
+        CronDelivery::LastChannel => Ok(()),
         CronDelivery::Webhook { url } => {
             tracing::debug!(url = %url, "Cron: delivering via webhook");
             let client = reqwest::Client::builder()

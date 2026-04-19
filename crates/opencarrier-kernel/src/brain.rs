@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use opencarrier_runtime::llm_driver::{Brain as BrainTrait, DriverConfig, LlmDriver};
@@ -22,6 +23,11 @@ use async_trait::async_trait;
 // Per-endpoint health tracker (lock-free atomics)
 // ---------------------------------------------------------------------------
 
+/// Consecutive failures before circuit opens (endpoint is taken out of rotation).
+const CIRCUIT_BREAKER_THRESHOLD: u32 = 3;
+/// How long to wait before allowing a probe request (half-open state).
+const CIRCUIT_BREAKER_COOLDOWN_MS: u64 = 60_000; // 60s
+
 /// Thread-safe health tracker for a single endpoint.
 struct EndpointTracker {
     success_count: AtomicU64,
@@ -29,6 +35,8 @@ struct EndpointTracker {
     total_latency_ms: AtomicU64,
     latency_count: AtomicU64,
     consecutive_failures: AtomicU32,
+    /// Timestamp (ms since epoch) of the last failure. Used for circuit-breaker cooldown.
+    last_failure_at: AtomicU64,
 }
 
 impl EndpointTracker {
@@ -39,6 +47,7 @@ impl EndpointTracker {
             total_latency_ms: AtomicU64::new(0),
             latency_count: AtomicU64::new(0),
             consecutive_failures: AtomicU32::new(0),
+            last_failure_at: AtomicU64::new(0),
         }
     }
 
@@ -51,20 +60,54 @@ impl EndpointTracker {
         }
     }
 
-    fn record_failure(&self) {
+    fn record_failure(&self, latency_ms: u64) {
         self.failure_count.fetch_add(1, Ordering::Relaxed);
         self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        if latency_ms > 0 {
+            self.total_latency_ms.fetch_add(latency_ms, Ordering::Relaxed);
+            self.latency_count.fetch_add(1, Ordering::Relaxed);
+        }
+        self.last_failure_at.store(now_ms(), Ordering::Relaxed);
     }
 
-    fn snapshot(&self) -> (u64, u64, u64, u32) {
+    /// Check if the circuit is open (endpoint should be skipped).
+    /// Returns true if the endpoint is available for requests.
+    fn is_available(&self) -> bool {
+        let consec = self.consecutive_failures.load(Ordering::Relaxed);
+        if consec < CIRCUIT_BREAKER_THRESHOLD {
+            return true;
+        }
+        // Circuit is open — check if cooldown has passed (half-open)
+        let last = self.last_failure_at.load(Ordering::Relaxed);
+        let elapsed = now_ms().saturating_sub(last);
+        elapsed >= CIRCUIT_BREAKER_COOLDOWN_MS
+    }
+
+    fn snapshot(&self) -> EndpointSnapshot {
         let success = self.success_count.load(Ordering::Relaxed);
         let failure = self.failure_count.load(Ordering::Relaxed);
         let total_lat = self.total_latency_ms.load(Ordering::Relaxed);
         let lat_count = self.latency_count.load(Ordering::Relaxed);
         let avg = if lat_count > 0 { total_lat / lat_count } else { 0 };
         let consec = self.consecutive_failures.load(Ordering::Relaxed);
-        (success, failure, avg, consec)
+        let circuit_open = consec >= CIRCUIT_BREAKER_THRESHOLD && !self.is_available();
+        EndpointSnapshot { success, failure, avg_latency: avg, consecutive_failures: consec, circuit_open }
     }
+}
+
+struct EndpointSnapshot {
+    success: u64,
+    failure: u64,
+    avg_latency: u64,
+    consecutive_failures: u32,
+    circuit_open: bool,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +200,7 @@ impl Brain {
 
     /// Get the ordered list of resolved endpoints for a modality.
     /// Returns primary first, then fallbacks. Filters out endpoints
-    /// with no live driver.
+    /// with no live driver **or circuit-broken** (too many consecutive failures).
     pub fn endpoints_for(&self, modality: &str) -> Vec<ResolvedEndpoint> {
         let mod_config = self.config.modalities.get(modality)
             .or_else(|| self.config.modalities.get(&self.config.default_modality));
@@ -175,6 +218,17 @@ impl Brain {
                 // Only include endpoints with live drivers
                 if !self.drivers.contains_key(&name) {
                     return None;
+                }
+                // Circuit-breaker: skip endpoints with too many consecutive failures
+                if let Some(tracker) = self.health.get(&name) {
+                    if !tracker.is_available() {
+                        warn!(
+                            endpoint = %name,
+                            consecutive = tracker.consecutive_failures.load(Ordering::Relaxed),
+                            "Endpoint circuit-broken, skipping"
+                        );
+                        return None;
+                    }
                 }
                 Some(ResolvedEndpoint {
                     id: name,
@@ -199,7 +253,7 @@ impl Brain {
         if report.success {
             tracker.record_success(report.latency_ms);
         } else {
-            tracker.record_failure();
+            tracker.record_failure(report.latency_ms);
         }
     }
 
@@ -209,20 +263,24 @@ impl Brain {
 
         let endpoints: Vec<EndpointHealth> = self.config.endpoints.iter()
             .map(|(name, ep)| {
-                let (success, failure, avg_latency, consec) = self.health
+                let snap = self.health
                     .get(name)
                     .map(|t| t.snapshot())
-                    .unwrap_or((0, 0, 0, 0));
+                    .unwrap_or_else(|| EndpointSnapshot {
+                        success: 0, failure: 0, avg_latency: 0,
+                        consecutive_failures: 0, circuit_open: false,
+                    });
 
                 EndpointHealth {
                     endpoint: name.clone(),
                     provider: ep.provider.clone(),
                     model: ep.model.clone(),
                     driver_ready: self.drivers.contains_key(name),
-                    success_count: success,
-                    failure_count: failure,
-                    avg_latency_ms: avg_latency,
-                    consecutive_failures: consec,
+                    success_count: snap.success,
+                    failure_count: snap.failure,
+                    avg_latency_ms: snap.avg_latency,
+                    consecutive_failures: snap.consecutive_failures,
+                    circuit_open: snap.circuit_open,
                 }
             })
             .collect();

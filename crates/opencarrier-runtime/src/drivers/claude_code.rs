@@ -201,9 +201,6 @@ struct ClaudeJsonOutput {
     text: Option<String>,
     #[serde(default)]
     usage: Option<ClaudeUsage>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    cost_usd: Option<f64>,
 }
 
 /// Usage stats from Claude CLI JSON output.

@@ -110,8 +110,6 @@ async fn start_test_server() -> TestServer {
             axum::routing::get(routes::list_agent_sessions).post(routes::create_agent_session),
         )
         .route("/api/tools", axum::routing::get(routes::list_tools))
-        .route("/api/models", axum::routing::get(routes::list_models))
-        .route("/api/providers", axum::routing::get(routes::list_providers))
         .route("/api/usage", axum::routing::get(routes::usage_stats))
         .route("/api/config", axum::routing::get(routes::get_config))
         .layer(axum::middleware::from_fn(middleware::request_logging))

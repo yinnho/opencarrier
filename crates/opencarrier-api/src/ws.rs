@@ -466,28 +466,9 @@ async fn handle_text_message(
                     .get(agent_id)
                     .map(|e| e.manifest.model.modality.clone())
                     .unwrap_or_default();
-                let supports_vision = state
-                    .kernel
-                    .model_catalog
-                    .read()
-                    .ok()
-                    .and_then(|cat| cat.find_model(&model_name).map(|m| m.supports_vision))
-                    .unwrap_or(false);
-                if !supports_vision {
-                    let _ = send_json(
-                        sender,
-                        &serde_json::json!({
-                            "type": "command_result",
-                            "message": format!(
-                                "**Vision not supported** — the current model `{}` cannot analyze images. \
-                                 Switch to a vision-capable model (e.g. `gemini-2.5-flash`, `claude-sonnet-4-20250514`, `gpt-4o`) \
-                                 with `/model <name>` for image analysis.",
-                                model_name
-                            ),
-                        }),
-                    )
-                    .await;
-                }
+                // Allow vision by default — most modern models support it
+                // The model catalog no longer tracks vision support per-model
+                let _ = model_name; // used for informational purposes only
             }
 
             // Send typing lifecycle: start
@@ -761,7 +742,6 @@ async fn handle_text_message(
                                     "input_tokens": usage.input_tokens,
                                     "output_tokens": usage.output_tokens,
                                     "iterations": 0, // Not available from stream; handle updates later if needed
-                                    "cost_usd": null,
                                     "context_pressure": pressure,
                                 }),
                             )
@@ -897,21 +877,9 @@ async fn handle_command(
                 }
             }
         }
-        "usage" => match state.kernel.session_usage_cost(agent_id) {
-            Ok((input, output, cost)) => {
-                let mut msg = format!(
-                    "Session usage: ~{input} in / ~{output} out (~{} total)",
-                    input + output
-                );
-                if cost > 0.0 {
-                    msg.push_str(&format!(" | ${cost:.4}"));
-                }
-                serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
-            }
-            Err(e) => {
-                serde_json::json!({"type": "error", "content": format!("Usage query failed: {e}")})
-            }
-        },
+        "usage" => {
+            serde_json::json!({"type": "command_result", "command": cmd, "message": "Usage tracking is available via /api/usage endpoints"})
+        }
         "context" => match state.kernel.context_report(agent_id) {
             Ok(report) => {
                 let formatted = opencarrier_runtime::compactor::format_context_report(&report);
@@ -951,27 +919,6 @@ async fn handle_command(
             } else {
                 "Agent is idle."
             };
-            serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
-        }
-        "budget" => {
-            let budget = &state.kernel.config.budget;
-            let status = state.kernel.metering.budget_status(budget);
-            let fmt = |v: f64| -> String {
-                if v > 0.0 {
-                    format!("${v:.2}")
-                } else {
-                    "unlimited".to_string()
-                }
-            };
-            let msg = format!(
-                "Hourly: ${:.4} / {}  |  Daily: ${:.4} / {}  |  Monthly: ${:.4} / {}",
-                status.hourly_spend,
-                fmt(status.hourly_limit),
-                status.daily_spend,
-                fmt(status.daily_limit),
-                status.monthly_spend,
-                fmt(status.monthly_limit),
-            );
             serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
         }
         "peers" => {

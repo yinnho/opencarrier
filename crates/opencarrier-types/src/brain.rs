@@ -167,6 +167,8 @@ pub struct EndpointHealth {
     pub avg_latency_ms: u64,
     /// Consecutive failures (reset to 0 on success).
     pub consecutive_failures: u32,
+    /// Whether the circuit-breaker has opened (endpoint taken out of rotation).
+    pub circuit_open: bool,
 }
 
 /// Overall Brain status snapshot, returned by `Brain::status()`.
