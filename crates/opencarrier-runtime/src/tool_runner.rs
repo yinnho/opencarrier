@@ -78,19 +78,28 @@ tokio::task_local! {
     /// Tracks the current inter-agent call depth within a task.
     static AGENT_CALL_DEPTH: std::cell::Cell<u32>;
     /// Canvas max HTML size in bytes (set from kernel config at loop start).
-    pub static CANVAS_MAX_BYTES: usize;
-}
-
-/// Get the current inter-agent call depth from the task-local context.
-/// Returns 0 if called outside an agent task.
-pub fn current_agent_depth() -> u32 {
-    AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0)
+    static CANVAS_MAX_BYTES: usize;
 }
 
 /// Execute a tool by name with the given input, returning a ToolResult.
 ///
 /// The optional `kernel` handle enables inter-agent tools. If `None`,
 /// agent tools will return an error indicating the kernel is not available.
+/// Dispatch a browser tool, handling the `None` (no browser) case uniformly.
+macro_rules! browser_dispatch {
+    ($input:expr, $browser_ctx:expr, $caller_agent_id:expr, $func:path) => {
+        match $browser_ctx {
+            Some(mgr) => {
+                let aid = $caller_agent_id.unwrap_or("default");
+                $func($input, mgr, aid).await
+            }
+            None => Err(
+                "Browser tools not available. Ensure Chrome/Chromium is installed.".to_string(),
+            ),
+        }
+    };
+}
+
 ///
 /// `allowed_tools` enforces capability-based security: if provided, only
 /// tools in the list may execute. This prevents an LLM from hallucinating
@@ -338,97 +347,17 @@ pub async fn execute_tool(
                     is_error: true,
                 };
             }
-            match browser_ctx {
-                Some(mgr) => {
-                    let aid = caller_agent_id.unwrap_or("default");
-                    crate::browser::tool_browser_navigate(input, mgr, aid).await
-                }
-                None => Err(
-                    "Browser tools not available. Ensure Chrome/Chromium is installed.".to_string(),
-                ),
-            }
+            browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_navigate)
         }
-        "browser_click" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_click(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
-        "browser_type" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_type(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
-        "browser_screenshot" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_screenshot(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
-        "browser_read_page" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_read_page(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
-        "browser_close" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_close(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
-        "browser_scroll" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_scroll(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
-        "browser_wait" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_wait(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
-        "browser_run_js" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_run_js(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
-        "browser_back" => match browser_ctx {
-            Some(mgr) => {
-                let aid = caller_agent_id.unwrap_or("default");
-                crate::browser::tool_browser_back(input, mgr, aid).await
-            }
-            None => {
-                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
-            }
-        },
+        "browser_click" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_click),
+        "browser_type" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_type),
+        "browser_screenshot" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_screenshot),
+        "browser_read_page" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_read_page),
+        "browser_close" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_close),
+        "browser_scroll" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_scroll),
+        "browser_wait" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_wait),
+        "browser_run_js" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_run_js),
+        "browser_back" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_back),
 
         // Canvas / A2UI tool
         "canvas_present" => tool_canvas_present(input, workspace_root).await,
@@ -1678,17 +1607,13 @@ async fn tool_knowledge_heal(workspace_root: Option<&Path>) -> Result<String, St
     Ok(format!("Fixed {} issue(s).", fixes))
 }
 
-async fn tool_knowledge_add(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
+/// Core logic for adding a knowledge file. Shared by tool and train versions.
+async fn knowledge_add_core(
+    root: &Path,
+    title: &str,
+    content: &str,
+    source_label: &str,
 ) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_add requires a workspace root")?;
-    let title = input["title"]
-        .as_str()
-        .ok_or("Missing 'title' parameter")?;
-    let content = input["content"]
-        .as_str()
-        .ok_or("Missing 'content' parameter")?;
     let filename = opencarrier_lifecycle::evolution::sanitize_filename(title);
     let knowledge_dir = root.join("data/knowledge");
     tokio::fs::create_dir_all(&knowledge_dir)
@@ -1708,8 +1633,51 @@ async fn tool_knowledge_add(
         &format!("{filename}.md"),
         None,
         Some(&full),
-        "tool",
+        source_label,
     );
+    Ok(filename)
+}
+
+/// Core logic for importing knowledge entries. Shared by tool and train versions.
+async fn knowledge_import_core(
+    root: &Path,
+    data: &str,
+    data_type: &str,
+) -> Result<(Vec<String>, opencarrier_lifecycle::parsers::ParseQuality), String> {
+    let result = opencarrier_lifecycle::parsers::parse_import_data(data, data_type)
+        .map_err(|e| format!("Parse failed: {e}"))?;
+    let knowledge_dir = root.join("data/knowledge");
+    tokio::fs::create_dir_all(&knowledge_dir)
+        .await
+        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+    let mut saved = Vec::new();
+    for entry in &result.entries {
+        let filename = opencarrier_lifecycle::evolution::sanitize_filename(&entry.title);
+        let path = knowledge_dir.join(format!("{filename}.md"));
+        let full = format!(
+            "---\nname: {}\ndescription: {}\nconfidence: INFERRED\n---\n{}\n---\n",
+            entry.title, entry.title, entry.content
+        );
+        tokio::fs::write(&path, &full)
+            .await
+            .map_err(|e| format!("Failed to write {}: {e}", filename))?;
+        saved.push(filename);
+    }
+    Ok((saved, result.quality))
+}
+
+async fn tool_knowledge_add(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_add requires a workspace root")?;
+    let title = input["title"]
+        .as_str()
+        .ok_or("Missing 'title' parameter")?;
+    let content = input["content"]
+        .as_str()
+        .ok_or("Missing 'content' parameter")?;
+    let filename = knowledge_add_core(root, title, content, "tool").await?;
     Ok(format!("Knowledge added: {filename}.md"))
 }
 
@@ -1753,29 +1721,11 @@ async fn tool_knowledge_import(
         .as_str()
         .ok_or("Missing 'data' parameter")?;
     let data_type = input["data_type"].as_str().unwrap_or("auto");
-    let result = opencarrier_lifecycle::parsers::parse_import_data(data, data_type)
-        .map_err(|e| format!("Parse failed: {e}"))?;
-    let knowledge_dir = root.join("data/knowledge");
-    tokio::fs::create_dir_all(&knowledge_dir)
-        .await
-        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
-    let mut saved = Vec::new();
-    for entry in &result.entries {
-        let filename = opencarrier_lifecycle::evolution::sanitize_filename(&entry.title);
-        let path = knowledge_dir.join(format!("{filename}.md"));
-        let full = format!(
-            "---\nname: {}\ndescription: {}\nconfidence: INFERRED\n---\n{}\n---\n",
-            entry.title, entry.title, entry.content
-        );
-        tokio::fs::write(&path, &full)
-            .await
-            .map_err(|e| format!("Failed to write {}: {e}", filename))?;
-        saved.push(filename);
-    }
+    let (saved, quality) = knowledge_import_core(root, data, data_type).await?;
     Ok(format!(
         "Imported {} entries as knowledge files. Quality: {:?}",
         saved.len(),
-        result.quality
+        quality
     ))
 }
 
@@ -1903,27 +1853,7 @@ async fn tool_train_knowledge_add(
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
-    let filename = opencarrier_lifecycle::evolution::sanitize_filename(title);
-    let knowledge_dir = target_root.join("data/knowledge");
-    tokio::fs::create_dir_all(&knowledge_dir)
-        .await
-        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
-    let path = knowledge_dir.join(format!("{filename}.md"));
-    let full = format!(
-        "---\nname: {}\ndescription: {}\nconfidence: EXTRACTED\n---\n{}\n---\n",
-        title, title, content
-    );
-    tokio::fs::write(&path, &full)
-        .await
-        .map_err(|e| format!("Failed to write knowledge file: {e}"))?;
-    let _ = opencarrier_lifecycle::version::record_version(
-        &target_root,
-        "create",
-        &format!("{filename}.md"),
-        None,
-        Some(&full),
-        "train",
-    );
+    let filename = knowledge_add_core(&target_root, title, content, "train").await?;
     Ok(format!("Knowledge added to target: {filename}.md"))
 }
 
@@ -1936,29 +1866,11 @@ async fn tool_train_knowledge_import(
         .as_str()
         .ok_or("Missing 'data' parameter")?;
     let data_type = input["data_type"].as_str().unwrap_or("auto");
-    let result = opencarrier_lifecycle::parsers::parse_import_data(data, data_type)
-        .map_err(|e| format!("Parse failed: {e}"))?;
-    let knowledge_dir = target_root.join("data/knowledge");
-    tokio::fs::create_dir_all(&knowledge_dir)
-        .await
-        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
-    let mut saved = Vec::new();
-    for entry in &result.entries {
-        let filename = opencarrier_lifecycle::evolution::sanitize_filename(&entry.title);
-        let path = knowledge_dir.join(format!("{filename}.md"));
-        let full = format!(
-            "---\nname: {}\ndescription: {}\nconfidence: INFERRED\n---\n{}\n---\n",
-            entry.title, entry.title, entry.content
-        );
-        tokio::fs::write(&path, &full)
-            .await
-            .map_err(|e| format!("Failed to write {}: {e}", filename))?;
-        saved.push(filename);
-    }
+    let (saved, quality) = knowledge_import_core(&target_root, data, data_type).await?;
     Ok(format!(
         "Imported {} entries to target. Quality: {:?}",
         saved.len(),
-        result.quality
+        quality
     ))
 }
 
@@ -3886,7 +3798,7 @@ async fn tool_process_list(
 /// - Strips all on* event attributes (onclick, onload, onerror, etc.)
 /// - Strips javascript:, data:text/html, vbscript: URLs
 /// - Enforces size limit
-pub fn sanitize_canvas_html(html: &str, max_bytes: usize) -> Result<String, String> {
+fn sanitize_canvas_html(html: &str, max_bytes: usize) -> Result<String, String> {
     if html.is_empty() {
         return Err("Empty HTML content".to_string());
     }

@@ -321,9 +321,30 @@ mod tests {
         assert_eq!(TaskComplexity::Complex.to_string(), "complex");
     }
 
+    fn make_test_catalog() -> crate::model_catalog::ModelCatalog {
+        use opencarrier_types::model_catalog::ModelCatalogEntry;
+        let mut catalog = crate::model_catalog::ModelCatalog::new();
+        catalog.add_custom_model(ModelCatalogEntry {
+            id: "llama-3.3-70b-versatile".to_string(),
+            provider: "groq".to_string(),
+            aliases: vec!["llama".to_string()],
+        });
+        catalog.add_custom_model(ModelCatalogEntry {
+            id: "claude-sonnet-4-6".to_string(),
+            provider: "anthropic".to_string(),
+            aliases: vec!["sonnet".to_string()],
+        });
+        catalog.add_custom_model(ModelCatalogEntry {
+            id: "claude-opus-4-6".to_string(),
+            provider: "anthropic".to_string(),
+            aliases: vec!["opus".to_string()],
+        });
+        catalog
+    }
+
     #[test]
     fn test_validate_models_all_found() {
-        let catalog = crate::model_catalog::ModelCatalog::new();
+        let catalog = make_test_catalog();
         let config = ModelRoutingConfig {
             simple_model: "llama-3.3-70b-versatile".to_string(),
             medium_model: "claude-sonnet-4-6".to_string(),
@@ -338,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_validate_models_unknown() {
-        let catalog = crate::model_catalog::ModelCatalog::new();
+        let catalog = make_test_catalog();
         let config = ModelRoutingConfig {
             simple_model: "unknown-model".to_string(),
             medium_model: "claude-sonnet-4-6".to_string(),
@@ -354,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_resolve_aliases() {
-        let catalog = crate::model_catalog::ModelCatalog::new();
+        let catalog = make_test_catalog();
         let config = ModelRoutingConfig {
             simple_model: "llama".to_string(),
             medium_model: "sonnet".to_string(),

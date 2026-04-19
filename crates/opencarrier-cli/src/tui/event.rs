@@ -239,7 +239,6 @@ pub fn spawn_daemon_stream(
                 output_tokens: total_output_tokens,
             },
             iterations: 0,
-            cost_usd: None,
             silent: false,
             directives: Default::default(),
         })));
@@ -275,7 +274,6 @@ fn daemon_fallback(
                 output_tokens,
             },
             iterations: body["iterations"].as_u64().unwrap_or(0) as u32,
-            cost_usd: body["cost_usd"].as_f64(),
             silent: false,
             directives: Default::default(),
         })

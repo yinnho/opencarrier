@@ -260,28 +260,16 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// Update an agent's resource quota (budget limits).
+    /// Update an agent's resource limits.
     pub fn update_resources(
         &self,
         id: AgentId,
-        hourly: Option<f64>,
-        daily: Option<f64>,
-        monthly: Option<f64>,
         tokens_per_hour: Option<u64>,
     ) -> OpenCarrierResult<()> {
         let mut entry = self
             .agents
             .get_mut(&id)
             .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
-        if let Some(v) = hourly {
-            entry.manifest.resources.max_cost_per_hour_usd = v;
-        }
-        if let Some(v) = daily {
-            entry.manifest.resources.max_cost_per_day_usd = v;
-        }
-        if let Some(v) = monthly {
-            entry.manifest.resources.max_cost_per_month_usd = v;
-        }
         if let Some(v) = tokens_per_hour {
             entry.manifest.resources.max_llm_tokens_per_hour = v;
         }

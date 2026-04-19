@@ -61,38 +61,6 @@ pub const AZURE_OPENAI_BASE_URL: &str = "";
 // ── AWS Bedrock ───────────────────────────────────────────────────
 pub const BEDROCK_BASE_URL: &str = "https://bedrock-runtime.us-east-1.amazonaws.com";
 
-/// A model's capability tier.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ModelTier {
-    /// Cutting-edge, most capable models (e.g. Claude Opus, GPT-4.1).
-    Frontier,
-    /// Smart, cost-effective models (e.g. Claude Sonnet, Gemini 2.5 Flash).
-    Smart,
-    /// Balanced speed/cost models (e.g. GPT-4o-mini, Groq Llama).
-    #[default]
-    Balanced,
-    /// Fastest, cheapest models for simple tasks.
-    Fast,
-    /// Local models (Ollama, vLLM, LM Studio).
-    Local,
-    /// User-defined custom models added at runtime.
-    Custom,
-}
-
-impl fmt::Display for ModelTier {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ModelTier::Frontier => write!(f, "frontier"),
-            ModelTier::Smart => write!(f, "smart"),
-            ModelTier::Balanced => write!(f, "balanced"),
-            ModelTier::Fast => write!(f, "fast"),
-            ModelTier::Local => write!(f, "local"),
-            ModelTier::Custom => write!(f, "custom"),
-        }
-    }
-}
-
 /// Provider authentication status.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,52 +85,15 @@ impl fmt::Display for AuthStatus {
 }
 
 /// A single model entry in the catalog.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogEntry {
     /// Canonical model identifier (e.g. "claude-sonnet-4-20250514").
     pub id: String,
-    /// Human-readable display name (e.g. "Claude Sonnet 4").
-    pub display_name: String,
     /// Provider identifier (e.g. "anthropic").
     pub provider: String,
-    /// Capability tier.
-    pub tier: ModelTier,
-    /// Context window size in tokens.
-    pub context_window: u64,
-    /// Maximum output tokens.
-    pub max_output_tokens: u64,
-    /// Cost per million input tokens (USD).
-    pub input_cost_per_m: f64,
-    /// Cost per million output tokens (USD).
-    pub output_cost_per_m: f64,
-    /// Whether the model supports tool/function calling.
-    pub supports_tools: bool,
-    /// Whether the model supports vision/image inputs.
-    pub supports_vision: bool,
-    /// Whether the model supports streaming responses.
-    pub supports_streaming: bool,
     /// Aliases for this model (e.g. ["sonnet", "claude-sonnet"]).
     #[serde(default)]
     pub aliases: Vec<String>,
-}
-
-impl Default for ModelCatalogEntry {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            display_name: String::new(),
-            provider: String::new(),
-            tier: ModelTier::default(),
-            context_window: 0,
-            max_output_tokens: 0,
-            input_cost_per_m: 0.0,
-            output_cost_per_m: 0.0,
-            supports_tools: false,
-            supports_vision: false,
-            supports_streaming: false,
-            aliases: Vec::new(),
-        }
-    }
 }
 
 /// Provider metadata.
@@ -203,25 +134,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_model_tier_display() {
-        assert_eq!(ModelTier::Frontier.to_string(), "frontier");
-        assert_eq!(ModelTier::Smart.to_string(), "smart");
-        assert_eq!(ModelTier::Balanced.to_string(), "balanced");
-        assert_eq!(ModelTier::Fast.to_string(), "fast");
-        assert_eq!(ModelTier::Local.to_string(), "local");
-        assert_eq!(ModelTier::Custom.to_string(), "custom");
-    }
-
-    #[test]
     fn test_auth_status_display() {
         assert_eq!(AuthStatus::Configured.to_string(), "configured");
         assert_eq!(AuthStatus::Missing.to_string(), "missing");
         assert_eq!(AuthStatus::NotRequired.to_string(), "not_required");
-    }
-
-    #[test]
-    fn test_model_tier_default() {
-        assert_eq!(ModelTier::default(), ModelTier::Balanced);
     }
 
     #[test]
@@ -233,7 +149,7 @@ mod tests {
     fn test_model_catalog_entry_default() {
         let entry = ModelCatalogEntry::default();
         assert!(entry.id.is_empty());
-        assert_eq!(entry.tier, ModelTier::Balanced);
+        assert!(entry.provider.is_empty());
         assert!(entry.aliases.is_empty());
     }
 
@@ -243,15 +159,6 @@ mod tests {
         assert!(info.id.is_empty());
         assert!(info.key_required);
         assert_eq!(info.auth_status, AuthStatus::Missing);
-    }
-
-    #[test]
-    fn test_model_tier_serde_roundtrip() {
-        let tier = ModelTier::Frontier;
-        let json = serde_json::to_string(&tier).unwrap();
-        assert_eq!(json, "\"frontier\"");
-        let parsed: ModelTier = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, tier);
     }
 
     #[test]
@@ -267,22 +174,12 @@ mod tests {
     fn test_model_entry_serde_roundtrip() {
         let entry = ModelCatalogEntry {
             id: "claude-sonnet-4-20250514".to_string(),
-            display_name: "Claude Sonnet 4".to_string(),
             provider: "anthropic".to_string(),
-            tier: ModelTier::Smart,
-            context_window: 200_000,
-            max_output_tokens: 64_000,
-            input_cost_per_m: 3.0,
-            output_cost_per_m: 15.0,
-            supports_tools: true,
-            supports_vision: true,
-            supports_streaming: true,
             aliases: vec!["sonnet".to_string(), "claude-sonnet".to_string()],
         };
         let json = serde_json::to_string(&entry).unwrap();
         let parsed: ModelCatalogEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, entry.id);
-        assert_eq!(parsed.tier, ModelTier::Smart);
         assert_eq!(parsed.aliases.len(), 2);
     }
 
@@ -306,7 +203,6 @@ mod tests {
 
     #[test]
     fn test_azure_openai_base_url_empty() {
-        // Azure requires user-supplied URL, so the constant must be empty.
         assert!(AZURE_OPENAI_BASE_URL.is_empty());
     }
 }

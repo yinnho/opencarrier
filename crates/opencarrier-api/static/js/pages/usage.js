@@ -1,5 +1,4 @@
 // OpenCarrier Analytics Page — Full usage analytics with per-model and per-agent breakdowns
-// Includes Cost Dashboard with donut chart, bar chart, projections, and provider breakdown.
 'use strict';
 
 function analyticsPage() {
@@ -11,9 +10,8 @@ function analyticsPage() {
     loading: true,
     loadError: '',
 
-    // Cost tab state
+    // Chart state
     dailyCosts: [],
-    todayCost: 0,
     firstEventDate: null,
 
     // Chart colors for providers (stable palette)
@@ -45,7 +43,7 @@ function analyticsPage() {
       try {
         this.summary = await OpenCarrierAPI.get('/api/usage/summary');
       } catch(e) {
-        this.summary = { total_input_tokens: 0, total_output_tokens: 0, total_cost_usd: 0, call_count: 0, total_tool_calls: 0 };
+        this.summary = { total_input_tokens: 0, total_output_tokens: 0, call_count: 0, total_tool_calls: 0 };
         throw e;
       }
     },
@@ -68,11 +66,9 @@ function analyticsPage() {
       try {
         var data = await OpenCarrierAPI.get('/api/usage/daily');
         this.dailyCosts = data.days || [];
-        this.todayCost = data.today_cost_usd || 0;
         this.firstEventDate = data.first_event_date || null;
       } catch(e) {
         this.dailyCosts = [];
-        this.todayCost = 0;
         this.firstEventDate = null;
       }
     },
@@ -82,12 +78,6 @@ function analyticsPage() {
       if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
       if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
       return String(n);
-    },
-
-    formatCost(c) {
-      if (!c) return '$0.00';
-      if (c < 0.01) return '$' + c.toFixed(4);
-      return '$' + c.toFixed(2);
     },
 
     maxTokens() {
@@ -104,35 +94,16 @@ function analyticsPage() {
       return Math.max(2, Math.round((t / this.maxTokens()) * 100)) + '%';
     },
 
-    // ── Cost tab helpers ──
-
-    avgCostPerMessage() {
-      var count = this.summary.call_count || 0;
-      if (count === 0) return 0;
-      return (this.summary.total_cost_usd || 0) / count;
-    },
-
-    projectedMonthlyCost() {
-      if (!this.firstEventDate || !this.summary.total_cost_usd) return 0;
-      var first = new Date(this.firstEventDate);
-      var now = new Date();
-      var diffMs = now.getTime() - first.getTime();
-      var diffDays = diffMs / (1000 * 60 * 60 * 24);
-      if (diffDays < 1) diffDays = 1;
-      return (this.summary.total_cost_usd / diffDays) * 30;
-    },
-
     // ── Provider aggregation from byModel data ──
 
-    costByProvider() {
+    tokensByProvider() {
       var providerMap = {};
       var self = this;
       this.byModel.forEach(function(m) {
         var provider = self._extractProvider(m.model);
         if (!providerMap[provider]) {
-          providerMap[provider] = { provider: provider, cost: 0, tokens: 0, calls: 0 };
+          providerMap[provider] = { provider: provider, tokens: 0, calls: 0 };
         }
-        providerMap[provider].cost += (m.total_cost_usd || 0);
         providerMap[provider].tokens += (m.total_input_tokens || 0) + (m.total_output_tokens || 0);
         providerMap[provider].calls += (m.call_count || 0);
       });
@@ -142,7 +113,7 @@ function analyticsPage() {
           result.push(providerMap[key]);
         }
       }
-      result.sort(function(a, b) { return b.cost - a.cost; });
+      result.sort(function(a, b) { return b.tokens - a.tokens; });
       return result;
     },
 
@@ -162,24 +133,24 @@ function analyticsPage() {
       return 'Other';
     },
 
-    // ── Donut chart (stroke-dasharray on circles) ──
+    // ── Donut chart (stroke-dasharray on circles) — token-based ──
 
     donutSegments() {
-      var providers = this.costByProvider();
+      var providers = this.tokensByProvider();
       var total = 0;
       var colors = this._chartColors;
-      providers.forEach(function(p) { total += p.cost; });
+      providers.forEach(function(p) { total += p.tokens; });
       if (total === 0) return [];
 
       var segments = [];
       var offset = 0;
       var circumference = 2 * Math.PI * 60; // r=60
       for (var i = 0; i < providers.length; i++) {
-        var pct = providers[i].cost / total;
+        var pct = providers[i].tokens / total;
         var dashLen = pct * circumference;
         segments.push({
           provider: providers[i].provider,
-          cost: providers[i].cost,
+          tokens: providers[i].tokens,
           percent: Math.round(pct * 100),
           color: colors[i % colors.length],
           dasharray: dashLen + ' ' + (circumference - dashLen),
@@ -196,20 +167,19 @@ function analyticsPage() {
     barChartData() {
       var days = this.dailyCosts;
       if (!days || days.length === 0) return [];
-      var maxCost = 0;
-      days.forEach(function(d) { if (d.cost_usd > maxCost) maxCost = d.cost_usd; });
-      if (maxCost === 0) maxCost = 1;
+      var maxTokens = 0;
+      days.forEach(function(d) { if (d.tokens > maxTokens) maxTokens = d.tokens; });
+      if (maxTokens === 0) maxTokens = 1;
 
       var dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
       var result = [];
       for (var i = 0; i < days.length; i++) {
         var d = new Date(days[i].date + 'T12:00:00');
         var dayName = dayNames[d.getDay()] || '?';
-        var heightPct = Math.max(2, Math.round((days[i].cost_usd / maxCost) * 120));
+        var heightPct = Math.max(2, Math.round((days[i].tokens / maxTokens) * 120));
         result.push({
           date: days[i].date,
           dayName: dayName,
-          cost: days[i].cost_usd,
           tokens: days[i].tokens,
           calls: days[i].calls,
           barHeight: heightPct
@@ -218,24 +188,26 @@ function analyticsPage() {
       return result;
     },
 
-    // ── Cost by model table (sorted by cost descending) ──
+    // ── Token by model table (sorted by tokens descending) ──
 
-    costByModelSorted() {
+    tokensByModelSorted() {
       var models = this.byModel.slice();
-      models.sort(function(a, b) { return (b.total_cost_usd || 0) - (a.total_cost_usd || 0); });
+      models.sort(function(a, b) { return ((b.total_input_tokens || 0) + (b.total_output_tokens || 0)) - ((a.total_input_tokens || 0) + (a.total_output_tokens || 0)); });
       return models;
     },
 
-    maxModelCost() {
+    maxModelTokens() {
       var max = 0;
       this.byModel.forEach(function(m) {
-        if ((m.total_cost_usd || 0) > max) max = m.total_cost_usd;
+        var t = (m.total_input_tokens || 0) + (m.total_output_tokens || 0);
+        if (t > max) max = t;
       });
       return max || 1;
     },
 
-    costBarWidth(m) {
-      return Math.max(2, Math.round(((m.total_cost_usd || 0) / this.maxModelCost()) * 100)) + '%';
+    tokenBarWidth(m) {
+      var t = (m.total_input_tokens || 0) + (m.total_output_tokens || 0);
+      return Math.max(2, Math.round((t / this.maxModelTokens()) * 100)) + '%';
     },
 
     modelTier(modelName) {

@@ -199,12 +199,6 @@ pub struct ResourceQuota {
     pub max_llm_tokens_per_hour: u64,
     /// Maximum network bytes per hour.
     pub max_network_bytes_per_hour: u64,
-    /// Maximum cost in USD per hour.
-    pub max_cost_per_hour_usd: f64,
-    /// Maximum cost in USD per day (0.0 = unlimited).
-    pub max_cost_per_day_usd: f64,
-    /// Maximum cost in USD per month (0.0 = unlimited).
-    pub max_cost_per_month_usd: f64,
 }
 
 impl Default for ResourceQuota {
@@ -215,9 +209,6 @@ impl Default for ResourceQuota {
             max_tool_calls_per_minute: 60,
             max_llm_tokens_per_hour: 0, // unlimited by default
             max_network_bytes_per_hour: 100 * 1024 * 1024, // 100 MB
-            max_cost_per_hour_usd: 0.0, // unlimited by default
-            max_cost_per_day_usd: 0.0,  // unlimited
-            max_cost_per_month_usd: 0.0, // unlimited
         }
     }
 }

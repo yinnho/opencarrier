@@ -364,11 +364,6 @@ function settingsPage() {
       return '';
     },
 
-    formatCost(cost) {
-      if (!cost && cost !== 0) return '-';
-      return '$' + cost.toFixed(4);
-    },
-
     formatContext(ctx) {
       if (!ctx) return '-';
       if (ctx >= 1000000) return (ctx / 1000000).toFixed(1) + 'M';

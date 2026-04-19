@@ -176,9 +176,6 @@ struct QwenJsonOutput {
     text: Option<String>,
     #[serde(default)]
     usage: Option<QwenUsage>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    cost_usd: Option<f64>,
 }
 
 /// Usage stats from Qwen CLI JSON output.

@@ -18,5 +18,4 @@ pub mod registry;
 pub mod scheduler;
 pub mod supervisor;
 pub mod wizard;
-pub use kernel::DeliveryTracker;
 pub use kernel::OpenCarrierKernel;

@@ -125,6 +125,11 @@ pub async fn build_router(
         )
         .route("/api/status", axum::routing::get(routes::status))
         .route("/api/brain", axum::routing::get(routes::brain_info))
+        .route("/api/brain/status", axum::routing::get(routes::brain_status))
+        .route(
+            "/api/brain/modalities/{name}",
+            axum::routing::get(routes::brain_modality_detail),
+        )
         // Brain config management
         .route(
             "/api/brain/providers/{name}",
@@ -244,10 +249,6 @@ pub async fn build_router(
         .route(
             "/api/agents/{id}/files/{filename}",
             axum::routing::get(routes::get_agent_file).put(routes::set_agent_file),
-        )
-        .route(
-            "/api/agents/{id}/deliveries",
-            axum::routing::get(routes::get_agent_deliveries),
         )
         .route(
             "/api/agents/{id}/upload",
@@ -375,19 +376,6 @@ pub async fn build_router(
             axum::routing::get(routes::usage_by_model),
         )
         .route("/api/usage/daily", axum::routing::get(routes::usage_daily))
-        // Budget endpoints
-        .route(
-            "/api/budget",
-            axum::routing::get(routes::budget_status).put(routes::update_budget),
-        )
-        .route(
-            "/api/budget/agents",
-            axum::routing::get(routes::agent_budget_ranking),
-        )
-        .route(
-            "/api/budget/agents/{id}",
-            axum::routing::get(routes::agent_budget_status).put(routes::update_agent_budget),
-        )
         // Session endpoints
         .route("/api/sessions", axum::routing::get(routes::list_sessions))
         .route(
@@ -409,34 +397,6 @@ pub async fn build_router(
         )
         // Security dashboard endpoint
         .route("/api/security", axum::routing::get(routes::security_status))
-        // Model catalog endpoints
-        .route("/api/models", axum::routing::get(routes::list_models))
-        .route(
-            "/api/models/aliases",
-            axum::routing::get(routes::list_aliases),
-        )
-        .route(
-            "/api/models/custom",
-            axum::routing::post(routes::add_custom_model),
-        )
-        .route(
-            "/api/models/custom/{*id}",
-            axum::routing::delete(routes::remove_custom_model),
-        )
-        .route("/api/models/{*id}", axum::routing::get(routes::get_model))
-        .route("/api/providers", axum::routing::get(routes::list_providers))
-        .route(
-            "/api/providers/{name}/key",
-            axum::routing::post(routes::set_provider_key).delete(routes::delete_provider_key),
-        )
-        .route(
-            "/api/providers/{name}/test",
-            axum::routing::post(routes::test_provider),
-        )
-        .route(
-            "/api/providers/{name}/url",
-            axum::routing::put(routes::set_provider_url),
-        )
         .route(
             "/api/skills/create",
             axum::routing::post(routes::create_skill),

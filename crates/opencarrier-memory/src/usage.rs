@@ -1,4 +1,4 @@
-//! Usage tracking store — records LLM usage events for cost monitoring.
+//! Usage tracking store — records LLM usage events for token monitoring.
 
 use chrono::Utc;
 use opencarrier_types::agent::AgentId;
@@ -18,8 +18,6 @@ pub struct UsageRecord {
     pub input_tokens: u64,
     /// Output tokens consumed.
     pub output_tokens: u64,
-    /// Estimated cost in USD.
-    pub cost_usd: f64,
     /// Number of tool calls in this interaction.
     pub tool_calls: u32,
 }
@@ -31,8 +29,6 @@ pub struct UsageSummary {
     pub total_input_tokens: u64,
     /// Total output tokens.
     pub total_output_tokens: u64,
-    /// Total estimated cost in USD.
-    pub total_cost_usd: f64,
     /// Total number of calls.
     pub call_count: u64,
     /// Total tool calls.
@@ -44,8 +40,6 @@ pub struct UsageSummary {
 pub struct ModelUsage {
     /// Model name.
     pub model: String,
-    /// Total cost for this model.
-    pub total_cost_usd: f64,
     /// Total input tokens.
     pub total_input_tokens: u64,
     /// Total output tokens.
@@ -59,8 +53,6 @@ pub struct ModelUsage {
 pub struct DailyBreakdown {
     /// Date string (YYYY-MM-DD).
     pub date: String,
-    /// Total cost for this day.
-    pub cost_usd: f64,
     /// Total tokens (input + output).
     pub tokens: u64,
     /// Number of API calls.
@@ -97,97 +89,12 @@ impl UsageStore {
                 record.model,
                 record.input_tokens as i64,
                 record.output_tokens as i64,
-                record.cost_usd,
+                0.0f64, // cost_usd column still exists in DB schema; always write 0.0
                 record.tool_calls as i64,
             ],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(())
-    }
-
-    /// Query total cost in the last hour for an agent.
-    pub fn query_hourly(&self, agent_id: AgentId) -> OpenCarrierResult<f64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let cost: f64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE agent_id = ?1 AND timestamp > datetime('now', '-1 hour')",
-                rusqlite::params![agent_id.0.to_string()],
-                |row| row.get(0),
-            )
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        Ok(cost)
-    }
-
-    /// Query total cost today for an agent.
-    pub fn query_daily(&self, agent_id: AgentId) -> OpenCarrierResult<f64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let cost: f64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE agent_id = ?1 AND timestamp > datetime('now', 'start of day')",
-                rusqlite::params![agent_id.0.to_string()],
-                |row| row.get(0),
-            )
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        Ok(cost)
-    }
-
-    /// Query total cost in the current calendar month for an agent.
-    pub fn query_monthly(&self, agent_id: AgentId) -> OpenCarrierResult<f64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let cost: f64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE agent_id = ?1 AND timestamp > datetime('now', 'start of month')",
-                rusqlite::params![agent_id.0.to_string()],
-                |row| row.get(0),
-            )
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        Ok(cost)
-    }
-
-    /// Query total cost across all agents for the current hour.
-    pub fn query_global_hourly(&self) -> OpenCarrierResult<f64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let cost: f64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE timestamp > datetime('now', '-1 hour')",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        Ok(cost)
-    }
-
-    /// Query total cost across all agents for the current calendar month.
-    pub fn query_global_monthly(&self) -> OpenCarrierResult<f64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let cost: f64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE timestamp > datetime('now', 'start of month')",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        Ok(cost)
     }
 
     /// Query usage summary, optionally filtered by agent.
@@ -200,13 +107,13 @@ impl UsageStore {
         let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match agent_id {
             Some(aid) => (
                 "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-                        COALESCE(SUM(cost_usd), 0.0), COUNT(*), COALESCE(SUM(tool_calls), 0)
+                        COUNT(*), COALESCE(SUM(tool_calls), 0)
                  FROM usage_events WHERE agent_id = ?1",
                 vec![Box::new(aid.0.to_string())],
             ),
             None => (
                 "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-                        COALESCE(SUM(cost_usd), 0.0), COUNT(*), COALESCE(SUM(tool_calls), 0)
+                        COUNT(*), COALESCE(SUM(tool_calls), 0)
                  FROM usage_events",
                 vec![],
             ),
@@ -220,9 +127,8 @@ impl UsageStore {
                 Ok(UsageSummary {
                     total_input_tokens: row.get::<_, i64>(0)? as u64,
                     total_output_tokens: row.get::<_, i64>(1)? as u64,
-                    total_cost_usd: row.get(2)?,
-                    call_count: row.get::<_, i64>(3)? as u64,
-                    total_tool_calls: row.get::<_, i64>(4)? as u64,
+                    call_count: row.get::<_, i64>(2)? as u64,
+                    total_tool_calls: row.get::<_, i64>(3)? as u64,
                 })
             })
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -239,9 +145,9 @@ impl UsageStore {
 
         let mut stmt = conn
             .prepare(
-                "SELECT model, COALESCE(SUM(cost_usd), 0.0), COALESCE(SUM(input_tokens), 0),
+                "SELECT model, COALESCE(SUM(input_tokens), 0),
                         COALESCE(SUM(output_tokens), 0), COUNT(*)
-                 FROM usage_events GROUP BY model ORDER BY SUM(cost_usd) DESC",
+                 FROM usage_events GROUP BY model ORDER BY SUM(input_tokens + output_tokens) DESC",
             )
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
@@ -249,10 +155,9 @@ impl UsageStore {
             .query_map([], |row| {
                 Ok(ModelUsage {
                     model: row.get(0)?,
-                    total_cost_usd: row.get(1)?,
-                    total_input_tokens: row.get::<_, i64>(2)? as u64,
-                    total_output_tokens: row.get::<_, i64>(3)? as u64,
-                    call_count: row.get::<_, i64>(4)? as u64,
+                    total_input_tokens: row.get::<_, i64>(1)? as u64,
+                    total_output_tokens: row.get::<_, i64>(2)? as u64,
+                    call_count: row.get::<_, i64>(3)? as u64,
                 })
             })
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -274,7 +179,6 @@ impl UsageStore {
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT date(timestamp) as day,
-                            COALESCE(SUM(cost_usd), 0.0),
                             COALESCE(SUM(input_tokens) + SUM(output_tokens), 0),
                             COUNT(*)
                      FROM usage_events
@@ -288,9 +192,8 @@ impl UsageStore {
             .query_map([], |row| {
                 Ok(DailyBreakdown {
                     date: row.get(0)?,
-                    cost_usd: row.get(1)?,
-                    tokens: row.get::<_, i64>(2)? as u64,
-                    calls: row.get::<_, i64>(3)? as u64,
+                    tokens: row.get::<_, i64>(1)? as u64,
+                    calls: row.get::<_, i64>(2)? as u64,
                 })
             })
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -314,23 +217,6 @@ impl UsageStore {
             })
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(result)
-    }
-
-    /// Query today's total cost across all agents.
-    pub fn query_today_cost(&self) -> OpenCarrierResult<f64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let cost: f64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_events
-                 WHERE timestamp > datetime('now', 'start of day')",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        Ok(cost)
     }
 
     /// Delete usage events older than the given number of days.
@@ -373,7 +259,6 @@ mod tests {
                 model: "claude-haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
-                cost_usd: 0.001,
                 tool_calls: 2,
             })
             .unwrap();
@@ -384,7 +269,6 @@ mod tests {
                 model: "claude-sonnet".to_string(),
                 input_tokens: 500,
                 output_tokens: 200,
-                cost_usd: 0.01,
                 tool_calls: 1,
             })
             .unwrap();
@@ -393,7 +277,6 @@ mod tests {
         assert_eq!(summary.call_count, 2);
         assert_eq!(summary.total_input_tokens, 600);
         assert_eq!(summary.total_output_tokens, 250);
-        assert!((summary.total_cost_usd - 0.011).abs() < 0.0001);
         assert_eq!(summary.total_tool_calls, 3);
     }
 
@@ -409,7 +292,6 @@ mod tests {
                 model: "haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
-                cost_usd: 0.001,
                 tool_calls: 0,
             })
             .unwrap();
@@ -420,7 +302,6 @@ mod tests {
                 model: "sonnet".to_string(),
                 input_tokens: 200,
                 output_tokens: 100,
-                cost_usd: 0.005,
                 tool_calls: 1,
             })
             .unwrap();
@@ -442,7 +323,6 @@ mod tests {
                     model: "haiku".to_string(),
                     input_tokens: 100,
                     output_tokens: 50,
-                    cost_usd: 0.001,
                     tool_calls: 0,
                 })
                 .unwrap();
@@ -454,57 +334,16 @@ mod tests {
                 model: "sonnet".to_string(),
                 input_tokens: 500,
                 output_tokens: 200,
-                cost_usd: 0.01,
                 tool_calls: 1,
             })
             .unwrap();
 
         let by_model = store.query_by_model().unwrap();
         assert_eq!(by_model.len(), 2);
-        // sonnet should be first (highest cost)
+        // sonnet should be first (highest total tokens)
         assert_eq!(by_model[0].model, "sonnet");
         assert_eq!(by_model[1].model, "haiku");
         assert_eq!(by_model[1].call_count, 3);
-    }
-
-    #[test]
-    fn test_query_hourly() {
-        let store = setup();
-        let agent_id = AgentId::new();
-
-        store
-            .record(&UsageRecord {
-                agent_id,
-                model: "haiku".to_string(),
-                input_tokens: 100,
-                output_tokens: 50,
-                cost_usd: 0.05,
-                tool_calls: 0,
-            })
-            .unwrap();
-
-        let hourly = store.query_hourly(agent_id).unwrap();
-        assert!((hourly - 0.05).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_query_daily() {
-        let store = setup();
-        let agent_id = AgentId::new();
-
-        store
-            .record(&UsageRecord {
-                agent_id,
-                model: "haiku".to_string(),
-                input_tokens: 100,
-                output_tokens: 50,
-                cost_usd: 0.123,
-                tool_calls: 0,
-            })
-            .unwrap();
-
-        let daily = store.query_daily(agent_id).unwrap();
-        assert!((daily - 0.123).abs() < 0.001);
     }
 
     #[test]
@@ -518,7 +357,6 @@ mod tests {
                 model: "haiku".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
-                cost_usd: 0.001,
                 tool_calls: 0,
             })
             .unwrap();
@@ -536,6 +374,5 @@ mod tests {
         let store = setup();
         let summary = store.query_summary(None).unwrap();
         assert_eq!(summary.call_count, 0);
-        assert_eq!(summary.total_cost_usd, 0.0);
     }
 }

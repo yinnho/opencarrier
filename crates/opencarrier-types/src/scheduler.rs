@@ -134,6 +134,8 @@ pub enum CronAction {
 pub enum CronDelivery {
     /// No delivery — fire and forget.
     None,
+    /// Deliver via the user's last communication channel (degrades to None if no channel).
+    LastChannel,
     /// Deliver via HTTP webhook.
     Webhook {
         /// Webhook URL (must start with `http://` or `https://`).
@@ -308,6 +310,7 @@ impl CronJob {
                 }
             }
             CronDelivery::None => {}
+            CronDelivery::LastChannel => {}
         }
         Ok(())
     }

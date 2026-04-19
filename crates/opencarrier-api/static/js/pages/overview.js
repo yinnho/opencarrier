@@ -86,16 +86,13 @@ function overviewPage() {
         var agents = data.agents || [];
         var totalTokens = 0;
         var totalTools = 0;
-        var totalCost = 0;
         agents.forEach(function(a) {
           totalTokens += (a.total_tokens || 0);
           totalTools += (a.tool_calls || 0);
-          totalCost += (a.cost_usd || 0);
         });
         this.usageSummary = {
           total_tokens: totalTokens,
           total_tools: totalTools,
-          total_cost: totalCost,
           agent_count: agents.length
         };
       } catch(e) {
@@ -219,12 +216,6 @@ function overviewPage() {
       if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
       if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
       return String(n);
-    },
-
-    formatCost(n) {
-      if (!n || n === 0) return '$0.00';
-      if (n < 0.01) return '<$0.01';
-      return '$' + n.toFixed(2);
     },
 
     // Relative time formatting ("2m ago", "1h ago", "just now")

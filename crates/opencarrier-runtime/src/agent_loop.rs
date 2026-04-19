@@ -31,26 +31,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-/// Fire a hook if a hook registry is present.
-#[allow(dead_code)]
-fn fire_hook(
-    hooks: Option<&crate::hooks::HookRegistry>,
-    agent_name: &str,
-    agent_id: &str,
-    event: opencarrier_types::agent::HookEvent,
-    data: serde_json::Value,
-) {
-    if let Some(hook_reg) = hooks {
-        let ctx = crate::hooks::HookContext {
-            agent_name,
-            agent_id,
-            event,
-            data,
-        };
-        let _ = hook_reg.fire(&ctx);
-    }
-}
-
 /// Maximum iterations in the agent loop before giving up.
 const MAX_ITERATIONS: u32 = 50;
 
@@ -119,8 +99,6 @@ pub struct AgentLoopResult {
     pub total_usage: TokenUsage,
     /// Number of iterations the loop ran.
     pub iterations: u32,
-    /// Estimated cost in USD (populated by the kernel after the loop returns).
-    pub cost_usd: Option<f64>,
     /// True when the agent intentionally chose not to reply (NO_REPLY token or [[silent]]).
     pub silent: bool,
     /// Reply directives extracted from the agent's response.
@@ -362,7 +340,7 @@ pub async fn run_agent_loop(
             &manifest.model.modality
         };
         let mut response = call_with_fallback(
-            brain.as_ref(), &*driver, modality, request,
+            brain.as_ref(), &*driver, modality, request, None,
         ).await?;
 
         total_usage.input_tokens += response.usage.input_tokens;
@@ -421,7 +399,6 @@ pub async fn run_agent_loop(
                         response: String::new(),
                         total_usage,
                         iterations: iteration + 1,
-                        cost_usd: None,
                         silent: true,
                         directives: opencarrier_types::message::ReplyDirectives {
                             reply_to: parsed_directives.reply_to,
@@ -561,7 +538,7 @@ pub async fn run_agent_loop(
                     response: final_response,
                     total_usage,
                     iterations: iteration + 1,
-                    cost_usd: None,
+
                     silent: false,
                     directives: Default::default(),
                 });
@@ -844,7 +821,6 @@ pub async fn run_agent_loop(
                         response: text,
                         total_usage,
                         iterations: iteration + 1,
-                        cost_usd: None,
                         silent: false,
                         directives: Default::default(),
                     });
@@ -889,9 +865,12 @@ pub async fn run_agent_loop(
 async fn call_with_retry(
     driver: &dyn LlmDriver,
     request: CompletionRequest,
+    stream_tx: Option<mpsc::Sender<StreamEvent>>,
     provider: Option<&str>,
     cooldown: Option<&ProviderCooldown>,
 ) -> OpenCarrierResult<crate::llm_driver::CompletionResponse> {
+    let is_stream = stream_tx.is_some();
+
     // Check circuit breaker before calling
     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
         match cooldown.check(provider) {
@@ -904,7 +883,11 @@ async fn call_with_retry(
                 )));
             }
             CooldownVerdict::AllowProbe => {
-                debug!(provider, "Allowing probe request through circuit breaker");
+                debug!(
+                    provider,
+                    is_stream,
+                    "Allowing probe request through circuit breaker"
+                );
             }
             CooldownVerdict::Allow => {}
         }
@@ -913,9 +896,12 @@ async fn call_with_retry(
     let mut last_error = None;
 
     for attempt in 0..=MAX_RETRIES {
-        match driver.complete(request.clone()).await {
+        let result = match &stream_tx {
+            Some(tx) => driver.stream(request.clone(), tx.clone()).await,
+            None => driver.complete(request.clone()).await,
+        };
+        match result {
             Ok(response) => {
-                // Record success with circuit breaker
                 if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                     cooldown.record_success(provider);
                 }
@@ -935,6 +921,7 @@ async fn call_with_retry(
                 warn!(
                     attempt,
                     delay_ms = delay,
+                    is_stream,
                     "Rate limited, retrying after delay"
                 );
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
@@ -954,13 +941,13 @@ async fn call_with_retry(
                 warn!(
                     attempt,
                     delay_ms = delay,
+                    is_stream,
                     "Model overloaded, retrying after delay"
                 );
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                 last_error = Some("Overloaded".to_string());
             }
             Err(e) => {
-                // Use classifier for smarter error handling
                 let raw_error = e.to_string();
                 let status = match &e {
                     LlmError::Api { status, .. } => Some(*status),
@@ -971,6 +958,7 @@ async fn call_with_retry(
                     category = ?classified.category,
                     retryable = classified.is_retryable,
                     raw = %raw_error,
+                    is_stream,
                     "LLM error classified: {}",
                     classified.sanitized_message
                 );
@@ -979,120 +967,6 @@ async fn call_with_retry(
                     cooldown.record_failure(provider, classified.is_billing);
                 }
 
-                // Include raw error detail so dashboard users can debug
-                let user_msg = if classified.category == llm_errors::LlmErrorCategory::Format {
-                    format!("{} — raw: {}", classified.sanitized_message, raw_error)
-                } else {
-                    classified.sanitized_message
-                };
-                return Err(OpenCarrierError::LlmDriver(user_msg));
-            }
-        }
-    }
-
-    Err(OpenCarrierError::LlmDriver(
-        last_error.unwrap_or_else(|| "Unknown error".to_string()),
-    ))
-}
-
-/// Call an LLM driver in streaming mode with automatic retry on rate-limit and overload errors.
-///
-/// Uses the `llm_errors` classifier and `ProviderCooldown` circuit breaker.
-async fn stream_with_retry(
-    driver: &dyn LlmDriver,
-    request: CompletionRequest,
-    tx: mpsc::Sender<StreamEvent>,
-    provider: Option<&str>,
-    cooldown: Option<&ProviderCooldown>,
-) -> OpenCarrierResult<crate::llm_driver::CompletionResponse> {
-    // Check circuit breaker before calling
-    if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
-        match cooldown.check(provider) {
-            CooldownVerdict::Reject {
-                reason,
-                retry_after_secs,
-            } => {
-                return Err(OpenCarrierError::LlmDriver(format!(
-                    "Provider '{provider}' is in cooldown ({reason}). Retry in {retry_after_secs}s."
-                )));
-            }
-            CooldownVerdict::AllowProbe => {
-                debug!(
-                    provider,
-                    "Allowing probe request through circuit breaker (stream)"
-                );
-            }
-            CooldownVerdict::Allow => {}
-        }
-    }
-
-    let mut last_error = None;
-
-    for attempt in 0..=MAX_RETRIES {
-        match driver.stream(request.clone(), tx.clone()).await {
-            Ok(response) => {
-                if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
-                    cooldown.record_success(provider);
-                }
-                return Ok(response);
-            }
-            Err(LlmError::RateLimited { retry_after_ms }) => {
-                if attempt == MAX_RETRIES {
-                    if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
-                        cooldown.record_failure(provider, false);
-                    }
-                    return Err(OpenCarrierError::LlmDriver(format!(
-                        "Rate limited after {} retries",
-                        MAX_RETRIES
-                    )));
-                }
-                let delay = std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
-                warn!(
-                    attempt,
-                    delay_ms = delay,
-                    "Rate limited (stream), retrying after delay"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                last_error = Some("Rate limited".to_string());
-            }
-            Err(LlmError::Overloaded { retry_after_ms }) => {
-                if attempt == MAX_RETRIES {
-                    if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
-                        cooldown.record_failure(provider, false);
-                    }
-                    return Err(OpenCarrierError::LlmDriver(format!(
-                        "Model overloaded after {} retries",
-                        MAX_RETRIES
-                    )));
-                }
-                let delay = std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
-                warn!(
-                    attempt,
-                    delay_ms = delay,
-                    "Model overloaded (stream), retrying after delay"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                last_error = Some("Overloaded".to_string());
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                let status = match &e {
-                    LlmError::Api { status, .. } => Some(*status),
-                    _ => None,
-                };
-                let classified = llm_errors::classify_error(&raw_error, status);
-                warn!(
-                    category = ?classified.category,
-                    retryable = classified.is_retryable,
-                    raw = %raw_error,
-                    "LLM stream error classified: {}",
-                    classified.sanitized_message
-                );
-
-                if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
-                    cooldown.record_failure(provider, classified.is_billing);
-                }
-
                 let user_msg = if classified.category == llm_errors::LlmErrorCategory::Format {
                     format!("{} — raw: {}", classified.sanitized_message, raw_error)
                 } else {
@@ -1112,24 +986,24 @@ async fn stream_with_retry(
 // Unified fallback — tries Brain endpoints in order with report()
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Unified fallback — tries Brain endpoints in order with report()
-// ---------------------------------------------------------------------------
-
-/// Call LLM with unified fallback across Brain endpoints (non-streaming).
+/// Call LLM with unified fallback across Brain endpoints.
+/// When `stream_tx` is `Some`, uses streaming mode; otherwise non-streaming.
 async fn call_with_fallback(
     brain: Option<&Arc<dyn Brain>>,
     fallback_driver: &dyn LlmDriver,
     modality: &str,
     request: CompletionRequest,
+    stream_tx: Option<mpsc::Sender<StreamEvent>>,
 ) -> OpenCarrierResult<CompletionResponse> {
     let Some(brain) = brain else {
-        return call_with_retry(fallback_driver, request, None, None).await;
+        return call_with_retry(fallback_driver, request, stream_tx, None, None).await;
     };
 
     let endpoints = brain.endpoints_for(modality);
     if endpoints.is_empty() {
-        return call_with_retry(fallback_driver, request, None, None).await;
+        return Err(OpenCarrierError::LlmDriver(format!(
+            "No available endpoints for modality '{modality}' — all endpoints circuit-broken or not configured"
+        )));
     }
 
     let mut last_error: Option<OpenCarrierError> = None;
@@ -1138,7 +1012,8 @@ async fn call_with_fallback(
             let mut req = request.clone();
             req.model = ep.model.clone();
             let start = std::time::Instant::now();
-            match call_with_retry(&*driver, req, Some(&ep.provider), None).await {
+            let tx_arg = stream_tx.clone();
+            match call_with_retry(&*driver, req, tx_arg, Some(&ep.provider), None).await {
                 Ok(response) => {
                     let latency = start.elapsed().as_millis() as u64;
                     brain.report(opencarrier_types::brain::EndpointReport {
@@ -1172,67 +1047,6 @@ async fn call_with_fallback(
     Err(last_error.unwrap_or_else(|| {
         OpenCarrierError::LlmDriver(format!(
             "All endpoints exhausted for modality '{modality}'"
-        ))
-    }))
-}
-
-/// Call LLM with unified fallback across Brain endpoints (streaming).
-async fn stream_with_fallback(
-    brain: Option<&Arc<dyn Brain>>,
-    fallback_driver: &dyn LlmDriver,
-    modality: &str,
-    request: CompletionRequest,
-    tx: tokio::sync::mpsc::Sender<StreamEvent>,
-) -> OpenCarrierResult<CompletionResponse> {
-    let Some(brain) = brain else {
-        return stream_with_retry(fallback_driver, request, tx, None, None).await;
-    };
-
-    let endpoints = brain.endpoints_for(modality);
-    if endpoints.is_empty() {
-        return stream_with_retry(fallback_driver, request, tx, None, None).await;
-    }
-
-    let mut last_error: Option<OpenCarrierError> = None;
-    for ep in &endpoints {
-        if let Some(driver) = brain.driver_for_endpoint(&ep.id) {
-            let mut req = request.clone();
-            req.model = ep.model.clone();
-            let start = std::time::Instant::now();
-            match stream_with_retry(&*driver, req, tx.clone(), Some(&ep.provider), None).await {
-                Ok(response) => {
-                    let latency = start.elapsed().as_millis() as u64;
-                    brain.report(opencarrier_types::brain::EndpointReport {
-                        endpoint_id: ep.id.clone(),
-                        success: true,
-                        latency_ms: latency,
-                        error: None,
-                    });
-                    return Ok(response);
-                }
-                Err(e) => {
-                    let latency = start.elapsed().as_millis() as u64;
-                    let err_str = format!("{e}");
-                    brain.report(opencarrier_types::brain::EndpointReport {
-                        endpoint_id: ep.id.clone(),
-                        success: false,
-                        latency_ms: latency,
-                        error: Some(err_str),
-                    });
-                    tracing::warn!(
-                        endpoint = %ep.id,
-                        error = %e,
-                        "Streaming endpoint failed in fallback chain, trying next"
-                    );
-                    last_error = Some(e);
-                }
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| {
-        OpenCarrierError::LlmDriver(format!(
-            "All streaming endpoints exhausted for modality '{modality}'"
         ))
     }))
 }
@@ -1488,8 +1302,8 @@ pub async fn run_agent_loop_streaming(
         } else {
             &manifest.model.modality
         };
-        let mut response = stream_with_fallback(
-            brain.as_ref(), &*driver, modality, request, stream_tx.clone(),
+        let mut response = call_with_fallback(
+            brain.as_ref(), &*driver, modality, request, Some(stream_tx.clone()),
         ).await?;
 
         total_usage.input_tokens += response.usage.input_tokens;
@@ -1545,7 +1359,6 @@ pub async fn run_agent_loop_streaming(
                         response: String::new(),
                         total_usage,
                         iterations: iteration + 1,
-                        cost_usd: None,
                         silent: true,
                         directives: opencarrier_types::message::ReplyDirectives {
                             reply_to: parsed_directives_s.reply_to,
@@ -1684,7 +1497,7 @@ pub async fn run_agent_loop_streaming(
                     response: final_response,
                     total_usage,
                     iterations: iteration + 1,
-                    cost_usd: None,
+
                     silent: false,
                     directives: Default::default(),
                 });
@@ -1973,7 +1786,6 @@ pub async fn run_agent_loop_streaming(
                         response: text,
                         total_usage,
                         iterations: iteration + 1,
-                        cost_usd: None,
                         silent: false,
                         directives: Default::default(),
                     });

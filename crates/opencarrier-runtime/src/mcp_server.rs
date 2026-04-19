@@ -56,28 +56,16 @@ pub async fn handle_mcp_request(
             make_response(id, json!({ "tools": tool_list }))
         }
         "tools/call" => {
-            let tool_name = request["params"]["name"].as_str().unwrap_or("");
-            let _arguments = request["params"]
-                .get("arguments")
-                .cloned()
-                .unwrap_or(json!({}));
-
-            // Verify the tool exists
-            if !tools.iter().any(|t| t.name == tool_name) {
-                return make_error(id, -32602, &format!("Unknown tool: {tool_name}"));
-            }
-
-            // Tool execution is delegated to the caller (kernel/CLI).
-            // This handler just validates the request format.
-            // In a full implementation, the caller would wire this to execute_tool().
-            make_response(
+            // Tool execution is intentionally NOT handled here.
+            // The HTTP route (routes.rs::mcp_http) and CLI (cli/mcp.rs::handle_message)
+            // handle tools/call themselves by calling execute_tool() directly,
+            // because they need access to the kernel / agent context.
+            // This handler only validates the request and returns an error
+            // directing the caller to use the proper execution path.
+            make_error(
                 id,
-                json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!("Tool '{tool_name}' is available. Execution must be wired by the host.")
-                    }]
-                }),
+                -32601,
+                "tools/call must be handled by the transport layer (HTTP route or CLI), not by this handler",
             )
         }
         _ => make_error(id, -32601, &format!("Method not found: {method}")),
