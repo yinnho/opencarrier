@@ -8,7 +8,6 @@
 //! The kernel calls `compute_deterministic_metrics()` for instant results,
 //! then optionally uses `build_test_questions_prompt()` → LLM → more evaluation.
 
-use anyhow::Result;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;

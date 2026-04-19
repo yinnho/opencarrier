@@ -61,18 +61,6 @@ pub struct MessageResponse {
     pub cost_usd: Option<f64>,
 }
 
-/// Request to install a skill from the marketplace.
-#[derive(Debug, Deserialize)]
-pub struct SkillInstallRequest {
-    pub name: String,
-}
-
-/// Request to uninstall a skill.
-#[derive(Debug, Deserialize)]
-pub struct SkillUninstallRequest {
-    pub name: String,
-}
-
 /// Request to update an agent's manifest.
 #[derive(Debug, Deserialize)]
 pub struct AgentUpdateRequest {
@@ -99,11 +87,4 @@ pub struct MigrateRequest {
 #[derive(Debug, Deserialize)]
 pub struct MigrateScanRequest {
     pub path: String,
-}
-
-/// Request to install a skill from ClawHub.
-#[derive(Debug, Deserialize)]
-pub struct ClawHubInstallRequest {
-    /// ClawHub skill slug (e.g., "github-helper").
-    pub slug: String,
 }

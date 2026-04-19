@@ -117,61 +117,6 @@ pub trait KernelHandle: Send + Sync {
         Err("Cron scheduler not available".to_string())
     }
 
-    /// Check if a tool requires approval based on current policy.
-    fn requires_approval(&self, tool_name: &str) -> bool {
-        let _ = tool_name;
-        false
-    }
-
-    /// Request approval for a tool execution. Blocks until approved/denied/timed out.
-    /// Returns `Ok(true)` if approved, `Ok(false)` if denied or timed out.
-    async fn request_approval(
-        &self,
-        agent_id: &str,
-        tool_name: &str,
-        action_summary: &str,
-    ) -> Result<bool, String> {
-        let _ = (agent_id, tool_name, action_summary);
-        Ok(true) // Default: auto-approve
-    }
-
-    /// List available Hands and their activation status.
-    async fn hand_list(&self) -> Result<Vec<serde_json::Value>, String> {
-        Err("Hands system not available".to_string())
-    }
-
-    /// Install a Hand from TOML content.
-    async fn hand_install(
-        &self,
-        toml_content: &str,
-        skill_content: &str,
-    ) -> Result<serde_json::Value, String> {
-        let _ = (toml_content, skill_content);
-        Err("Hands system not available".to_string())
-    }
-
-    /// Activate a Hand — spawns a specialized autonomous agent.
-    async fn hand_activate(
-        &self,
-        hand_id: &str,
-        config: std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<serde_json::Value, String> {
-        let _ = (hand_id, config);
-        Err("Hands system not available".to_string())
-    }
-
-    /// Check the status and dashboard metrics of an active Hand.
-    async fn hand_status(&self, hand_id: &str) -> Result<serde_json::Value, String> {
-        let _ = hand_id;
-        Err("Hands system not available".to_string())
-    }
-
-    /// Deactivate a running Hand and stop its agent.
-    async fn hand_deactivate(&self, instance_id: &str) -> Result<(), String> {
-        let _ = instance_id;
-        Err("Hands system not available".to_string())
-    }
-
     /// List discovered external A2A agents as (name, url) pairs.
     fn list_a2a_agents(&self) -> Vec<(String, String)> {
         vec![]
@@ -183,65 +128,18 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
-    /// Send a message to a user on a named channel adapter (e.g., "email", "telegram").
-    /// When `thread_id` is provided, the message is sent as a thread reply.
-    /// Returns a confirmation string on success.
-    /// Get the default recipient for a channel (e.g. default_chat_id for Telegram).
-    async fn get_channel_default_recipient(&self, channel: &str) -> Option<String> {
-        let _ = channel;
-        None
-    }
-
-    async fn send_channel_message(
-        &self,
-        channel: &str,
-        recipient: &str,
-        message: &str,
-        thread_id: Option<&str>,
-    ) -> Result<String, String> {
-        let _ = (channel, recipient, message, thread_id);
-        Err("Channel send not available".to_string())
-    }
-
-    /// Send media content (image/file) to a user on a named channel adapter.
-    /// `media_type` is "image" or "file", `media_url` is the URL, `caption` is optional text.
-    /// When `thread_id` is provided, the media is sent as a thread reply.
-    async fn send_channel_media(
-        &self,
-        channel: &str,
-        recipient: &str,
-        media_type: &str,
-        media_url: &str,
-        caption: Option<&str>,
-        filename: Option<&str>,
-        thread_id: Option<&str>,
-    ) -> Result<String, String> {
-        let _ = (
-            channel, recipient, media_type, media_url, caption, filename, thread_id,
-        );
-        Err("Channel media send not available".to_string())
-    }
-
-    /// Send a local file (raw bytes) to a user on a named channel adapter.
-    /// Used by the `channel_send` tool when `file_path` is provided.
-    /// When `thread_id` is provided, the file is sent as a thread reply.
-    async fn send_channel_file_data(
-        &self,
-        channel: &str,
-        recipient: &str,
-        data: Vec<u8>,
-        filename: &str,
-        mime_type: &str,
-        thread_id: Option<&str>,
-    ) -> Result<String, String> {
-        let _ = (channel, recipient, data, filename, mime_type, thread_id);
-        Err("Channel file data send not available".to_string())
-    }
-
     /// Resolve an agent's workspace directory by name.
     /// Returns the absolute path string, or None if the agent is not found.
     fn resolve_agent_workspace(&self, agent_name: &str) -> Option<String> {
         let _ = agent_name;
+        None
+    }
+
+    /// Rebuild the available tool list for an agent.
+    /// Used after mid-loop skill installations (e.g., train_write) so the
+    /// LLM can use newly installed tools in the next iteration.
+    fn refresh_tools(&self, agent_id_str: &str) -> Option<Vec<opencarrier_types::tool::ToolDefinition>> {
+        let _ = agent_id_str;
         None
     }
 

@@ -3,7 +3,7 @@ name = "opencarrier-skills"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Skill system for OpenCarrier — registry, loader, marketplace, and OpenClaw compatibility"
+description = "Skill system for OpenCarrier — registry, loader, and verification"
 
 [dependencies]
 opencarrier-types = { path = "../opencarrier-types" }
@@ -15,8 +15,8 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 walkdir = { workspace = true }
 uuid = { workspace = true }
-chrono = { workspace = true }
-reqwest = { workspace = true }
+
+
 sha2 = { workspace = true }
 hex = { workspace = true }
 serde_yaml = { workspace = true }

@@ -1,8 +1,5 @@
 //! Skill registry — tracks installed skills and their tools.
 
-use crate::bundled;
-use crate::openclaw_compat;
-use crate::verify::SkillVerifier;
 use crate::{InstalledSkill, SkillError, SkillManifest, SkillToolDef};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -114,55 +111,6 @@ impl SkillRegistry {
         self.frozen
     }
 
-    /// Load all bundled skills (compile-time embedded SKILL.md files).
-    ///
-    /// Called before `load_all()` so that user-installed skills with the same name
-    /// can override bundled ones. Runs prompt injection scan even on bundled skills
-    /// as a defense-in-depth measure.
-    pub fn load_bundled(&mut self) -> usize {
-        let bundled = bundled::bundled_skills();
-        let mut count = 0;
-
-        for (name, content) in &bundled {
-            match bundled::parse_bundled(name, content) {
-                Ok(manifest) => {
-                    // Defense in depth: scan even bundled skill prompt content
-                    if let Some(ref ctx) = manifest.prompt_context {
-                        let warnings = SkillVerifier::scan_prompt_content(ctx);
-                        let has_critical = warnings.iter().any(|w| {
-                            matches!(w.severity, crate::verify::WarningSeverity::Critical)
-                        });
-                        if has_critical {
-                            warn!(
-                                skill = %manifest.skill.name,
-                                "BLOCKED bundled skill: critical prompt injection patterns"
-                            );
-                            continue;
-                        }
-                    }
-
-                    self.skills.insert(
-                        manifest.skill.name.clone(),
-                        InstalledSkill {
-                            manifest,
-                            path: PathBuf::from("<bundled>"),
-                            enabled: true,
-                        },
-                    );
-                    count += 1;
-                }
-                Err(e) => {
-                    warn!("Failed to parse bundled skill '{name}': {e}");
-                }
-            }
-        }
-
-        if count > 0 {
-            info!("Loaded {count} bundled skill(s)");
-        }
-        count
-    }
-
     /// Load all installed skills from the skills directory.
     pub fn load_all(&mut self) -> Result<usize, SkillError> {
         if !self.skills_dir.exists() {
@@ -180,69 +128,7 @@ impl SkillRegistry {
 
             let manifest_path = path.join("skill.toml");
             if !manifest_path.exists() {
-                // Auto-detect SKILL.md and convert to skill.toml + prompt_context.md
-                if openclaw_compat::detect_skillmd(&path) {
-                    match openclaw_compat::convert_skillmd(&path) {
-                        Ok(converted) => {
-                            // SECURITY: Scan prompt content for injection attacks
-                            // before accepting the skill. 341 malicious skills were
-                            // found on ClawHub — block critical threats at load time.
-                            let warnings =
-                                SkillVerifier::scan_prompt_content(&converted.prompt_context);
-                            let has_critical = warnings.iter().any(|w| {
-                                matches!(w.severity, crate::verify::WarningSeverity::Critical)
-                            });
-                            if has_critical {
-                                warn!(
-                                    skill = %converted.manifest.skill.name,
-                                    "BLOCKED: SKILL.md contains critical prompt injection patterns"
-                                );
-                                for w in &warnings {
-                                    warn!("  [{:?}] {}", w.severity, w.message);
-                                }
-                                continue;
-                            }
-                            if !warnings.is_empty() {
-                                for w in &warnings {
-                                    warn!(
-                                        skill = %converted.manifest.skill.name,
-                                        "[{:?}] {}",
-                                        w.severity,
-                                        w.message
-                                    );
-                                }
-                            }
-
-                            info!(
-                                skill = %converted.manifest.skill.name,
-                                "Auto-converting SKILL.md to OpenCarrier format"
-                            );
-                            if let Err(e) = openclaw_compat::write_opencarrier_manifest(
-                                &path,
-                                &converted.manifest,
-                            ) {
-                                warn!("Failed to write skill.toml for {}: {e}", path.display());
-                                continue;
-                            }
-                            if let Err(e) = openclaw_compat::write_prompt_context(
-                                &path,
-                                &converted.prompt_context,
-                            ) {
-                                warn!(
-                                    "Failed to write prompt_context.md for {}: {e}",
-                                    path.display()
-                                );
-                            }
-                            // Fall through to load the newly written skill.toml
-                        }
-                        Err(e) => {
-                            warn!("Failed to convert SKILL.md at {}: {e}", path.display());
-                            continue;
-                        }
-                    }
-                } else {
-                    continue;
-                }
+                continue;
             }
 
             match self.load_skill(&path) {
@@ -379,51 +265,7 @@ impl SkillRegistry {
 
             let manifest_path = path.join("skill.toml");
             if !manifest_path.exists() {
-                // Auto-detect SKILL.md and convert
-                if openclaw_compat::detect_skillmd(&path) {
-                    match openclaw_compat::convert_skillmd(&path) {
-                        Ok(converted) => {
-                            let warnings =
-                                SkillVerifier::scan_prompt_content(&converted.prompt_context);
-                            let has_critical = warnings.iter().any(|w| {
-                                matches!(w.severity, crate::verify::WarningSeverity::Critical)
-                            });
-                            if has_critical {
-                                warn!(
-                                    skill = %converted.manifest.skill.name,
-                                    "BLOCKED workspace skill: critical prompt injection patterns"
-                                );
-                                continue;
-                            }
-
-                            if let Err(e) = openclaw_compat::write_opencarrier_manifest(
-                                &path,
-                                &converted.manifest,
-                            ) {
-                                warn!("Failed to write skill.toml for {}: {e}", path.display());
-                                continue;
-                            }
-                            if let Err(e) = openclaw_compat::write_prompt_context(
-                                &path,
-                                &converted.prompt_context,
-                            ) {
-                                warn!(
-                                    "Failed to write prompt_context.md for {}: {e}",
-                                    path.display()
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to convert workspace SKILL.md at {}: {e}",
-                                path.display()
-                            );
-                            continue;
-                        }
-                    }
-                } else {
-                    continue;
-                }
+                continue;
             }
 
             match self.load_skill(&path) {
@@ -582,35 +424,6 @@ input_schema = {{ type = "object" }}
         assert!(result.is_err());
         // Still has the original skills
         assert_eq!(registry.count(), 2);
-    }
-
-    #[test]
-    fn test_registry_auto_convert_skillmd() {
-        let dir = TempDir::new().unwrap();
-
-        // Create a SKILL.md-only skill (no skill.toml)
-        let skill_dir = dir.path().join("writing-coach");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: writing-coach\ndescription: Helps improve writing\n---\n# Writing Coach\n\nHelp users write better.",
-        ).unwrap();
-
-        let mut registry = SkillRegistry::new(dir.path().to_path_buf());
-        let count = registry.load_all().unwrap();
-        assert_eq!(count, 1, "Should auto-convert and load the SKILL.md skill");
-
-        let skill = registry.get("writing-coach");
-        assert!(skill.is_some());
-        let manifest = &skill.unwrap().manifest;
-        assert_eq!(
-            manifest.runtime.runtime_type,
-            crate::SkillRuntime::PromptOnly
-        );
-        assert!(manifest.prompt_context.is_some());
-
-        // Verify that skill.toml was written
-        assert!(skill_dir.join("skill.toml").exists());
     }
 
     #[test]

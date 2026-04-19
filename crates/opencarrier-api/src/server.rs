@@ -1,6 +1,5 @@
 //! OpenCarrier daemon server — boots the kernel and serves the HTTP API.
 
-use crate::channel_bridge;
 use crate::middleware;
 use crate::rate_limiter;
 use crate::routes::{self, AppState};
@@ -32,25 +31,15 @@ pub struct DaemonInfo {
 /// This is extracted from `run_daemon()` so that embedders (e.g. opencarrier-desktop)
 /// can create the router without starting the full daemon lifecycle.
 ///
-/// Returns `(router, shared_state)`. The caller can use `state.bridge_manager`
-/// to shut down the bridge on exit.
+/// Returns `(router, shared_state)`.
 pub async fn build_router(
     kernel: Arc<OpenCarrierKernel>,
     listen_addr: SocketAddr,
 ) -> (Router<()>, Arc<AppState>) {
-    // Start channel bridges (Telegram, etc.)
-    let bridge = channel_bridge::start_channel_bridge(kernel.clone()).await;
-
-    let channels_config = kernel.config.channels.clone();
     let state = Arc::new(AppState {
         kernel: kernel.clone(),
         started_at: Instant::now(),
-        // P2P disabled - wire crate removed
-        // peer_registry: kernel.peer_registry.get().map(|r| Arc::new(r.clone())),
-        bridge_manager: tokio::sync::Mutex::new(bridge),
-        channels_config: tokio::sync::RwLock::new(channels_config),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache::new(),
     });
 
@@ -136,6 +125,30 @@ pub async fn build_router(
         )
         .route("/api/status", axum::routing::get(routes::status))
         .route("/api/brain", axum::routing::get(routes::brain_info))
+        // Brain config management
+        .route(
+            "/api/brain/providers/{name}",
+            axum::routing::put(routes::set_brain_provider)
+                         .delete(routes::delete_brain_provider),
+        )
+        .route(
+            "/api/brain/endpoints/{name}",
+            axum::routing::put(routes::set_brain_endpoint)
+                         .delete(routes::delete_brain_endpoint),
+        )
+        .route(
+            "/api/brain/modalities/{name}",
+            axum::routing::put(routes::set_brain_modality)
+                         .delete(routes::delete_brain_modality),
+        )
+        .route(
+            "/api/brain/default-modality",
+            axum::routing::put(routes::set_brain_default_modality),
+        )
+        .route(
+            "/api/brain/reload",
+            axum::routing::post(routes::reload_brain),
+        )
         .route("/api/version", axum::routing::get(routes::version))
         .route(
             "/api/agents",
@@ -246,29 +259,6 @@ pub async fn build_router(
             "/api/uploads/{file_id}",
             axum::routing::get(routes::serve_upload),
         )
-        // Channel endpoints
-        .route("/api/channels", axum::routing::get(routes::list_channels))
-        .route(
-            "/api/channels/{name}/configure",
-            axum::routing::post(routes::configure_channel).delete(routes::remove_channel),
-        )
-        .route(
-            "/api/channels/{name}/test",
-            axum::routing::post(routes::test_channel),
-        )
-        .route(
-            "/api/channels/reload",
-            axum::routing::post(routes::reload_channels),
-        )
-        // WhatsApp QR login flow
-        .route(
-            "/api/channels/whatsapp/qr/start",
-            axum::routing::post(routes::whatsapp_qr_start),
-        )
-        .route(
-            "/api/channels/whatsapp/qr/status",
-            axum::routing::get(routes::whatsapp_qr_status),
-        )
         // Template endpoints
         .route("/api/templates", axum::routing::get(routes::list_templates))
         .route(
@@ -329,133 +319,8 @@ pub async fn build_router(
                 .put(routes::set_agent_kv_key)
                 .delete(routes::delete_agent_kv_key),
         )
-        // Trigger endpoints
-        .route(
-            "/api/triggers",
-            axum::routing::get(routes::list_triggers).post(routes::create_trigger),
-        )
-        .route(
-            "/api/triggers/{id}",
-            axum::routing::delete(routes::delete_trigger).put(routes::update_trigger),
-        )
-        // Schedule (cron job) endpoints
-        .route(
-            "/api/schedules",
-            axum::routing::get(routes::list_schedules).post(routes::create_schedule),
-        )
-        .route(
-            "/api/schedules/{id}",
-            axum::routing::delete(routes::delete_schedule).put(routes::update_schedule),
-        )
-        .route(
-            "/api/schedules/{id}/run",
-            axum::routing::post(routes::run_schedule),
-        )
-        // Workflow endpoints
-        .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
-        )
-        .route(
-            "/api/workflows/{id}",
-            axum::routing::get(routes::get_workflow)
-                .put(routes::update_workflow)
-                .delete(routes::delete_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/runs",
-            axum::routing::get(routes::list_workflow_runs),
-        )
         // Skills endpoints
         .route("/api/skills", axum::routing::get(routes::list_skills))
-        .route(
-            "/api/skills/install",
-            axum::routing::post(routes::install_skill),
-        )
-        .route(
-            "/api/skills/uninstall",
-            axum::routing::post(routes::uninstall_skill),
-        )
-        .route(
-            "/api/marketplace/search",
-            axum::routing::get(routes::marketplace_search),
-        )
-        // ClawHub (OpenClaw ecosystem) endpoints
-        .route(
-            "/api/clawhub/search",
-            axum::routing::get(routes::clawhub_search),
-        )
-        .route(
-            "/api/clawhub/browse",
-            axum::routing::get(routes::clawhub_browse),
-        )
-        .route(
-            "/api/clawhub/skill/{slug}",
-            axum::routing::get(routes::clawhub_skill_detail),
-        )
-        .route(
-            "/api/clawhub/skill/{slug}/code",
-            axum::routing::get(routes::clawhub_skill_code),
-        )
-        .route(
-            "/api/clawhub/install",
-            axum::routing::post(routes::clawhub_install),
-        )
-        // Hands endpoints
-        .route("/api/hands", axum::routing::get(routes::list_hands))
-        .route(
-            "/api/hands/install",
-            axum::routing::post(routes::install_hand),
-        )
-        .route(
-            "/api/hands/upsert",
-            axum::routing::post(routes::upsert_hand),
-        )
-        .route(
-            "/api/hands/active",
-            axum::routing::get(routes::list_active_hands),
-        )
-        .route("/api/hands/{hand_id}", axum::routing::get(routes::get_hand))
-        .route(
-            "/api/hands/{hand_id}/activate",
-            axum::routing::post(routes::activate_hand),
-        )
-        .route(
-            "/api/hands/{hand_id}/check-deps",
-            axum::routing::post(routes::check_hand_deps),
-        )
-        .route(
-            "/api/hands/{hand_id}/install-deps",
-            axum::routing::post(routes::install_hand_deps),
-        )
-        .route(
-            "/api/hands/{hand_id}/settings",
-            axum::routing::get(routes::get_hand_settings).put(routes::update_hand_settings),
-        )
-        .route(
-            "/api/hands/instances/{id}/pause",
-            axum::routing::post(routes::pause_hand),
-        )
-        .route(
-            "/api/hands/instances/{id}/resume",
-            axum::routing::post(routes::resume_hand),
-        )
-        .route(
-            "/api/hands/instances/{id}",
-            axum::routing::delete(routes::deactivate_hand),
-        )
-        .route(
-            "/api/hands/instances/{id}/stats",
-            axum::routing::get(routes::hand_stats),
-        )
-        .route(
-            "/api/hands/instances/{id}/browser",
-            axum::routing::get(routes::hand_instance_browser),
-        )
         // MCP server endpoints
         .route(
             "/api/mcp/servers",
@@ -472,12 +337,6 @@ pub async fn build_router(
         )
         // Live log streaming (SSE)
         .route("/api/logs/stream", axum::routing::get(routes::logs_stream))
-        // Peer/Network endpoints
-        .route("/api/peers", axum::routing::get(routes::list_peers))
-        .route(
-            "/api/network/status",
-            axum::routing::get(routes::network_status),
-        )
         // Agent communication (Comms) endpoints
         .route(
             "/api/comms/topology",
@@ -505,19 +364,6 @@ pub async fn build_router(
             axum::routing::get(routes::config_schema),
         )
         .route("/api/config/set", axum::routing::post(routes::config_set))
-        // Approval endpoints
-        .route(
-            "/api/approvals",
-            axum::routing::get(routes::list_approvals).post(routes::create_approval),
-        )
-        .route(
-            "/api/approvals/{id}/approve",
-            axum::routing::post(routes::approve_request),
-        )
-        .route(
-            "/api/approvals/{id}/reject",
-            axum::routing::post(routes::reject_request),
-        )
         // Usage endpoints
         .route("/api/usage", axum::routing::get(routes::usage_stats))
         .route(
@@ -579,15 +425,6 @@ pub async fn build_router(
         )
         .route("/api/models/{*id}", axum::routing::get(routes::get_model))
         .route("/api/providers", axum::routing::get(routes::list_providers))
-        // Copilot OAuth (must be before parametric {name} routes)
-        .route(
-            "/api/providers/github-copilot/oauth/start",
-            axum::routing::post(routes::copilot_oauth_start),
-        )
-        .route(
-            "/api/providers/github-copilot/oauth/poll/{poll_id}",
-            axum::routing::get(routes::copilot_oauth_poll),
-        )
         .route(
             "/api/providers/{name}/key",
             axum::routing::post(routes::set_provider_key).delete(routes::delete_provider_key),
@@ -604,16 +441,6 @@ pub async fn build_router(
             "/api/skills/create",
             axum::routing::post(routes::create_skill),
         )
-        // Migration endpoints
-        .route(
-            "/api/migrate/detect",
-            axum::routing::get(routes::migrate_detect),
-        )
-        .route(
-            "/api/migrate/scan",
-            axum::routing::post(routes::migrate_scan),
-        )
-        .route("/api/migrate", axum::routing::post(routes::run_migrate))
         // Cron job management endpoints
         .route(
             "/api/cron/jobs",
@@ -651,99 +478,8 @@ pub async fn build_router(
             "/api/bindings/{index}",
             axum::routing::delete(routes::remove_binding),
         )
-        // A2A (Agent-to-Agent) Protocol endpoints
-        .route(
-            "/.well-known/agent.json",
-            axum::routing::get(routes::a2a_agent_card),
-        )
-        .route("/a2a/agents", axum::routing::get(routes::a2a_list_agents))
-        .route(
-            "/a2a/tasks/send",
-            axum::routing::post(routes::a2a_send_task),
-        )
-        .route("/a2a/tasks/{id}", axum::routing::get(routes::a2a_get_task))
-        .route(
-            "/a2a/tasks/{id}/cancel",
-            axum::routing::post(routes::a2a_cancel_task),
-        )
-        // A2A management (outbound) endpoints
-        .route(
-            "/api/a2a/agents",
-            axum::routing::get(routes::a2a_list_external_agents),
-        )
-        .route(
-            "/api/a2a/discover",
-            axum::routing::post(routes::a2a_discover_external),
-        )
-        .route(
-            "/api/a2a/send",
-            axum::routing::post(routes::a2a_send_external),
-        )
-        .route(
-            "/api/a2a/tasks/{id}/status",
-            axum::routing::get(routes::a2a_external_task_status),
-        )
-        // Integration management endpoints
-        .route(
-            "/api/integrations",
-            axum::routing::get(routes::list_integrations),
-        )
-        .route(
-            "/api/integrations/available",
-            axum::routing::get(routes::list_available_integrations),
-        )
-        .route(
-            "/api/integrations/add",
-            axum::routing::post(routes::add_integration),
-        )
-        .route(
-            "/api/integrations/{id}",
-            axum::routing::delete(routes::remove_integration),
-        )
-        .route(
-            "/api/integrations/{id}/reconnect",
-            axum::routing::post(routes::reconnect_integration),
-        )
-        .route(
-            "/api/integrations/health",
-            axum::routing::get(routes::integrations_health),
-        )
-        .route(
-            "/api/integrations/reload",
-            axum::routing::post(routes::reload_integrations),
-        )
-        // Device pairing endpoints
-        .route(
-            "/api/pairing/request",
-            axum::routing::post(routes::pairing_request),
-        )
-        .route(
-            "/api/pairing/complete",
-            axum::routing::post(routes::pairing_complete),
-        )
-        .route(
-            "/api/pairing/devices",
-            axum::routing::get(routes::pairing_devices),
-        )
-        .route(
-            "/api/pairing/devices/{id}",
-            axum::routing::delete(routes::pairing_remove_device),
-        )
-        .route(
-            "/api/pairing/notify",
-            axum::routing::post(routes::pairing_notify),
-        )
         // MCP HTTP endpoint (exposes MCP protocol over HTTP)
         .route("/mcp", axum::routing::post(routes::mcp_http))
-        // OpenAI-compatible API
-        .route(
-            "/v1/chat/completions",
-            axum::routing::post(crate::openai_compat::chat_completions),
-        )
-        .route(
-            "/v1/models",
-            axum::routing::get(crate::openai_compat::list_models),
-        )
         // Dashboard authentication endpoints
         .route("/api/auth/login", axum::routing::post(routes::auth_login))
         .route("/api/auth/logout", axum::routing::post(routes::auth_logout))
@@ -882,11 +618,6 @@ pub async fn run_daemon(
     // Clean up daemon info file
     if let Some(info_path) = daemon_info_path {
         let _ = std::fs::remove_file(info_path);
-    }
-
-    // Stop channel bridges
-    if let Some(ref mut b) = *state.bridge_manager.lock().await {
-        b.stop().await;
     }
 
     // Shutdown kernel

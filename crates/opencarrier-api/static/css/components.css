@@ -2407,19 +2407,6 @@ mark.search-highlight {
   text-align: center;
 }
 
-/* ── Approval Badge & Page Styles ── */
-.approval-card { border-left: 3px solid var(--warning); }
-.approval-card.approved { border-left-color: var(--success); }
-.approval-card.rejected { border-left-color: var(--error); }
-.approval-card.expired { border-left-color: var(--text-muted); opacity: 0.7; }
-.approval-timer {
-  font-size: 11px;
-  color: var(--warning);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.approval-actions { display: flex; gap: 8px; margin-top: 12px; }
-
 /* ── Agent Identity Styles ── */
 .agent-emoji { font-size: 20px; line-height: 1; flex-shrink: 0; }
 .agent-avatar {

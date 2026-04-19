@@ -1,9 +1,9 @@
-//! Skills screen: installed skills, ClawHub marketplace, MCP servers.
+//! Skills screen: installed skills, MCP servers, quick start.
 
 use crate::tui::theme;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph};
 use ratatui::Frame;
@@ -19,15 +19,6 @@ pub struct SkillInfo {
 }
 
 #[derive(Clone, Default)]
-pub struct ClawHubResult {
-    pub name: String,
-    pub slug: String,
-    pub description: String,
-    pub downloads: u64,
-    pub runtime: String,
-}
-
-#[derive(Clone, Default)]
 pub struct McpServerInfo {
     pub name: String,
     pub connected: bool,
@@ -39,45 +30,17 @@ pub struct McpServerInfo {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SkillsSub {
     Installed,
-    ClawHub,
+    QuickStart,
     Mcp,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ClawHubSort {
-    Trending,
-    Popular,
-    Recent,
-}
-
-impl ClawHubSort {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Trending => "trending",
-            Self::Popular => "popular",
-            Self::Recent => "recent",
-        }
-    }
-    fn next(self) -> Self {
-        match self {
-            Self::Trending => Self::Popular,
-            Self::Popular => Self::Recent,
-            Self::Recent => Self::Trending,
-        }
-    }
 }
 
 pub struct SkillsState {
     pub sub: SkillsSub,
     pub installed: Vec<SkillInfo>,
-    pub clawhub_results: Vec<ClawHubResult>,
     pub mcp_servers: Vec<McpServerInfo>,
     pub installed_list: ListState,
-    pub clawhub_list: ListState,
     pub mcp_list: ListState,
-    pub search_buf: String,
-    pub search_mode: bool,
-    pub sort: ClawHubSort,
+    pub quickstart_list: ListState,
     pub loading: bool,
     pub tick: usize,
     pub confirm_uninstall: bool,
@@ -87,9 +50,6 @@ pub struct SkillsState {
 pub enum SkillsAction {
     Continue,
     RefreshInstalled,
-    SearchClawHub(String),
-    BrowseClawHub(String),
-    InstallSkill(String),
     UninstallSkill(String),
     RefreshMcp,
 }
@@ -99,14 +59,10 @@ impl SkillsState {
         Self {
             sub: SkillsSub::Installed,
             installed: Vec::new(),
-            clawhub_results: Vec::new(),
             mcp_servers: Vec::new(),
             installed_list: ListState::default(),
-            clawhub_list: ListState::default(),
             mcp_list: ListState::default(),
-            search_buf: String::new(),
-            search_mode: false,
-            sort: ClawHubSort::Trending,
+            quickstart_list: ListState::default(),
             loading: false,
             tick: 0,
             confirm_uninstall: false,
@@ -124,27 +80,24 @@ impl SkillsState {
         }
 
         // Tab switching within Skills (1/2/3)
-        if !self.search_mode {
-            match key.code {
-                KeyCode::Char('1') => {
-                    self.sub = SkillsSub::Installed;
-                    return SkillsAction::RefreshInstalled;
-                }
-                KeyCode::Char('2') => {
-                    self.sub = SkillsSub::ClawHub;
-                    return SkillsAction::BrowseClawHub(self.sort.label().to_string());
-                }
-                KeyCode::Char('3') => {
-                    self.sub = SkillsSub::Mcp;
-                    return SkillsAction::RefreshMcp;
-                }
-                _ => {}
+        match key.code {
+            KeyCode::Char('1') => {
+                self.sub = SkillsSub::Installed;
+                return SkillsAction::RefreshInstalled;
             }
+            KeyCode::Char('2') => {
+                self.sub = SkillsSub::QuickStart;
+            }
+            KeyCode::Char('3') => {
+                self.sub = SkillsSub::Mcp;
+                return SkillsAction::RefreshMcp;
+            }
+            _ => {}
         }
 
         match self.sub {
             SkillsSub::Installed => self.handle_installed(key),
-            SkillsSub::ClawHub => self.handle_clawhub(key),
+            SkillsSub::QuickStart => SkillsAction::Continue,
             SkillsSub::Mcp => self.handle_mcp(key),
         }
     }
@@ -187,68 +140,6 @@ impl SkillsState {
                 }
             }
             KeyCode::Char('r') => return SkillsAction::RefreshInstalled,
-            _ => {}
-        }
-        SkillsAction::Continue
-    }
-
-    fn handle_clawhub(&mut self, key: KeyEvent) -> SkillsAction {
-        if self.search_mode {
-            match key.code {
-                KeyCode::Esc => {
-                    self.search_mode = false;
-                }
-                KeyCode::Enter => {
-                    self.search_mode = false;
-                    if !self.search_buf.is_empty() {
-                        return SkillsAction::SearchClawHub(self.search_buf.clone());
-                    }
-                }
-                KeyCode::Backspace => {
-                    self.search_buf.pop();
-                }
-                KeyCode::Char(c) => {
-                    self.search_buf.push(c);
-                }
-                _ => {}
-            }
-            return SkillsAction::Continue;
-        }
-
-        let total = self.clawhub_results.len();
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if total > 0 {
-                    let i = self.clawhub_list.selected().unwrap_or(0);
-                    let next = if i == 0 { total - 1 } else { i - 1 };
-                    self.clawhub_list.select(Some(next));
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if total > 0 {
-                    let i = self.clawhub_list.selected().unwrap_or(0);
-                    let next = (i + 1) % total;
-                    self.clawhub_list.select(Some(next));
-                }
-            }
-            KeyCode::Char('i') => {
-                if let Some(sel) = self.clawhub_list.selected() {
-                    if sel < self.clawhub_results.len() {
-                        return SkillsAction::InstallSkill(self.clawhub_results[sel].slug.clone());
-                    }
-                }
-            }
-            KeyCode::Char('/') => {
-                self.search_mode = true;
-                self.search_buf.clear();
-            }
-            KeyCode::Char('s') => {
-                self.sort = self.sort.next();
-                return SkillsAction::BrowseClawHub(self.sort.label().to_string());
-            }
-            KeyCode::Char('r') => {
-                return SkillsAction::BrowseClawHub(self.sort.label().to_string());
-            }
             _ => {}
         }
         SkillsAction::Continue
@@ -311,7 +202,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut SkillsState) {
 
     match state.sub {
         SkillsSub::Installed => draw_installed(f, chunks[2], state),
-        SkillsSub::ClawHub => draw_clawhub(f, chunks[2], state),
+        SkillsSub::QuickStart => draw_quickstart(f, chunks[2], state),
         SkillsSub::Mcp => draw_mcp(f, chunks[2], state),
     }
 }
@@ -319,7 +210,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut SkillsState) {
 fn draw_sub_tabs(f: &mut Frame, area: Rect, active: SkillsSub) {
     let tabs = [
         (SkillsSub::Installed, "1 Installed"),
-        (SkillsSub::ClawHub, "2 ClawHub"),
+        (SkillsSub::QuickStart, "2 Quick Start"),
         (SkillsSub::Mcp, "3 MCP Servers"),
     ];
     let mut spans = vec![Span::raw("  ")];
@@ -366,7 +257,7 @@ fn draw_installed(f: &mut Frame, area: Rect, state: &mut SkillsState) {
     } else if state.installed.is_empty() {
         f.render_widget(
             Paragraph::new(Span::styled(
-                "  No skills installed. Press [2] to browse ClawHub.",
+                "  No skills installed. Press [2] for Quick Start templates.",
                 theme::dim_style(),
             )),
             chunks[1],
@@ -390,7 +281,6 @@ fn draw_installed(f: &mut Frame, area: Rect, state: &mut SkillsState) {
                     _ => &s.runtime,
                 };
                 let source_style = match s.source.as_str() {
-                    "clawhub" => Style::default().fg(theme::ACCENT),
                     "builtin" | "built-in" => Style::default().fg(theme::GREEN),
                     _ => theme::dim_style(),
                 };
@@ -442,97 +332,51 @@ fn draw_installed(f: &mut Frame, area: Rect, state: &mut SkillsState) {
     }
 }
 
-fn draw_clawhub(f: &mut Frame, area: Rect, state: &mut SkillsState) {
+fn draw_quickstart(f: &mut Frame, area: Rect, state: &mut SkillsState) {
     let chunks = Layout::vertical([
-        Constraint::Length(1), // search / sort
-        Constraint::Min(3),    // results
+        Constraint::Length(1), // header
+        Constraint::Min(3),    // content
         Constraint::Length(1), // hints
     ])
     .split(area);
 
-    if state.search_mode {
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("  / ", Style::default().fg(theme::ACCENT)),
-                Span::styled(&state.search_buf, theme::input_style()),
-                Span::styled(
-                    "\u{2588}",
-                    Style::default()
-                        .fg(theme::GREEN)
-                        .add_modifier(Modifier::SLOW_BLINK),
-                ),
-            ])),
-            chunks[0],
-        );
-    } else {
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!(
-                        "  {:<24} {:<10} {:<10} {}",
-                        "Name", "Downloads", "Runtime", "Description"
-                    ),
-                    theme::table_header(),
-                ),
-                Span::styled(
-                    format!("  Sort: {}", state.sort.label()),
-                    Style::default().fg(theme::YELLOW),
-                ),
-            ])),
-            chunks[0],
-        );
-    }
+    f.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            "  Quick Start Templates",
+            theme::title_style(),
+        )])),
+        chunks[0],
+    );
 
-    if state.loading {
-        let spinner = theme::SPINNER_FRAMES[state.tick % theme::SPINNER_FRAMES.len()];
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(format!("  {spinner} "), Style::default().fg(theme::CYAN)),
-                Span::styled("Searching ClawHub\u{2026}", theme::dim_style()),
-            ])),
-            chunks[1],
-        );
-    } else if state.clawhub_results.is_empty() {
-        f.render_widget(
-            Paragraph::new(Span::styled(
-                "  No results. Press [/] to search or [s] to change sort.",
+    let items: Vec<ListItem> = [
+        ("code-review-guide", "Adds code review best practices and checklist to agent context."),
+        ("writing-style", "Configurable writing style guide for content generation."),
+        ("api-design", "REST API design patterns and conventions."),
+        ("security-checklist", "OWASP-aligned security review checklist."),
+    ]
+    .iter()
+    .map(|(name, desc)| {
+        ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("  {:<24}", name),
+                Style::default().fg(theme::CYAN),
+            ),
+            Span::styled(
+                format!(" {}", desc),
                 theme::dim_style(),
-            )),
-            chunks[1],
-        );
-    } else {
-        let items: Vec<ListItem> = state
-            .clawhub_results
-            .iter()
-            .map(|r| {
-                let dl = format_count(r.downloads);
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("  {:<24}", truncate(&r.name, 23)),
-                        Style::default().fg(theme::CYAN),
-                    ),
-                    Span::styled(format!(" {:<10}", dl), Style::default().fg(theme::GREEN)),
-                    Span::styled(
-                        format!(" {:<10}", &r.runtime),
-                        Style::default().fg(theme::BLUE),
-                    ),
-                    Span::styled(
-                        format!(" {}", truncate(&r.description, 30)),
-                        theme::dim_style(),
-                    ),
-                ]))
-            })
-            .collect();
+            ),
+        ]))
+    })
+    .collect();
 
-        let list = List::new(items)
-            .highlight_style(theme::selected_style())
-            .highlight_symbol("> ");
-        f.render_stateful_widget(list, chunks[1], &mut state.clawhub_list);
-    }
+    let list = List::new(items)
+        .highlight_style(theme::selected_style())
+        .highlight_symbol("> ");
+    f.render_stateful_widget(list, chunks[1], &mut state.quickstart_list);
 
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            "  [\u{2191}\u{2193}] Navigate  [i] Install  [/] Search  [s] Sort  [r] Refresh",
+            "  Prompt-only skill templates (zero dependencies)",
             theme::hint_style(),
         )])),
         chunks[2],
@@ -616,15 +460,5 @@ fn truncate(s: &str, max: usize) -> String {
             "{}\u{2026}",
             opencarrier_types::truncate_str(s, max.saturating_sub(1))
         )
-    }
-}
-
-fn format_count(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        format!("{n}")
     }
 }

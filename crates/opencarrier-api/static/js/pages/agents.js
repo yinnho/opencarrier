@@ -92,98 +92,7 @@ function agentsPage() {
     selectedCategory: 'All',
     searchQuery: '',
 
-    builtinTemplates: [
-      {
-        name: 'General Assistant',
-        description: 'A versatile conversational agent that can help with everyday tasks, answer questions, and provide recommendations.',
-        category: 'General',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'full',
-        system_prompt: 'You are a helpful, friendly assistant. Provide clear, accurate, and concise responses. Ask clarifying questions when needed.'
-      },
-      {
-        name: 'Code Helper',
-        description: 'A programming-focused agent that writes, reviews, and debugs code across multiple languages.',
-        category: 'Development',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'coding',
-        system_prompt: 'You are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.'
-      },
-      {
-        name: 'Researcher',
-        description: 'An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries.',
-        category: 'Research',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'research',
-        system_prompt: 'You are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.'
-      },
-      {
-        name: 'Writer',
-        description: 'A creative writing agent that helps with drafting, editing, and improving written content of all kinds.',
-        category: 'Writing',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'full',
-        system_prompt: 'You are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.'
-      },
-      {
-        name: 'Data Analyst',
-        description: 'A data-focused agent that helps analyze datasets, create queries, and interpret statistical results.',
-        category: 'Development',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'coding',
-        system_prompt: 'You are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.'
-      },
-      {
-        name: 'DevOps Engineer',
-        description: 'A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting.',
-        category: 'Development',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'automation',
-        system_prompt: 'You are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.'
-      },
-      {
-        name: 'Customer Support',
-        description: 'A professional, empathetic agent for handling customer inquiries and resolving issues.',
-        category: 'Business',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'messaging',
-        system_prompt: 'You are a professional customer support representative. Be empathetic, patient, and solution-oriented. Acknowledge concerns before offering solutions. Escalate complex issues appropriately.'
-      },
-      {
-        name: 'Tutor',
-        description: 'A patient educational agent that explains concepts step-by-step and adapts to the learner\'s level.',
-        category: 'General',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'full',
-        system_prompt: 'You are a patient and encouraging tutor. Explain concepts step by step, starting from fundamentals. Use analogies and examples. Check understanding before moving on. Adapt to the learner\'s pace.'
-      },
-      {
-        name: 'API Designer',
-        description: 'An agent specialized in RESTful API design, OpenAPI specs, and integration architecture.',
-        category: 'Development',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'coding',
-        system_prompt: 'You are an API design expert. Help users design clean, consistent RESTful APIs following best practices. Cover endpoint naming, request/response schemas, error handling, and versioning.'
-      },
-      {
-        name: 'Meeting Notes',
-        description: 'Summarizes meeting transcripts into structured notes with action items and key decisions.',
-        category: 'Business',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        profile: 'minimal',
-        system_prompt: 'You are a meeting summarizer. When given a meeting transcript or notes, produce a structured summary with: key decisions, action items (with owners), discussion highlights, and follow-up questions.'
-      }
-    ],
+    builtinTemplates: [],
 
     // ── Profile Descriptions ──
     profileDescriptions: {
@@ -363,9 +272,9 @@ function agentsPage() {
 
     killAgent(agent) {
       var self = this;
-      OpenCarrierToast.confirm('Stop Agent', 'Stop agent "' + agent.name + '"? The agent will be shut down.', async function() {
+      OpenCarrierToast.confirm('Stop Agent', 'Stop agent "' + agent.name + '"? The current run will be cancelled.', async function() {
         try {
-          await OpenCarrierAPI.del('/api/agents/' + agent.id);
+          await OpenCarrierAPI.post('/api/agents/' + agent.id + '/stop');
           OpenCarrierToast.success('Agent "' + agent.name + '" stopped');
           self.showDetailModal = false;
           await Alpine.store('app').refreshAgents();
@@ -378,11 +287,11 @@ function agentsPage() {
     killAllAgents() {
       var list = this.filteredAgents;
       if (!list.length) return;
-      OpenCarrierToast.confirm('Stop All Agents', 'Stop ' + list.length + ' agent(s)? All agents will be shut down.', async function() {
+      OpenCarrierToast.confirm('Stop All Agents', 'Stop ' + list.length + ' agent(s)? Current runs will be cancelled.', async function() {
         var errors = [];
         for (var i = 0; i < list.length; i++) {
           try {
-            await OpenCarrierAPI.del('/api/agents/' + list[i].id);
+            await OpenCarrierAPI.post('/api/agents/' + list[i].id + '/stop');
           } catch(e) { errors.push(list[i].name + ': ' + e.message); }
         }
         await Alpine.store('app').refreshAgents();

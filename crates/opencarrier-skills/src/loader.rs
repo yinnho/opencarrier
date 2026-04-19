@@ -12,6 +12,7 @@ pub async fn execute_skill_tool(
     skill_dir: &Path,
     tool_name: &str,
     input: &serde_json::Value,
+    credentials: &[(String, String)],
 ) -> Result<SkillToolResult, SkillError> {
     // Verify the tool exists in the manifest
     let _tool_def = manifest
@@ -23,13 +24,13 @@ pub async fn execute_skill_tool(
 
     match manifest.runtime.runtime_type {
         SkillRuntime::Python => {
-            execute_python(skill_dir, &manifest.runtime.entry, tool_name, input).await
+            execute_python(skill_dir, &manifest.runtime.entry, tool_name, input, credentials).await
         }
         SkillRuntime::Node => {
-            execute_node(skill_dir, &manifest.runtime.entry, tool_name, input).await
+            execute_node(skill_dir, &manifest.runtime.entry, tool_name, input, credentials).await
         }
         SkillRuntime::Shell => {
-            execute_shell(skill_dir, &manifest.runtime.entry, tool_name, input).await
+            execute_shell(skill_dir, &manifest.runtime.entry, tool_name, input, credentials).await
         }
         SkillRuntime::Wasm => Err(SkillError::RuntimeNotAvailable(
             "WASM skill runtime not yet implemented".to_string(),
@@ -56,6 +57,7 @@ async fn execute_python(
     entry: &str,
     tool_name: &str,
     input: &serde_json::Value,
+    credentials: &[(String, String)],
 ) -> Result<SkillToolResult, SkillError> {
     let script_path = skill_dir.join(entry);
     if !script_path.exists() {
@@ -113,6 +115,11 @@ async fn execute_python(
     // Python needs PYTHONIOENCODING for UTF-8 output
     cmd.env("PYTHONIOENCODING", "utf-8");
 
+    // Inject declared provider credentials (skill must declare providers in requirements)
+    for (key, value) in credentials {
+        cmd.env(key, value);
+    }
+
     let mut child = cmd
         .spawn()
         .map_err(|e| SkillError::ExecutionFailed(format!("Failed to spawn Python: {e}")))?;
@@ -162,6 +169,7 @@ async fn execute_node(
     entry: &str,
     tool_name: &str,
     input: &serde_json::Value,
+    credentials: &[(String, String)],
 ) -> Result<SkillToolResult, SkillError> {
     let script_path = skill_dir.join(entry);
     if !script_path.exists() {
@@ -214,6 +222,11 @@ async fn execute_node(
     }
     // Node needs NODE_PATH sometimes
     cmd.env("NODE_NO_WARNINGS", "1");
+
+    // Inject declared provider credentials
+    for (key, value) in credentials {
+        cmd.env(key, value);
+    }
 
     let mut child = cmd
         .spawn()
@@ -308,6 +321,7 @@ async fn execute_shell(
     entry: &str,
     tool_name: &str,
     input: &serde_json::Value,
+    credentials: &[(String, String)],
 ) -> Result<SkillToolResult, SkillError> {
     let script_path = skill_dir.join(entry);
     if !script_path.exists() {
@@ -357,6 +371,11 @@ async fn execute_shell(
         if let Ok(tmp) = std::env::var("TEMP") {
             cmd.env("TEMP", tmp);
         }
+    }
+
+    // Inject declared provider credentials
+    for (key, value) in credentials {
+        cmd.env(key, value);
     }
 
     let mut child = cmd
@@ -451,7 +470,7 @@ mod tests {
             source: None,
         };
 
-        let result = execute_skill_tool(&manifest, dir.path(), "test_tool", &serde_json::json!({}))
+        let result = execute_skill_tool(&manifest, dir.path(), "test_tool", &serde_json::json!({}), &[])
             .await
             .unwrap();
         assert!(!result.is_error);

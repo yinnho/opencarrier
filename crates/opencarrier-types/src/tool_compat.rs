@@ -1,14 +1,14 @@
-//! Shared tool name mappings between OpenClaw and OpenCarrier.
+//! Shared tool name mappings for OpenCarrier.
 //!
-//! These mappings are used by both the migration engine and the skill system
-//! to normalize OpenClaw tool names into OpenCarrier equivalents.
+//! These mappings normalize LLM-hallucinated tool names into
+//! OpenCarrier equivalents.
 
-/// Map an OpenClaw tool name to its OpenCarrier equivalent.
+/// Map an LLM-hallucinated tool name to its OpenCarrier equivalent.
 ///
 /// Returns `None` if the name has no known mapping (may already be
 /// an OpenCarrier tool name — check with [`is_known_opencarrier_tool`]).
-pub fn map_tool_name(openclaw_name: &str) -> Option<&'static str> {
-    match openclaw_name {
+pub fn map_tool_name(name: &str) -> Option<&'static str> {
+    match name {
         // Claude-style tool names (capitalized)
         "Read" | "read" | "read_file" => Some("file_read"),
         "Write" | "write" | "write_file" => Some("file_write"),

@@ -8,13 +8,17 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
-/// Model entry for the picker.
+/// Modality entry for the picker (Brain architecture).
 #[derive(Clone)]
 pub struct ModelEntry {
-    pub id: String,
-    pub display_name: String,
-    pub provider: String,
-    pub tier: String,
+    /// Modality name, e.g. "chat", "fast", "reasoning".
+    pub modality: String,
+    /// Resolved model name from Brain, e.g. "glm-5.1".
+    pub model_name: String,
+    /// Primary endpoint name, e.g. "zhipu_anthropic".
+    pub endpoint: String,
+    /// Whether the endpoint's driver is ready.
+    pub ready: bool,
 }
 
 /// Tool call metadata for rich rendering.
@@ -92,9 +96,9 @@ pub enum ChatAction {
     SendMessage(String),
     Back,
     SlashCommand(String),
-    /// Open the model picker (fetch models first).
+    /// Open the model picker (fetch modalities first).
     OpenModelPicker,
-    /// Switch to a specific model by id.
+    /// Switch to a specific modality.
     SwitchModel(String),
 }
 
@@ -233,7 +237,7 @@ impl ChatState {
         }
     }
 
-    /// Return filtered models based on the current picker filter.
+    /// Return filtered modalities based on the current picker filter.
     pub fn filtered_models(&self) -> Vec<&ModelEntry> {
         if self.model_picker_filter.is_empty() {
             return self.model_picker_models.iter().collect();
@@ -242,9 +246,9 @@ impl ChatState {
         self.model_picker_models
             .iter()
             .filter(|m| {
-                m.id.to_lowercase().contains(&f)
-                    || m.display_name.to_lowercase().contains(&f)
-                    || m.provider.to_lowercase().contains(&f)
+                m.modality.to_lowercase().contains(&f)
+                    || m.model_name.to_lowercase().contains(&f)
+                    || m.endpoint.to_lowercase().contains(&f)
             })
             .collect()
     }
@@ -288,11 +292,11 @@ impl ChatState {
                 KeyCode::Enter => {
                     let filtered = self.filtered_models();
                     if let Some(entry) = filtered.get(self.model_picker_idx) {
-                        let model_id = entry.id.clone();
+                        let modality = entry.modality.clone();
                         self.show_model_picker = false;
                         self.model_picker_filter.clear();
                         self.model_picker_idx = 0;
-                        return ChatAction::SwitchModel(model_id);
+                        return ChatAction::SwitchModel(modality);
                     }
                 }
                 KeyCode::Backspace => {
@@ -493,7 +497,7 @@ fn draw_model_picker(f: &mut Frame, area: Rect, state: &ChatState) {
 
     let block = Block::default()
         .title(Line::from(vec![Span::styled(
-            " Switch Model ",
+            " Switch Modality ",
             theme::title_style(),
         )]))
         .borders(Borders::ALL)
@@ -507,7 +511,7 @@ fn draw_model_picker(f: &mut Frame, area: Rect, state: &ChatState) {
         return;
     }
 
-    // Layout: search bar | model list
+    // Layout: search bar | modality list
     let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
 
     // Search bar
@@ -523,14 +527,14 @@ fn draw_model_picker(f: &mut Frame, area: Rect, state: &ChatState) {
     ]);
     f.render_widget(Paragraph::new(search_line), chunks[0]);
 
-    // Model list
+    // Modality list
     let visible_h = chunks[1].height as usize;
     let total = filtered.len();
 
     if total == 0 {
         f.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
-                " No models match",
+                " No modalities match",
                 theme::dim_style(),
             )])),
             chunks[1],
@@ -546,7 +550,6 @@ fn draw_model_picker(f: &mut Frame, area: Rect, state: &ChatState) {
     };
 
     let mut lines: Vec<Line> = Vec::new();
-    let max_name = (chunks[1].width as usize).saturating_sub(14);
     for (i, entry) in filtered
         .iter()
         .enumerate()
@@ -556,27 +559,7 @@ fn draw_model_picker(f: &mut Frame, area: Rect, state: &ChatState) {
         let selected = i == state.model_picker_idx;
         let indicator = if selected { "\u{25b6} " } else { "  " };
 
-        let name = if entry.display_name.is_empty() {
-            &entry.id
-        } else {
-            &entry.display_name
-        };
-        let name_display = if name.len() > max_name && max_name > 1 {
-            let truncated = opencarrier_types::truncate_str(name, max_name.saturating_sub(1));
-            format!("{truncated}\u{2026}")
-        } else {
-            name.to_string()
-        };
-
-        let tier_style = match entry.tier.to_lowercase().as_str() {
-            "frontier" => Style::default().fg(theme::PURPLE),
-            "smart" => Style::default().fg(theme::BLUE),
-            "balanced" => Style::default().fg(theme::GREEN),
-            "fast" => Style::default().fg(theme::YELLOW),
-            _ => theme::dim_style(),
-        };
-
-        let bg = if selected {
+        let modality_style = if selected {
             Style::default()
                 .fg(theme::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD)
@@ -584,11 +567,25 @@ fn draw_model_picker(f: &mut Frame, area: Rect, state: &ChatState) {
             Style::default().fg(theme::TEXT_SECONDARY)
         };
 
+        let ready_indicator = if entry.ready {
+            ""
+        } else {
+            " [unavailable]"
+        };
+        let ready_style = if entry.ready {
+            theme::dim_style()
+        } else {
+            Style::default().fg(theme::RED)
+        };
+
         lines.push(Line::from(vec![
             Span::styled(indicator, Style::default().fg(theme::ACCENT)),
-            Span::styled(name_display, bg),
-            Span::raw(" "),
-            Span::styled(entry.tier.to_lowercase(), tier_style),
+            Span::styled(&entry.modality, modality_style),
+            Span::styled(
+                format!(" ({})", entry.model_name),
+                theme::dim_style(),
+            ),
+            Span::styled(ready_indicator, ready_style),
         ]));
     }
 

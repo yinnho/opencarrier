@@ -3,6 +3,7 @@
 //! Abstracts over multiple LLM providers (Anthropic, OpenAI, Ollama, etc.).
 
 use async_trait::async_trait;
+use std::sync::Arc;
 use opencarrier_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use opencarrier_types::tool::{ToolCall, ToolDefinition};
 use serde::{Deserialize, Serialize};
@@ -163,17 +164,56 @@ pub trait LlmDriver: Send + Sync {
 
 /// Brain trait — the carrier's independent LLM brain.
 ///
-/// Routes completion requests by modality (chat, code, vision, etc.)
-/// to pre-configured endpoints with automatic fallback.
+/// Pure query service: provides endpoint information and health tracking.
+/// The runtime handles all execution and fallback logic.
+///
 /// Implemented by `opencarrier_kernel::brain::Brain`.
 #[async_trait]
 pub trait Brain: Send + Sync {
-    /// Think with a given modality. Tries primary endpoint, then fallbacks.
-    async fn think(
+    // --- New query interface ---
+
+    /// List all available modalities with descriptions.
+    fn list_modalities(&self) -> Vec<opencarrier_types::brain::ModalityInfo> {
+        vec![]
+    }
+
+    /// Get the ordered list of resolved endpoints for a modality.
+    /// Returns primary first, then fallbacks in order.
+    /// Returns an empty Vec if the modality is unknown.
+    fn endpoints_for(
         &self,
-        modality: &str,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse, LlmError>;
+        _modality: &str,
+    ) -> Vec<opencarrier_types::brain::ResolvedEndpoint> {
+        vec![]
+    }
+
+    /// Get a driver for a specific endpoint. Returns None if the endpoint
+    /// has no driver (initialization failed at boot).
+    fn driver_for_endpoint(&self, _endpoint_id: &str) -> Option<Arc<dyn LlmDriver>> {
+        None
+    }
+
+    /// Report the result of an endpoint call. Non-blocking.
+    fn report(&self, _report: opencarrier_types::brain::EndpointReport) {}
+
+    /// Get current Brain status snapshot.
+    fn status(&self) -> opencarrier_types::brain::BrainStatus {
+        opencarrier_types::brain::BrainStatus {
+            modalities: vec![],
+            endpoints: vec![],
+            drivers_ready: 0,
+        }
+    }
+
+    /// Resolve credentials for a provider (for skill credential injection).
+    fn credentials_for(
+        &self,
+        _provider: &str,
+    ) -> Option<opencarrier_types::brain::ProviderCredentials> {
+        None
+    }
+
+    // --- Legacy methods ---
 
     /// Get the model name for a given modality's primary endpoint.
     fn model_for(&self, modality: &str) -> &str;

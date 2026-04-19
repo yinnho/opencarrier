@@ -11,7 +11,6 @@ opencarrier-clone = { path = "../opencarrier-clone" }
 opencarrier-memory = { path = "../opencarrier-memory" }
 opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
-ying-relay = { path = "../ying-relay" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

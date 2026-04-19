@@ -3,10 +3,8 @@
 //! Exposes agent management, status, and chat via JSON REST endpoints.
 //! The kernel runs in-process; the CLI connects over HTTP.
 
-pub mod channel_bridge;
 pub mod command_security;
 pub mod middleware;
-pub mod openai_compat;
 pub mod rate_limiter;
 pub mod routes;
 pub mod server;

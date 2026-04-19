@@ -27,78 +27,7 @@ pub struct ProviderAuth {
 
 // ── Built-in templates ──────────────────────────────────────────────────────
 
-const BUILTIN_TEMPLATES: &[(&str, &str, &str, &str, &str)] = &[
-    (
-        "General Assistant",
-        "Versatile AI assistant for everyday tasks",
-        "General",
-        "anthropic",
-        "claude-sonnet-4-20250514",
-    ),
-    (
-        "Code Helper",
-        "Programming assistant with code review and debugging",
-        "Development",
-        "anthropic",
-        "claude-sonnet-4-20250514",
-    ),
-    (
-        "Researcher",
-        "Deep research and analysis with web search",
-        "Research",
-        "anthropic",
-        "claude-sonnet-4-20250514",
-    ),
-    (
-        "Writer",
-        "Creative and technical writing assistant",
-        "Writing",
-        "anthropic",
-        "claude-sonnet-4-20250514",
-    ),
-    (
-        "Data Analyst",
-        "Data analysis, visualization, and SQL queries",
-        "Development",
-        "gemini",
-        "gemini-2.5-flash",
-    ),
-    (
-        "DevOps Engineer",
-        "Infrastructure, CI/CD, and deployment assistance",
-        "Development",
-        "groq",
-        "llama-3.3-70b-versatile",
-    ),
-    (
-        "Customer Support",
-        "Professional customer service agent",
-        "Business",
-        "groq",
-        "llama-3.3-70b-versatile",
-    ),
-    (
-        "Tutor",
-        "Patient educational assistant for learning any subject",
-        "General",
-        "gemini",
-        "gemini-2.5-flash",
-    ),
-    (
-        "API Designer",
-        "REST/GraphQL API design and documentation",
-        "Development",
-        "anthropic",
-        "claude-sonnet-4-20250514",
-    ),
-    (
-        "Meeting Notes",
-        "Meeting transcription, summary, and action items",
-        "Business",
-        "groq",
-        "llama-3.3-70b-versatile",
-    ),
-];
+const BUILTIN_TEMPLATES: &[(&str, &str, &str, &str, &str)] = &[];
 
 // ── Categories ──────────────────────────────────────────────────────────────
 

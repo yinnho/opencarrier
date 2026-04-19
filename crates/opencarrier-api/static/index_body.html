@@ -108,10 +108,6 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
               <span class="nav-label">Sessions</span>
             </a>
-            <a class="nav-item" :class="{ active: page === 'approvals' }" @click="navigate('approvals')" :aria-current="page === 'approvals' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
-              <span class="nav-label">Approvals</span>
-            </a>
             <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
               <span class="nav-label">Comms</span>
@@ -148,10 +144,6 @@
         </div>
         <template x-if="!collapsed">
           <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'channels' }" @click="navigate('channels')" :aria-current="page === 'channels' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg></span>
-              <span class="nav-label">Channels</span>
-            </a>
             <a class="nav-item" :class="{ active: page === 'skills' }" @click="navigate('skills')" :aria-current="page === 'skills' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg></span>
               <span class="nav-label">Skills</span>
@@ -875,22 +867,6 @@
             </div>
           </div>
 
-          <!-- Quick-start templates — spawn + chat in one click -->
-          <div>
-            <div class="text-sm font-bold mb-2" style="color:var(--text-dim);letter-spacing:0.5px;font-size:11px;text-transform:uppercase" x-text="agents.length ? 'Or Start a New Agent' : 'Start Chatting'"></div>
-            <div class="card-grid">
-              <template x-for="t in builtinTemplates" :key="t.name">
-                <div class="card" style="cursor:pointer" @click="spawnBuiltin(t)">
-                  <div class="flex justify-between items-center mb-1">
-                    <div class="card-header" style="margin:0;font-size:14px;font-weight:600" x-text="t.name"></div>
-                    <span class="badge badge-dim" x-text="t.category"></span>
-                  </div>
-                  <div class="text-sm" style="line-height:1.5;color:var(--text-dim)" x-text="t.description"></div>
-                </div>
-              </template>
-            </div>
-          </div>
-
           <!-- Custom spawn modal still available -->
           </div>
 
@@ -1255,59 +1231,6 @@
           </template>
 
         </div><!-- /activeChatAgent picker wrapper -->
-      </div>
-    </template>
-
-    <!-- Page: Approvals -->
-    <template x-if="page === 'approvals'">
-      <div x-data="approvalsPage" x-init="loadData()">
-        <div class="page-header">
-          <h2>Execution Approvals</h2>
-          <div class="flex items-center gap-2">
-            <span class="badge badge-warn" x-show="pendingCount > 0" x-text="pendingCount + ' pending'"></span>
-            <button class="btn btn-ghost btn-sm" @click="loadData()">Refresh</button>
-          </div>
-        </div>
-        <div class="page-body">
-          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading...</span></div>
-          <div x-show="!loading && loadError" class="error-state">
-            <span class="error-icon">!</span>
-            <p x-text="loadError"></p>
-            <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
-          </div>
-          <template x-if="!loading && !loadError">
-            <div>
-              <div class="filter-pills mb-4">
-                <button class="filter-pill" :class="{ active: filterStatus === 'all' }" @click="filterStatus = 'all'">All</button>
-                <button class="filter-pill" :class="{ active: filterStatus === 'pending' }" @click="filterStatus = 'pending'">Pending</button>
-                <button class="filter-pill" :class="{ active: filterStatus === 'approved' }" @click="filterStatus = 'approved'">Approved</button>
-                <button class="filter-pill" :class="{ active: filterStatus === 'rejected' }" @click="filterStatus = 'rejected'">Rejected</button>
-              </div>
-              <div x-show="filtered.length === 0" class="empty-state">
-                <h4>No approvals</h4>
-                <p class="hint">When agents request permission for sensitive actions, they'll appear here.</p>
-              </div>
-              <div class="card-grid">
-                <template x-for="a in filtered" :key="a.id">
-                  <div class="card approval-card" :class="{ approved: a.status === 'approved', rejected: a.status === 'rejected', expired: a.status === 'expired' }">
-                    <div class="flex justify-between items-center mb-2">
-                      <span class="card-header" style="margin:0" x-text="a.action"></span>
-                      <span class="badge" :class="{ 'badge-warn': a.status === 'pending', 'badge-success': a.status === 'approved', 'badge-error': a.status === 'rejected', 'badge-muted': a.status === 'expired' }" x-text="a.status"></span>
-                    </div>
-                    <div class="text-sm text-dim mb-2" x-text="a.description"></div>
-                    <div class="text-xs text-dim">Agent: <span x-text="a.agent_name"></span> &middot; <span x-text="timeAgo(a.created_at)"></span></div>
-                    <template x-if="a.status === 'pending'">
-                      <div class="approval-actions" style="display:flex;gap:8px;margin-top:12px">
-                        <button class="btn btn-success btn-sm" @click="approve(a.id)">Approve</button>
-                        <button class="btn btn-danger btn-sm" @click="reject(a.id)">Reject</button>
-                      </div>
-                    </template>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </template>
-        </div>
       </div>
     </template>
 
@@ -1900,273 +1823,6 @@
       </div>
     </template>
 
-    <!-- Page: Channels -->
-    <template x-if="page === 'channels'">
-      <div x-data="channelsPage">
-        <div class="page-header">
-          <h2>Channels <span class="badge badge-muted" x-text="configuredCount + '/' + allChannels.length + ' configured'"></span></h2>
-        </div>
-        <div class="page-body" x-init="loadChannels()">
-          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading channels...</span></div>
-          <div x-show="!loading && loadError" class="error-state">
-            <span class="error-icon">!</span>
-            <p x-text="loadError"></p>
-            <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
-          </div>
-          <div x-show="!loading && !loadError">
-
-          <!-- Category tabs -->
-          <div class="flex gap-2 mb-4" style="flex-wrap:wrap">
-            <template x-for="cat in categories" :key="cat.key">
-              <button class="btn btn-sm"
-                      :class="categoryFilter === cat.key ? 'btn-primary' : 'btn-ghost'"
-                      @click="categoryFilter = cat.key"
-                      x-text="cat.label + ' (' + categoryCount(cat.key) + ')'">
-              </button>
-            </template>
-          </div>
-
-          <!-- Search bar -->
-          <div class="mb-4">
-            <input class="form-input" type="text" placeholder="Search channels..."
-                   x-model="searchQuery" style="max-width:400px">
-          </div>
-
-          <!-- Channel card grid -->
-          <div class="card-grid">
-            <template x-for="ch in filteredChannels" :key="ch.name">
-              <div class="card" :class="{ 'card-unconfigured': !ch.configured }" style="cursor:pointer" @click="openSetup(ch)">
-                <div class="flex justify-between items-center mb-2">
-                  <div class="flex items-center gap-2">
-                    <span class="channel-icon" x-text="ch.icon"></span>
-                    <div class="card-header" style="margin:0" x-text="ch.display_name"></div>
-                  </div>
-                  <span class="badge" :class="statusBadge(ch).cls" x-text="statusBadge(ch).text"></span>
-                </div>
-                <div class="card-meta" x-text="ch.description"></div>
-                <div class="flex justify-between items-center mt-2">
-                  <span class="difficulty-badge" :class="difficultyClass(ch.difficulty)" x-text="ch.difficulty + ' · ' + ch.setup_time"></span>
-                  <button class="btn btn-ghost btn-sm" @click.stop="openSetup(ch)" x-text="ch.configured ? 'Edit' : 'Set up'"></button>
-                </div>
-              </div>
-            </template>
-          </div>
-
-          <div x-show="filteredChannels.length === 0" class="text-dim mt-4" style="text-align:center">
-            <p>No channels match your search.</p>
-          </div>
-
-          </div>
-
-          <!-- Setup modal (OpenClaw-style with QR support + 3-step flow) -->
-          <template x-if="setupModal">
-            <div class="modal-overlay" @click.self="setupModal = null" @keydown.escape.window="setupModal = null">
-              <div class="modal" style="max-width:480px">
-                <div class="modal-header">
-                  <div>
-                    <h3 style="display:flex;align-items:center;gap:0.5rem">
-                      <span class="channel-icon" x-text="setupModal.icon" style="font-size:1rem"></span>
-                      <span x-text="setupModal.display_name"></span>
-                    </h3>
-                    <div class="text-xs text-dim mt-1" x-text="setupModal.quick_setup || setupModal.description"></div>
-                  </div>
-                  <button class="modal-close" @click="setupModal = null">&times;</button>
-                </div>
-
-                <!-- 3-step progress indicator (non-QR channels only) -->
-                <div class="channel-steps" x-show="!isQrChannel()">
-                  <div class="channel-step-item">
-                    <div class="channel-step-num" :class="{ active: setupStep === 1, done: setupStep > 1 }">
-                      <span x-show="setupStep <= 1">1</span><span x-show="setupStep > 1">&#10003;</span>
-                    </div>
-                    <span class="channel-step-label" :class="{ active: setupStep === 1, done: setupStep > 1 }">Configure</span>
-                  </div>
-                  <div class="channel-step-line" :class="{ done: setupStep > 1 }"></div>
-                  <div class="channel-step-item">
-                    <div class="channel-step-num" :class="{ active: setupStep === 2, done: setupStep > 2 }">
-                      <span x-show="setupStep <= 2">2</span><span x-show="setupStep > 2">&#10003;</span>
-                    </div>
-                    <span class="channel-step-label" :class="{ active: setupStep === 2, done: setupStep > 2 }">Verify</span>
-                  </div>
-                  <div class="channel-step-line" :class="{ done: setupStep > 2 }"></div>
-                  <div class="channel-step-item">
-                    <div class="channel-step-num" :class="{ active: setupStep === 3, done: setupStep >= 3 }">
-                      <span x-show="setupStep < 3">3</span><span x-show="setupStep >= 3">&#10003;</span>
-                    </div>
-                    <span class="channel-step-label" :class="{ active: setupStep === 3, done: setupStep >= 3 }">Ready</span>
-                  </div>
-                </div>
-
-                <!-- Ready panel (step 3) for non-QR channels -->
-                <div x-show="!isQrChannel() && setupStep === 3 && testPassed" class="ready-panel">
-                  <div class="ready-panel-icon">&#10003;</div>
-                  <div class="ready-panel-title" x-text="setupModal.display_name + ' is ready!'"></div>
-                  <div class="ready-panel-desc">
-                    Your channel is configured and verified. It will activate automatically.
-                  </div>
-                  <div class="flex gap-2 mt-4" style="justify-content:center">
-                    <button class="btn btn-ghost btn-sm" @click="setupStep = 1">Edit Config</button>
-                    <button class="btn btn-primary btn-sm" @click="setupModal = null">Done</button>
-                  </div>
-                </div>
-
-                <!-- ═══ QR CODE FLOW (WhatsApp Web style) ═══ -->
-                <template x-if="isQrChannel() && !showBusinessApi">
-                  <div>
-                    <!-- QR: Loading -->
-                    <div x-show="qr.loading" style="text-align:center;padding:2rem 0">
-                      <div class="spinner"></div>
-                      <p class="text-sm text-dim mt-2">Connecting to WhatsApp Web gateway...</p>
-                    </div>
-
-                    <!-- QR: Gateway available — show QR code -->
-                    <div x-show="!qr.loading && qr.available && qr.dataUrl && !qr.connected" style="text-align:center">
-                      <div style="background:#fff;display:inline-block;padding:1rem;border-radius:12px;margin:0.5rem 0">
-                        <img :src="qr.dataUrl" alt="WhatsApp QR Code" style="width:256px;height:256px;image-rendering:pixelated">
-                      </div>
-                      <ol style="text-align:left;font-size:0.85rem;margin:1rem 0;padding-left:1.5rem;opacity:0.8">
-                        <template x-for="(step, i) in setupModal.setup_steps || []" :key="i">
-                          <li x-text="step" style="margin-bottom:0.25rem"></li>
-                        </template>
-                      </ol>
-                      <p class="text-xs text-dim" x-text="qr.message"></p>
-                      <button class="btn btn-ghost btn-sm mt-2" x-show="qr.expired" @click="startQR()">Generate New QR</button>
-                    </div>
-
-                    <!-- QR: Connected! -->
-                    <div x-show="!qr.loading && qr.connected" style="text-align:center;padding:2rem 0">
-                      <div style="font-size:3rem;margin-bottom:0.5rem">&#10003;</div>
-                      <p class="text-sm" style="font-weight:600" x-text="qr.message || 'WhatsApp linked successfully!'"></p>
-                      <p class="text-xs text-dim mt-1">Channel will activate automatically.</p>
-                    </div>
-
-                    <!-- QR: Gateway not available — show setup hint -->
-                    <div x-show="!qr.loading && !qr.available" style="padding:1rem 0">
-                      <div style="background:var(--bg-secondary,#1a1a2e);border-radius:8px;padding:1.25rem;text-align:center">
-                        <div style="font-size:2rem;margin-bottom:0.5rem;opacity:0.5">&#128241;</div>
-                        <p class="text-sm" x-text="qr.message || 'WhatsApp Web gateway not available'"></p>
-                        <p class="text-xs text-dim mt-2" x-show="qr.help" x-text="qr.help"></p>
-                        <p class="text-xs text-dim mt-1" x-show="qr.error" style="color:var(--red,#ef4444)" x-text="qr.error"></p>
-                      </div>
-                      <p class="text-xs text-dim mt-3" style="text-align:center">
-                        Or use the <button class="btn-link" @click="showBusinessApi = true" style="font-size:inherit;text-decoration:underline;cursor:pointer;background:none;border:none;color:var(--accent,#818cf8);padding:0">Business API</button> with a Meta developer account.
-                      </p>
-                    </div>
-
-                    <!-- QR: Switch to Business API link (always visible when gateway is available) -->
-                    <div x-show="!qr.loading && qr.available" class="text-xs text-dim mt-2" style="text-align:center">
-                      Have a Meta Business account? <button class="btn-link" @click="showBusinessApi = true" style="font-size:inherit;text-decoration:underline;cursor:pointer;background:none;border:none;color:var(--accent,#818cf8);padding:0">Use Business API instead</button>
-                    </div>
-
-                    <!-- Action buttons for QR mode -->
-                    <div class="flex gap-2 mt-4" style="flex-wrap:wrap;justify-content:center" x-show="!qr.loading">
-                      <button class="btn btn-ghost" x-show="qr.available && !qr.connected && !qr.expired" @click="startQR()">Refresh QR</button>
-                      <button class="btn btn-ghost" x-show="setupModal.configured" @click="testChannel()"
-                              :disabled="testing[setupModal.name]"
-                              x-text="testing[setupModal.name] ? 'Testing...' : 'Test Connection'">
-                      </button>
-                      <button class="btn btn-ghost" style="color:var(--red,#ef4444)" x-show="setupModal.configured" @click="removeChannel()">Remove</button>
-                    </div>
-                  </div>
-                </template>
-
-                <!-- ═══ STANDARD FORM FLOW (for non-QR channels, or Business API fallback) ═══ -->
-                <template x-if="(!isQrChannel() || showBusinessApi) && !(setupStep === 3 && testPassed && !isQrChannel())">
-                  <div>
-                    <!-- Back to QR link (only for QR channels in Business API mode) -->
-                    <div x-show="isQrChannel() && showBusinessApi" class="mb-3">
-                      <button class="btn btn-ghost btn-sm" @click="showBusinessApi = false" style="font-size:0.8rem">&larr; Back to QR scan</button>
-                      <p class="text-xs text-dim mt-1">Configure via WhatsApp Cloud API (requires a Meta Business developer account).</p>
-                    </div>
-
-                    <!-- Quick setup steps (collapsed, minimal) -->
-                    <details class="mb-4" style="font-size:0.8rem" x-show="!isQrChannel()">
-                      <summary class="text-dim" style="cursor:pointer">How to get credentials</summary>
-                      <ol class="setup-steps" style="margin-top:0.5rem">
-                        <template x-for="(step, i) in setupModal.setup_steps || []" :key="i">
-                          <li class="text-sm" x-text="step"></li>
-                        </template>
-                      </ol>
-                    </details>
-
-                    <!-- Basic fields only (the minimum to get started) -->
-                    <template x-for="f in (isQrChannel() && showBusinessApi) ? advancedFields() : basicFields()" :key="f.key">
-                      <div style="margin-bottom:0.75rem">
-                        <label class="text-sm" style="display:block;margin-bottom:0.25rem" x-text="f.label + (f.required ? ' *' : '')"></label>
-                        <template x-if="f.type === 'secret'">
-                          <input class="form-input" type="password"
-                                 x-model="formValues[f.key]"
-                                 :placeholder="f.has_value ? '••••••• (set — leave blank to keep)' : f.placeholder"
-                                 :required="f.required">
-                        </template>
-                        <template x-if="f.type === 'number'">
-                          <input class="form-input" type="number"
-                                 x-model="formValues[f.key]"
-                                 :placeholder="f.placeholder">
-                        </template>
-                        <template x-if="f.type === 'text' || f.type === 'list'">
-                          <input class="form-input" type="text"
-                                 x-model="formValues[f.key]"
-                                 :placeholder="f.type === 'list' ? f.placeholder + ' (comma-separated)' : f.placeholder">
-                        </template>
-                        <div class="text-xs text-dim" style="margin-top:2px"
-                             x-show="f.env_var && f.has_value"
-                             x-text="f.env_var + ' is set'"></div>
-                      </div>
-                    </template>
-
-                    <!-- Advanced toggle (only for non-QR channels) -->
-                    <template x-if="!isQrChannel() && hasAdvanced()">
-                      <div>
-                        <button class="btn btn-ghost btn-sm mb-2" @click="showAdvanced = !showAdvanced"
-                                x-text="showAdvanced ? 'Hide advanced' : 'Show advanced (' + advancedFields().length + ')'"></button>
-                        <template x-if="showAdvanced">
-                          <div>
-                            <template x-for="f in advancedFields()" :key="f.key">
-                              <div style="margin-bottom:0.75rem">
-                                <label class="text-sm text-dim" style="display:block;margin-bottom:0.25rem" x-text="f.label"></label>
-                                <template x-if="f.type === 'secret'">
-                                  <input class="form-input" type="password"
-                                         x-model="formValues[f.key]"
-                                         :placeholder="f.has_value ? '••••••• (set)' : f.placeholder">
-                                </template>
-                                <template x-if="f.type === 'number'">
-                                  <input class="form-input" type="number"
-                                         x-model="formValues[f.key]"
-                                         :placeholder="f.placeholder">
-                                </template>
-                                <template x-if="f.type === 'text' || f.type === 'list'">
-                                  <input class="form-input" type="text"
-                                         x-model="formValues[f.key]"
-                                         :placeholder="f.type === 'list' ? f.placeholder + ' (comma-separated)' : f.placeholder">
-                                </template>
-                              </div>
-                            </template>
-                          </div>
-                        </template>
-                      </div>
-                    </template>
-
-                    <!-- Action buttons -->
-                    <div class="flex gap-2 mt-4" style="flex-wrap:wrap">
-                      <button class="btn btn-primary" @click="saveChannel()" :disabled="configuring"
-                              x-text="configuring ? 'Saving...' : (setupModal.configured ? 'Update' : 'Save & Test')">
-                      </button>
-                      <button class="btn btn-ghost" x-show="setupModal.configured" @click="testChannel()"
-                              :disabled="testing[setupModal.name]"
-                              x-text="testing[setupModal.name] ? 'Testing...' : 'Test'">
-                      </button>
-                      <button class="btn btn-ghost" style="color:var(--red,#ef4444)" x-show="setupModal.configured" @click="removeChannel()">Remove</button>
-                    </div>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </template>
-        </div>
-      </div>
-    </template>
-
     <!-- Page: Skills -->
     <template x-if="page === 'skills'">
       <div x-data="skillsPage">
@@ -2174,7 +1830,7 @@
         <div class="page-body" x-init="loadSkills()">
           <div class="info-card">
             <h4>Skills &amp; Ecosystem</h4>
-            <p>Skills extend your agents with new capabilities. OpenCarrier supports the <strong>OpenClaw/ClawHub</strong> ecosystem (3,000+ community skills) plus local skills.</p>
+            <p>Skills extend your agents with new capabilities. OpenCarrier supports the <strong>ClawHub</strong> ecosystem (3,000+ community skills) plus local skills.</p>
             <ul>
               <li><strong>Prompt-only</strong> &mdash; inject context and instructions into the agent's system prompt (most ClawHub skills)</li>
               <li><strong>Python / Node.js</strong> &mdash; executable tools that agents can call during conversations</li>
@@ -2237,7 +1893,7 @@
             </div>
           </div>
 
-          <!-- TAB: ClawHub (OpenClaw Ecosystem) -->
+          <!-- TAB: ClawHub (Skill Ecosystem) -->
           <div x-show="tab === 'clawhub'">
             <!-- Search bar with live search and clear button -->
             <div class="search-input mb-4" style="position:relative">
@@ -2271,7 +1927,7 @@
             <div x-show="clawhubError && !clawhubLoading" class="error-state">
               <span class="error-icon">!</span>
               <p x-text="clawhubError"></p>
-              <p class="hint mt-2">ClawHub may be temporarily unavailable. The OpenClaw ecosystem is hosted at clawhub.ai.</p>
+              <p class="hint mt-2">ClawHub may be temporarily unavailable. The ClawHub ecosystem is hosted at clawhub.ai.</p>
               <button class="btn btn-ghost btn-sm mt-2" @click="clawhubSearch ? searchClawHub() : browseClawHub(clawhubSort)">Retry</button>
             </div>
 
@@ -2339,7 +1995,7 @@
           <div x-show="tab === 'mcp'">
             <div class="info-card">
               <h4>MCP Servers (Model Context Protocol)</h4>
-              <p>MCP servers provide external tools to your agents &mdash; GitHub, filesystem, databases, APIs, and more. OpenCarrier is compatible with all OpenClaw MCP servers.</p>
+              <p>MCP servers provide external tools to your agents &mdash; GitHub, filesystem, databases, APIs, and more. OpenCarrier supports the standard MCP protocol.</p>
               <p class="mt-2" style="font-size:0.8rem;color:var(--text-dim)">Configure MCP servers in your <code>config.toml</code> under <code>[mcp_servers]</code>.</p>
             </div>
             <div x-show="mcpLoading" class="loading-state"><div class="spinner"></div><span>Loading MCP servers...</span></div>
@@ -2402,7 +2058,7 @@ timeout_secs = 30
 type = "stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
-                <p class="hint mt-2" style="font-size:0.75rem">OpenCarrier supports all OpenClaw-compatible MCP servers.</p>
+                <p class="hint mt-2" style="font-size:0.75rem">OpenCarrier supports all standard MCP-compatible servers.</p>
               </div>
             </div>
           </div>
@@ -3197,7 +2853,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'network' }" @click="tab = 'network'; if (!peers.length && !peersLoading) { loadPeers(); startPeerPolling(); }">Network</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'budget' }" @click="tab = 'budget'">Budget</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'">System</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'migration' }" @click="tab = 'migration'">Migration</div>
           </div>
 
           <!-- Providers tab -->
@@ -3224,17 +2879,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </template>
                   <template x-if="p.auth_status !== 'configured' && p.api_key_env">
                     <div class="text-xs text-dim mt-2">Or set <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px" x-text="p.api_key_env"></code> in your environment and restart</div>
-                  </template>
-                  <!-- Copilot OAuth button -->
-                  <template x-if="p.id === 'github-copilot' && p.auth_status !== 'configured'">
-                    <div class="mt-2">
-                      <button class="btn btn-primary btn-sm" @click="startCopilotOAuth()" :disabled="copilotOAuth.polling" x-show="!copilotOAuth.userCode">Login with GitHub</button>
-                      <div x-show="copilotOAuth.userCode" class="mt-2">
-                        <div class="text-sm">Visit <a :href="copilotOAuth.verificationUri" target="_blank" x-text="copilotOAuth.verificationUri" style="color:var(--accent-light)"></a> and enter:</div>
-                        <div style="font-size:24px;font-weight:bold;letter-spacing:4px;margin:8px 0;color:var(--accent-light)" x-text="copilotOAuth.userCode"></div>
-                        <div class="text-xs text-dim"><span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:middle"></span> Waiting for authorization...</div>
-                      </div>
-                    </div>
                   </template>
                   <!-- Claude Code install hint -->
                   <template x-if="p.id === 'claude-code' && p.auth_status !== 'configured'">
@@ -3818,94 +3462,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </table>
               </div>
               <div class="text-xs text-dim" x-show="!agentRanking.length">No spending recorded today.</div>
-            </div>
-          </div>
-
-          <!-- Migration tab -->
-          <div x-show="tab === 'migration'">
-            <div class="card mb-4" style="border-left:3px solid var(--accent)" x-show="migStep === 'intro'">
-              <div class="font-bold" style="font-size:14px;margin-bottom:6px">Migrate from OpenClaw</div>
-              <div class="text-sm text-dim" style="line-height:1.7">
-                Seamlessly transfer your agents, memory, workspace files, and channel configurations from OpenClaw to OpenCarrier.
-              </div>
-              <ul class="text-sm text-dim" style="margin:8px 0 0 16px;line-height:1.8">
-                <li>Converts agent.yaml to agent.toml with proper capabilities</li>
-                <li>Maps tools (read_file &rarr; file_read, execute_command &rarr; shell_exec, etc.)</li>
-                <li>Merges channel configs into config.toml</li>
-                <li>Copies workspace files and memory data</li>
-              </ul>
-              <div class="flex gap-2 mt-4">
-                <button class="btn btn-primary" @click="autoDetect()" :disabled="detecting">
-                  <span x-show="!detecting">Auto-Detect OpenClaw</span>
-                  <span x-show="detecting">Scanning...</span>
-                </button>
-                <button class="btn btn-ghost" @click="migStep = 'manual'">Enter Path Manually</button>
-              </div>
-            </div>
-
-            <div class="card mb-4" x-show="migStep === 'manual'" style="border-left:3px solid var(--accent)">
-              <div class="font-bold" style="font-size:14px;margin-bottom:8px">Specify OpenClaw Path</div>
-              <div class="form-group">
-                <label>OpenClaw Home Directory</label>
-                <input class="form-input" type="text" x-model="sourcePath" placeholder="~/.openclaw" style="font-family:monospace;font-size:12px">
-              </div>
-              <div class="form-group mt-2">
-                <label>OpenCarrier Target Directory</label>
-                <input class="form-input" type="text" x-model="targetPath" placeholder="~/.opencarrier (default)" style="font-family:monospace;font-size:12px">
-              </div>
-              <div class="flex gap-2 mt-4">
-                <button class="btn btn-primary" @click="scanPath()" :disabled="!sourcePath || scanning">
-                  <span x-show="!scanning">Scan Directory</span>
-                  <span x-show="scanning">Scanning...</span>
-                </button>
-                <button class="btn btn-ghost" @click="migStep = 'intro'">Back</button>
-              </div>
-            </div>
-
-            <div x-show="migStep === 'preview' && scanResult">
-              <div class="card mb-4" style="border-left:3px solid var(--success, #22c55e)">
-                <div class="flex justify-between items-center mb-2">
-                  <div class="font-bold" style="font-size:14px">OpenClaw Workspace Found</div>
-                  <span class="badge badge-connected">Ready to Migrate</span>
-                </div>
-                <div class="text-sm text-dim" style="font-family:monospace" x-text="scanResult.path"></div>
-              </div>
-              <div class="stats-row mb-4">
-                <div class="stat-card"><div class="stat-value" x-text="scanResult.agents ? scanResult.agents.length : 0"></div><div class="stat-label">Agents</div></div>
-                <div class="stat-card"><div class="stat-value" x-text="scanResult.channels ? scanResult.channels.length : 0"></div><div class="stat-label">Channels</div></div>
-                <div class="stat-card"><div class="stat-value" x-text="scanResult.skills ? scanResult.skills.length : 0"></div><div class="stat-label">Skills</div></div>
-              </div>
-              <div class="flex gap-2 mb-4">
-                <button class="btn btn-primary" @click="runMigration(false)" :disabled="migrating">
-                  <span x-show="!migrating">Migrate Now</span>
-                  <span x-show="migrating">Migrating...</span>
-                </button>
-                <button class="btn btn-ghost" @click="runMigration(true)" :disabled="migrating">Dry Run</button>
-                <button class="btn btn-ghost" @click="migStep = 'intro'; scanResult = null">Start Over</button>
-              </div>
-            </div>
-
-            <div x-show="migStep === 'result' && migResult">
-              <div class="card mb-4" :style="'border-left:3px solid ' + (migResult.status === 'completed' ? 'var(--success, #22c55e)' : 'var(--error)')">
-                <div class="flex justify-between items-center mb-2">
-                  <div class="font-bold" style="font-size:14px" x-text="migResult.dry_run ? 'Dry Run Complete' : 'Migration Complete!'"></div>
-                  <span class="badge" :class="migResult.status === 'completed' ? 'badge-connected' : 'badge-crashed'" x-text="migResult.status === 'completed' ? 'SUCCESS' : 'FAILED'"></span>
-                </div>
-                <div class="text-sm text-dim" x-show="migResult.error" style="color:var(--error)" x-text="migResult.error"></div>
-              </div>
-              <div class="flex gap-2">
-                <button class="btn btn-primary" x-show="migResult.dry_run" @click="runMigration(false)" :disabled="migrating">Run Migration for Real</button>
-                <button class="btn btn-ghost" @click="migStep = 'intro'; migResult = null; scanResult = null">Start New Migration</button>
-              </div>
-            </div>
-
-            <div class="card" x-show="migStep === 'not_found'" style="border-left:3px solid var(--warning, #f59e0b)">
-              <div class="font-bold mb-2" style="font-size:14px">OpenClaw Not Found</div>
-              <div class="text-sm text-dim">Could not auto-detect an OpenClaw installation.</div>
-              <div class="flex gap-2 mt-4">
-                <button class="btn btn-primary" @click="migStep = 'manual'">Enter Path Manually</button>
-                <button class="btn btn-ghost" @click="migStep = 'intro'">Back</button>
-              </div>
             </div>
           </div>
 

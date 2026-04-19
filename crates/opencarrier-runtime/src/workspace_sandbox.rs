@@ -40,17 +40,53 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
             .canonicalize()
             .map_err(|e| format!("Failed to resolve path: {e}"))?
     } else {
-        // For new files: canonicalize the parent and append the filename
-        let parent = candidate
-            .parent()
-            .ok_or_else(|| "Invalid path: no parent directory".to_string())?;
-        let filename = candidate
-            .file_name()
-            .ok_or_else(|| "Invalid path: no filename".to_string())?;
-        let canon_parent = parent
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve parent directory: {e}"))?;
-        canon_parent.join(filename)
+        // For new files: find the nearest existing ancestor, canonicalize it,
+        // then re-append the remaining path components and create intermediate dirs.
+        // Collect path components from leaf to ancestor (e.g. ["file.md", "subdir", "knowledge"])
+        let mut ancestor = candidate.clone();
+        let mut components: Vec<std::ffi::OsString> = Vec::new();
+
+        loop {
+            let name = ancestor
+                .file_name()
+                .ok_or_else(|| "Invalid path: no filename".to_string())?
+                .to_os_string();
+            components.push(name);
+
+            let parent = ancestor
+                .parent()
+                .ok_or_else(|| "Invalid path: no parent directory".to_string())?;
+
+            if parent.exists() {
+                let canon_parent = parent
+                    .canonicalize()
+                    .map_err(|e| format!("Failed to resolve parent directory: {e}"))?;
+                // Verify the existing ancestor is inside the sandbox
+                if !canon_parent.starts_with(&canon_root) {
+                    return Err(format!(
+                        "Access denied: path '{}' resolves outside workspace",
+                        user_path
+                    ));
+                }
+
+                // components was collected leaf-to-ancestor, rev gives ancestor-to-leaf
+                // e.g. ["knowledge", "subdir", "file.md"]
+                // Create directories for all but the last component (the filename)
+                let rev: Vec<_> = components.into_iter().rev().collect();
+                let mut current = canon_parent.clone();
+                for part in rev.iter().take(rev.len() - 1) {
+                    current = current.join(part);
+                    if !current.exists() {
+                        std::fs::create_dir(&current).map_err(|e| {
+                            format!("Failed to create directory '{}': {e}", current.display())
+                        })?;
+                    }
+                }
+                // Append the filename (last component)
+                break current.join(rev.last().unwrap());
+            }
+            ancestor = parent.to_path_buf();
+        }
     };
 
     // Verify the canonical path is inside the workspace
@@ -208,6 +244,33 @@ mod tests {
         let resolved = result.unwrap();
         assert!(resolved.starts_with(dir.path().canonicalize().unwrap()));
         assert!(resolved.ends_with("new_file.txt"));
+    }
+
+    #[test]
+    fn test_nonexistent_file_with_missing_parent_dirs() {
+        let dir = TempDir::new().unwrap();
+
+        // knowledge/ does NOT exist yet — this is the failing case
+        let result = resolve_sandbox_path("knowledge/city-beijing.md", dir.path());
+        assert!(result.is_ok(), "Expected OK, got: {:?}", result);
+        let resolved = result.unwrap();
+        assert!(resolved.starts_with(dir.path().canonicalize().unwrap()));
+        assert!(resolved.ends_with("city-beijing.md"));
+        // The intermediate directory should have been created
+        assert!(resolved.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn test_nonexistent_file_with_deeply_missing_parents() {
+        let dir = TempDir::new().unwrap();
+
+        // Neither skills/ nor sub/ exists
+        let result = resolve_sandbox_path("skills/sub/deep/file.md", dir.path());
+        assert!(result.is_ok(), "Expected OK, got: {:?}", result);
+        let resolved = result.unwrap();
+        assert!(resolved.starts_with(dir.path().canonicalize().unwrap()));
+        assert!(resolved.ends_with("file.md"));
+        assert!(resolved.parent().unwrap().exists());
     }
 
     #[cfg(unix)]

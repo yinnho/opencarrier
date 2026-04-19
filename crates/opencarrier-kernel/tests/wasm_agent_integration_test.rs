@@ -107,6 +107,29 @@ const HOST_CALL_PROXY_WAT: &str = r#"
 "#;
 
 fn test_config(tmp: &tempfile::TempDir) -> KernelConfig {
+    // Create minimal brain.json for tests
+    let brain_json = serde_json::json!({
+        "providers": {
+            "ollama": { "api_key_env": "" }
+        },
+        "endpoints": {
+            "ollama_chat": {
+                "provider": "ollama",
+                "model": "test",
+                "base_url": "http://localhost:11434/v1",
+                "format": "openai"
+            }
+        },
+        "modalities": {
+            "chat": {
+                "primary": "ollama_chat",
+                "description": "Chat modality"
+            }
+        },
+        "default_modality": "chat"
+    });
+    std::fs::write(tmp.path().join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap()).unwrap();
+
     KernelConfig {
         home_dir: tmp.path().to_path_buf(),
         data_dir: tmp.path().join("data"),

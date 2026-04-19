@@ -34,6 +34,30 @@ impl Drop for TestServer {
 async fn start_test_server() -> TestServer {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
 
+    // Create minimal brain.json for tests
+    let brain_json = serde_json::json!({
+        "providers": {
+            "ollama": { "api_key_env": "" }
+        },
+        "endpoints": {
+            "ollama_chat": {
+                "provider": "ollama",
+                "model": "test-model",
+                "base_url": "http://localhost:11434/v1",
+                "format": "openai"
+            }
+        },
+        "modalities": {
+            "chat": {
+                "primary": "ollama_chat",
+                "description": "Chat modality"
+            }
+        },
+        "default_modality": "chat"
+    });
+    std::fs::write(tmp.path().join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap())
+        .expect("Failed to write brain.json");
+
     let config = KernelConfig {
         home_dir: tmp.path().to_path_buf(),
         data_dir: tmp.path().join("data"),
@@ -53,10 +77,7 @@ async fn start_test_server() -> TestServer {
     let state = Arc::new(AppState {
         kernel,
         started_at: Instant::now(),
-        bridge_manager: tokio::sync::Mutex::new(None),
-        channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache::new(),
     });
 
@@ -92,14 +113,6 @@ async fn start_test_server() -> TestServer {
         .route("/api/models", axum::routing::get(routes::list_models))
         .route("/api/providers", axum::routing::get(routes::list_providers))
         .route("/api/usage", axum::routing::get(routes::usage_stats))
-        .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
-        )
         .route("/api/config", axum::routing::get(routes::get_config))
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(TraceLayer::new_for_http())
@@ -420,72 +433,6 @@ async fn load_session_management() {
         session_ids.len(),
         start.elapsed().as_millis()
     );
-}
-
-/// Test: Workflow creation and listing under load.
-#[tokio::test]
-async fn load_workflow_operations() {
-    let server = start_test_server().await;
-    let client = reqwest::Client::new();
-
-    let n = 15;
-    let start = Instant::now();
-
-    // Create workflows concurrently
-    let mut handles = Vec::new();
-    for i in 0..n {
-        let c = client.clone();
-        let url = format!("{}/api/workflows", server.base_url);
-        handles.push(tokio::spawn(async move {
-            let res = c
-                .post(&url)
-                .json(&serde_json::json!({
-                    "name": format!("wf-{i}"),
-                    "description": format!("Load test workflow {i}"),
-                    "steps": [{
-                        "name": "step1",
-                        "agent_name": "test-agent",
-                        "mode": "sequential",
-                        "prompt": "{{input}}"
-                    }]
-                }))
-                .send()
-                .await
-                .expect("request failed");
-            res.status().as_u16()
-        }));
-    }
-
-    let mut created = 0;
-    for h in handles {
-        let status = h.await.unwrap();
-        if status == 200 || status == 201 {
-            created += 1;
-        }
-    }
-
-    let elapsed = start.elapsed();
-    eprintln!(
-        "  [LOAD] Created {created}/{n} workflows in {:.0}ms",
-        elapsed.as_millis()
-    );
-
-    // List all workflows
-    let start = Instant::now();
-    let workflows: serde_json::Value = client
-        .get(format!("{}/api/workflows", server.base_url))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let wf_count = workflows.as_array().map(|a| a.len()).unwrap_or(0);
-    eprintln!(
-        "  [LOAD] Listed {wf_count} workflows in {:.1}ms",
-        start.elapsed().as_secs_f64() * 1000.0
-    );
-    assert!(wf_count >= created);
 }
 
 /// Test: Agent spawn + kill cycle — stress the registry.

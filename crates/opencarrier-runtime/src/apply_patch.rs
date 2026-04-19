@@ -276,6 +276,18 @@ fn resolve_patch_path(raw: &str, workspace_root: &Path) -> Result<PathBuf, Strin
     crate::workspace_sandbox::resolve_sandbox_path(raw, workspace_root)
 }
 
+/// Check if a relative path targets a protected config file.
+/// Protected files (agent.toml, SOUL.md) may only be modified via trainer tools.
+fn is_protected_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let name = normalized.trim_end_matches('/');
+    // Match both "agent.toml" and "./agent.toml" etc.
+    name == "agent.toml"
+        || name == "SOUL.md"
+        || name.ends_with("/agent.toml")
+        || name.ends_with("/SOUL.md")
+}
+
 /// Apply parsed patch operations against the filesystem.
 ///
 /// All file paths are confined to `workspace_root` via sandbox resolution.
@@ -284,27 +296,53 @@ pub async fn apply_patch(ops: &[PatchOp], workspace_root: &Path) -> PatchResult 
 
     for op in ops {
         match op {
-            PatchOp::AddFile { path, content } => match resolve_patch_path(path, workspace_root) {
-                Ok(resolved) => {
-                    if let Some(parent) = resolved.parent() {
-                        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                            result.errors.push(format!("mkdir {}: {}", path, e));
-                            continue;
+            PatchOp::AddFile { path, content } => {
+                if is_protected_path(path) {
+                    result.errors.push(format!(
+                        "{}: write denied — protected config file (only trainer may modify)",
+                        path
+                    ));
+                    continue;
+                }
+                match resolve_patch_path(path, workspace_root) {
+                    Ok(resolved) => {
+                        if let Some(parent) = resolved.parent() {
+                            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                                result.errors.push(format!("mkdir {}: {}", path, e));
+                                continue;
+                            }
+                        }
+                        match tokio::fs::write(&resolved, content).await {
+                            Ok(()) => result.files_added += 1,
+                            Err(e) => result.errors.push(format!("write {}: {}", path, e)),
                         }
                     }
-                    match tokio::fs::write(&resolved, content).await {
-                        Ok(()) => result.files_added += 1,
-                        Err(e) => result.errors.push(format!("write {}: {}", path, e)),
-                    }
+                    Err(e) => result.errors.push(format!("{}: {}", path, e)),
                 }
-                Err(e) => result.errors.push(format!("{}: {}", path, e)),
-            },
+            }
 
             PatchOp::UpdateFile {
                 path,
                 move_to,
                 hunks,
             } => {
+                if is_protected_path(path) {
+                    result.errors.push(format!(
+                        "{}: write denied — protected config file (only trainer may modify)",
+                        path
+                    ));
+                    continue;
+                }
+                // Also protect move_to targets
+                if let Some(mt) = move_to {
+                    if is_protected_path(mt) {
+                        result.errors.push(format!(
+                            "{}: move target denied — protected config file (only trainer may modify)",
+                            mt
+                        ));
+                        continue;
+                    }
+                }
                 let resolved = match resolve_patch_path(path, workspace_root) {
                     Ok(r) => r,
                     Err(e) => {
@@ -364,15 +402,24 @@ pub async fn apply_patch(ops: &[PatchOp], workspace_root: &Path) -> PatchResult 
                 }
             }
 
-            PatchOp::DeleteFile { path } => match resolve_patch_path(path, workspace_root) {
-                Ok(resolved) => match tokio::fs::remove_file(&resolved).await {
-                    Ok(()) => result.files_deleted += 1,
-                    Err(e) => {
-                        result.errors.push(format!("delete {}: {}", path, e));
-                    }
-                },
-                Err(e) => result.errors.push(format!("{}: {}", path, e)),
-            },
+            PatchOp::DeleteFile { path } => {
+                if is_protected_path(path) {
+                    result.errors.push(format!(
+                        "{}: delete denied — protected config file (only trainer may modify)",
+                        path
+                    ));
+                    continue;
+                }
+                match resolve_patch_path(path, workspace_root) {
+                    Ok(resolved) => match tokio::fs::remove_file(&resolved).await {
+                        Ok(()) => result.files_deleted += 1,
+                        Err(e) => {
+                            result.errors.push(format!("delete {}: {}", path, e));
+                        }
+                    },
+                    Err(e) => result.errors.push(format!("{}: {}", path, e)),
+                }
+            }
         }
     }
 

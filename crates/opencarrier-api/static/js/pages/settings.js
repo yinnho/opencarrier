@@ -25,7 +25,6 @@ function settingsPage() {
     providerUrlSaving: {},
     providerTesting: {},
     providerTestResults: {},
-    copilotOAuth: { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 },
     customProviderName: '',
     customProviderUrl: '',
     customProviderKey: '',
@@ -150,16 +149,6 @@ function settingsPage() {
     peersLoading: false,
     peersLoadError: '',
     _peerPollTimer: null,
-
-    // -- Migration state --
-    migStep: 'intro',
-    detecting: false,
-    scanning: false,
-    migrating: false,
-    sourcePath: '',
-    targetPath: '',
-    scanResult: null,
-    migResult: null,
 
     // -- Settings load --
     async loadSettings() {
@@ -426,54 +415,6 @@ function settingsPage() {
       }
     },
 
-    async startCopilotOAuth() {
-      this.copilotOAuth.polling = true;
-      this.copilotOAuth.userCode = '';
-      try {
-        var resp = await OpenCarrierAPI.post('/api/providers/github-copilot/oauth/start', {});
-        this.copilotOAuth.userCode = resp.user_code;
-        this.copilotOAuth.verificationUri = resp.verification_uri;
-        this.copilotOAuth.pollId = resp.poll_id;
-        this.copilotOAuth.interval = resp.interval || 5;
-        window.open(resp.verification_uri, '_blank');
-        this.pollCopilotOAuth();
-      } catch(e) {
-        OpenCarrierToast.error('Failed to start Copilot login: ' + e.message);
-        this.copilotOAuth.polling = false;
-      }
-    },
-
-    pollCopilotOAuth() {
-      var self = this;
-      setTimeout(async function() {
-        if (!self.copilotOAuth.pollId) return;
-        try {
-          var resp = await OpenCarrierAPI.get('/api/providers/github-copilot/oauth/poll/' + self.copilotOAuth.pollId);
-          if (resp.status === 'complete') {
-            OpenCarrierToast.success('GitHub Copilot authenticated successfully!');
-            self.copilotOAuth = { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 };
-            await self.loadProviders();
-            await self.loadModels();
-          } else if (resp.status === 'pending') {
-            if (resp.interval) self.copilotOAuth.interval = resp.interval;
-            self.pollCopilotOAuth();
-          } else if (resp.status === 'expired') {
-            OpenCarrierToast.error('Device code expired. Please try again.');
-            self.copilotOAuth = { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 };
-          } else if (resp.status === 'denied') {
-            OpenCarrierToast.error('Access denied by user.');
-            self.copilotOAuth = { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 };
-          } else {
-            OpenCarrierToast.error('OAuth error: ' + (resp.error || resp.status));
-            self.copilotOAuth = { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 };
-          }
-        } catch(e) {
-          OpenCarrierToast.error('Poll error: ' + e.message);
-          self.copilotOAuth = { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 };
-        }
-      }, self.copilotOAuth.interval * 1000);
-    },
-
     async testProvider(provider) {
       this.providerTesting[provider.id] = true;
       this.providerTestResults[provider.id] = null;
@@ -663,62 +604,6 @@ function settingsPage() {
 
     stopPeerPolling() {
       if (this._peerPollTimer) { clearInterval(this._peerPollTimer); this._peerPollTimer = null; }
-    },
-
-    // -- Migration methods --
-    async autoDetect() {
-      this.detecting = true;
-      try {
-        var data = await OpenCarrierAPI.get('/api/migrate/detect');
-        if (data.detected && data.scan) {
-          this.sourcePath = data.path;
-          this.scanResult = data.scan;
-          this.migStep = 'preview';
-        } else {
-          this.migStep = 'not_found';
-        }
-      } catch(e) {
-        this.migStep = 'not_found';
-      }
-      this.detecting = false;
-    },
-
-    async scanPath() {
-      if (!this.sourcePath) return;
-      this.scanning = true;
-      try {
-        var data = await OpenCarrierAPI.post('/api/migrate/scan', { path: this.sourcePath });
-        if (data.error) {
-          OpenCarrierToast.error('Scan error: ' + data.error);
-          this.scanning = false;
-          return;
-        }
-        this.scanResult = data;
-        this.migStep = 'preview';
-      } catch(e) {
-        OpenCarrierToast.error('Scan failed: ' + e.message);
-      }
-      this.scanning = false;
-    },
-
-    async runMigration(dryRun) {
-      this.migrating = true;
-      try {
-        var target = this.targetPath;
-        if (!target) target = '';
-        var data = await OpenCarrierAPI.post('/api/migrate', {
-          source: 'openclaw',
-          source_dir: this.sourcePath || (this.scanResult ? this.scanResult.path : ''),
-          target_dir: target,
-          dry_run: dryRun
-        });
-        this.migResult = data;
-        this.migStep = 'result';
-      } catch(e) {
-        this.migResult = { status: 'failed', error: e.message };
-        this.migStep = 'result';
-      }
-      this.migrating = false;
     },
 
     destroy() {

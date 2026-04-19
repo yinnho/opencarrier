@@ -131,7 +131,7 @@ pub fn rollback_file(workspace: &Path, filename: &str) -> Result<()> {
     }
 
     // Find the most recent version's `before` content
-    let previous = history.iter().rev().next().and_then(|v| v.before.clone());
+    let previous = history.last().and_then(|v| v.before.clone());
 
     match (&current, previous) {
         (Some(cur), Some(prev)) => {

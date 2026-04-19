@@ -524,6 +524,7 @@ async fn handle_text_message(
                     let stream_task = tokio::spawn(async move {
                         let mut text_buffer = String::new();
                         let mut accumulated_text = String::new();
+                        let mut accumulated_thinking = String::new();
                         let mut stream_usage: Option<opencarrier_types::message::TokenUsage> = None;
                         let mut is_silent = false;
                         let far_future = tokio::time::Instant::now() + Duration::from_secs(86400);
@@ -549,9 +550,13 @@ async fn handle_text_message(
                                             break;
                                         }
                                         Some(ev) => {
+                                            // DEBUG: log every stream event for GLM troubleshooting
+                                            eprintln!("[ws-stream] event: {:?}", ev);
+
                                             // Capture ContentComplete for immediate response
                                             if let StreamEvent::ContentComplete { usage, .. } = &ev {
                                                 stream_usage = Some(*usage);
+                                                eprintln!("[ws-stream] ContentComplete usage: {:?}", usage);
                                                 // Don't forward — handled below
                                                 continue;
                                             }
@@ -571,6 +576,8 @@ async fn handle_text_message(
                                                         tokio::time::Instant::now()
                                                             + Duration::from_millis(DEBOUNCE_MS);
                                                 }
+                                            } else if let StreamEvent::ThinkingDelta { ref text } = ev {
+                                                accumulated_thinking.push_str(text);
                                             } else {
                                                 // Flush pending text before non-text events
                                                 let _ = flush_text_buffer(
@@ -626,6 +633,18 @@ async fn handle_text_message(
                         // Check if the agent signalled NO_REPLY via the stream
                         // (PhaseChange with a "silent" marker — currently the
                         // kernel sets result.silent after the loop, so we detect
+                        // If model sent only thinking (no text), use thinking as response
+                        // Some providers (e.g. GLM via Anthropic compat) send all content
+                        // as thinking blocks with no text block.
+                        eprintln!("[ws-stream] stream ended: text={} bytes, thinking={} bytes, usage={:?}",
+                            accumulated_text.len(), accumulated_thinking.len(), stream_usage);
+                        if accumulated_text.is_empty() && !accumulated_thinking.is_empty() {
+                            accumulated_text = accumulated_thinking;
+                            eprintln!("[ws-stream] fallback: using thinking as text ({} bytes)", accumulated_text.len());
+                        }
+
+                        // Detect silent responses (e.g. tool-only loops that produce
+                        // no visible text). Keep the silent path distinct so the UI
                         // it from empty accumulated text when ContentComplete
                         // had no text deltas at all).
                         if accumulated_text.is_empty() && stream_usage.is_some() {
@@ -704,7 +723,13 @@ async fn handle_text_message(
                             }
 
                             // Strip <think>...</think> blocks
-                            let cleaned = strip_think_tags(&accumulated_text);
+                            let mut cleaned = strip_think_tags(&accumulated_text);
+
+                            // If all text was inside think tags (some providers like GLM
+                            // send content only as thinking blocks), fall back to raw text.
+                            if cleaned.trim().is_empty() && !accumulated_text.trim().is_empty() {
+                                cleaned = accumulated_text.clone();
+                            }
 
                             let content = if cleaned.trim().is_empty() {
                                 format!(

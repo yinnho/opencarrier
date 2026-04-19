@@ -10,21 +10,15 @@ use std::time::Duration;
 
 use super::screens::{
     audit::AuditEntry,
-    channels::ChannelInfo,
     dashboard::AuditRow,
-    extensions::{ExtensionHealthInfo, ExtensionInfo},
-    hands::{HandInfo, HandInstanceInfo},
     logs::LogEntry,
     memory::{AgentEntry, KvPair},
-    peers::PeerInfo,
     security::SecurityFeature,
     sessions::SessionInfo,
-    settings::{ModelInfo, ProviderInfo, TestResult, ToolInfo},
-    skills::{ClawHubResult, McpServerInfo, SkillInfo},
+    settings::{EndpointInfo, ModalityInfo, ProviderInfo, TestResult},
+    skills::{McpServerInfo, SkillInfo},
     templates::ProviderAuth,
-    triggers::TriggerInfo,
     usage::{AgentUsage, ModelUsage, UsageSummary},
-    workflows::{WorkflowInfo, WorkflowRun},
 };
 
 // ── BackendRef ──────────────────────────────────────────────────────────────
@@ -73,24 +67,6 @@ pub enum AppEvent {
     },
     /// Audit trail loaded.
     AuditLoaded(Vec<AuditRow>),
-    /// Channel list loaded.
-    ChannelListLoaded(Vec<ChannelInfo>),
-    /// Channel test result.
-    ChannelTestResult { success: bool, message: String },
-    /// Workflow list loaded.
-    WorkflowListLoaded(Vec<WorkflowInfo>),
-    /// Workflow runs loaded for a specific workflow.
-    WorkflowRunsLoaded(Vec<WorkflowRun>),
-    /// Workflow run completed.
-    WorkflowRunResult(String),
-    /// Workflow created successfully.
-    WorkflowCreated(String),
-    /// Trigger list loaded.
-    TriggerListLoaded(Vec<TriggerInfo>),
-    /// Trigger created.
-    TriggerCreated(String),
-    /// Trigger deleted.
-    TriggerDeleted(String),
     /// Agent killed successfully.
     AgentKilled { id: String },
     /// Agent kill failed.
@@ -113,10 +89,6 @@ pub enum AppEvent {
     MemoryKvDeleted(String),
     /// Skills loaded.
     SkillsLoaded(Vec<SkillInfo>),
-    /// ClawHub results loaded.
-    ClawHubLoaded(Vec<ClawHubResult>),
-    /// Skill installed.
-    SkillInstalled(String),
     /// Skill uninstalled.
     SkillUninstalled(String),
     /// MCP servers loaded.
@@ -139,42 +111,33 @@ pub enum AppEvent {
     UsageByAgentLoaded(Vec<AgentUsage>),
     /// Settings providers loaded.
     SettingsProvidersLoaded(Vec<ProviderInfo>),
-    /// Settings models loaded.
-    SettingsModelsLoaded(Vec<ModelInfo>),
-    /// Settings tools loaded.
-    SettingsToolsLoaded(Vec<ToolInfo>),
+    /// Settings Brain endpoints + modalities loaded.
+    SettingsModelsLoaded {
+        endpoints: Vec<EndpointInfo>,
+        modalities: Vec<ModalityInfo>,
+    },
     /// Provider key saved.
     ProviderKeySaved(String),
     /// Provider key deleted.
     ProviderKeyDeleted(String),
     /// Provider test result.
     ProviderTestResult(TestResult),
-    /// Peers loaded.
-    PeersLoaded(Vec<PeerInfo>),
+    /// Brain endpoint added.
+    EndpointAdded(String),
+    /// Brain endpoint deleted.
+    EndpointDeleted(String),
+    /// Brain endpoint error.
+    EndpointError(String),
+    /// Brain modality added.
+    ModalityAdded(String),
+    /// Brain modality deleted.
+    ModalityDeleted(String),
+    /// Brain modality error.
+    ModalityError(String),
+    /// Default modality set.
+    DefaultModalitySet(String),
     /// Log entries loaded.
     LogsLoaded(Vec<LogEntry>),
-    /// Hand definitions loaded (marketplace).
-    HandsLoaded(Vec<HandInfo>),
-    /// Active hand instances loaded.
-    ActiveHandsLoaded(Vec<HandInstanceInfo>),
-    /// Hand activated.
-    HandActivated(String),
-    /// Hand deactivated.
-    HandDeactivated(String),
-    /// Hand paused.
-    HandPaused(String),
-    /// Hand resumed.
-    HandResumed(String),
-    /// Extensions loaded (available + installed).
-    ExtensionsLoaded(Vec<ExtensionInfo>),
-    /// Extension health loaded.
-    ExtensionHealthLoaded(Vec<ExtensionHealthInfo>),
-    /// Extension installed.
-    ExtensionInstalled(String),
-    /// Extension removed.
-    ExtensionRemoved(String),
-    /// Extension reconnected.
-    ExtensionReconnected(String, usize),
     /// Agent skills loaded (for edit screen).
     AgentSkillsLoaded {
         assigned: Vec<String>,
@@ -537,10 +500,10 @@ pub fn spawn_fetch_dashboard(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
                     let _ = tx.send(AppEvent::DashboardData {
                         agent_count: body["agent_count"].as_u64().unwrap_or(0),
-                        uptime_secs: body["uptime_secs"].as_u64().unwrap_or(0),
+                        uptime_secs: body["uptime_seconds"].as_u64().unwrap_or(0),
                         version: body["version"].as_str().unwrap_or("?").to_string(),
-                        provider: body["provider"].as_str().unwrap_or("").to_string(),
-                        model: body["model"].as_str().unwrap_or("").to_string(),
+                        provider: body["default_modality"].as_str().unwrap_or("").to_string(),
+                        model: body["default_model"].as_str().unwrap_or("").to_string(),
                     });
                 }
             }
@@ -581,376 +544,6 @@ pub fn spawn_fetch_dashboard(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
 }
 
 /// Fetch channel list in background.
-pub fn spawn_fetch_channels(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            if let Ok(resp) = client.get(format!("{base_url}/api/channels")).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let channels: Vec<ChannelInfo> = body
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|ch| {
-                                    use super::screens::channels::ChannelStatus;
-                                    let status_str =
-                                        ch["status"].as_str().unwrap_or("not_configured");
-                                    let status = match status_str {
-                                        "ready" => ChannelStatus::Ready,
-                                        "missing_env" => ChannelStatus::MissingEnv,
-                                        _ => ChannelStatus::NotConfigured,
-                                    };
-                                    ChannelInfo {
-                                        name: ch["name"].as_str().unwrap_or("?").to_string(),
-                                        display_name: ch["display_name"]
-                                            .as_str()
-                                            .unwrap_or(ch["name"].as_str().unwrap_or("?"))
-                                            .to_string(),
-                                        category: ch["category"]
-                                            .as_str()
-                                            .unwrap_or("messaging")
-                                            .to_string(),
-                                        status,
-                                        env_vars: Vec::new(),
-                                        enabled: ch["enabled"].as_bool().unwrap_or(false),
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::ChannelListLoaded(channels));
-                }
-            }
-        }
-        BackendRef::InProcess(_kernel) => {
-            // In-process: fall back to default channel detection
-            let _ = tx.send(AppEvent::ChannelListLoaded(Vec::new()));
-        }
-    });
-}
-
-/// Test a channel in background.
-pub fn spawn_test_channel(backend: BackendRef, channel: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            match client
-                .post(format!("{base_url}/api/channels/{channel}/test"))
-                .send()
-            {
-                Ok(resp) => {
-                    let success = resp.status().is_success();
-                    let msg = resp
-                        .json::<serde_json::Value>()
-                        .ok()
-                        .and_then(|b| b["message"].as_str().map(String::from))
-                        .unwrap_or_else(|| {
-                            if success {
-                                "Test passed".to_string()
-                            } else {
-                                "Test failed".to_string()
-                            }
-                        });
-                    let _ = tx.send(AppEvent::ChannelTestResult {
-                        success,
-                        message: msg,
-                    });
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::ChannelTestResult {
-                        success: false,
-                        message: format!("{e}"),
-                    });
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::ChannelTestResult {
-                success: false,
-                message: "Channel test not available in in-process mode".to_string(),
-            });
-        }
-    });
-}
-
-/// Fetch workflow list in background.
-pub fn spawn_fetch_workflows(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            if let Ok(resp) = client.get(format!("{base_url}/api/workflows")).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let workflows: Vec<WorkflowInfo> = body
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|wf| WorkflowInfo {
-                                    id: wf["id"].as_str().unwrap_or("?").to_string(),
-                                    name: wf["name"].as_str().unwrap_or("?").to_string(),
-                                    steps: wf["steps"].as_u64().unwrap_or(0) as usize,
-                                    created: wf["created"].as_str().unwrap_or("").to_string(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::WorkflowListLoaded(workflows));
-                }
-            }
-        }
-        BackendRef::InProcess(_kernel) => {
-            // Workflows in in-process mode - return empty for now
-            let _ = tx.send(AppEvent::WorkflowListLoaded(Vec::new()));
-        }
-    });
-}
-
-/// Fetch workflow runs in background.
-pub fn spawn_fetch_workflow_runs(
-    backend: BackendRef,
-    workflow_id: String,
-    tx: mpsc::Sender<AppEvent>,
-) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            if let Ok(resp) = client
-                .get(format!("{base_url}/api/workflows/{workflow_id}/runs"))
-                .send()
-            {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let runs: Vec<WorkflowRun> = body
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|r| WorkflowRun {
-                                    id: r["id"].as_str().unwrap_or("?").to_string(),
-                                    state: r["state"].as_str().unwrap_or("?").to_string(),
-                                    duration: r["duration"].as_str().unwrap_or("").to_string(),
-                                    output_preview: r["output"].as_str().unwrap_or("").to_string(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::WorkflowRunsLoaded(runs));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::WorkflowRunsLoaded(Vec::new()));
-        }
-    });
-}
-
-/// Run a workflow in background.
-pub fn spawn_run_workflow(
-    backend: BackendRef,
-    workflow_id: String,
-    input: String,
-    tx: mpsc::Sender<AppEvent>,
-) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            match client
-                .post(format!("{base_url}/api/workflows/{workflow_id}/run"))
-                .json(&serde_json::json!({"input": input}))
-                .send()
-            {
-                Ok(resp) => {
-                    let body: serde_json::Value = resp.json().unwrap_or_default();
-                    let result = body["output"]
-                        .as_str()
-                        .unwrap_or("Workflow completed")
-                        .to_string();
-                    let _ = tx.send(AppEvent::WorkflowRunResult(result));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::WorkflowRunResult(format!("Error: {e}")));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::WorkflowRunResult(
-                "Workflow execution not available in in-process mode".to_string(),
-            ));
-        }
-    });
-}
-
-/// Create a workflow in background.
-pub fn spawn_create_workflow(
-    backend: BackendRef,
-    name: String,
-    description: String,
-    steps_json: String,
-    tx: mpsc::Sender<AppEvent>,
-) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            match client
-                .post(format!("{base_url}/api/workflows"))
-                .json(&serde_json::json!({
-                    "name": name,
-                    "description": description,
-                    "steps": steps_json,
-                }))
-                .send()
-            {
-                Ok(resp) => {
-                    let body: serde_json::Value = resp.json().unwrap_or_default();
-                    let id = body["id"].as_str().unwrap_or("created").to_string();
-                    let _ = tx.send(AppEvent::WorkflowCreated(id));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Create workflow: {e}")));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::FetchError(
-                "Workflow creation not available in in-process mode".to_string(),
-            ));
-        }
-    });
-}
-
-/// Fetch triggers in background.
-pub fn spawn_fetch_triggers(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            if let Ok(resp) = client.get(format!("{base_url}/api/triggers")).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let triggers: Vec<TriggerInfo> = body
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|tr| TriggerInfo {
-                                    id: tr["id"].as_str().unwrap_or("?").to_string(),
-                                    agent_id: tr["agent_id"].as_str().unwrap_or("?").to_string(),
-                                    pattern: tr["pattern"].as_str().unwrap_or("?").to_string(),
-                                    fires: tr["fires"].as_u64().unwrap_or(0),
-                                    enabled: tr["enabled"].as_bool().unwrap_or(true),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::TriggerListLoaded(triggers));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::TriggerListLoaded(Vec::new()));
-        }
-    });
-}
-
-/// Create a trigger in background.
-pub fn spawn_create_trigger(
-    backend: BackendRef,
-    agent_id: String,
-    pattern_type: String,
-    pattern_param: String,
-    prompt: String,
-    max_fires: u64,
-    tx: mpsc::Sender<AppEvent>,
-) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            match client
-                .post(format!("{base_url}/api/triggers"))
-                .json(&serde_json::json!({
-                    "agent_id": agent_id,
-                    "pattern_type": pattern_type,
-                    "pattern_param": pattern_param,
-                    "prompt": prompt,
-                    "max_fires": max_fires,
-                }))
-                .send()
-            {
-                Ok(resp) => {
-                    let body: serde_json::Value = resp.json().unwrap_or_default();
-                    let id = body["id"].as_str().unwrap_or("created").to_string();
-                    let _ = tx.send(AppEvent::TriggerCreated(id));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Create trigger: {e}")));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::FetchError(
-                "Trigger creation not available in in-process mode".to_string(),
-            ));
-        }
-    });
-}
-
-/// Delete a trigger in background.
-pub fn spawn_delete_trigger(backend: BackendRef, trigger_id: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-            match client
-                .delete(format!("{base_url}/api/triggers/{trigger_id}"))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::TriggerDeleted(trigger_id));
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::FetchError(format!(
-                        "Failed to delete trigger {trigger_id}"
-                    )));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::FetchError(
-                "Trigger deletion not available in in-process mode".to_string(),
-            ));
-        }
-    });
-}
-
 /// Kill an agent in background (for detail view action).
 pub fn spawn_kill_agent(backend: BackendRef, agent_id: String, tx: mpsc::Sender<AppEvent>) {
     std::thread::spawn(move || match backend {
@@ -1444,102 +1037,6 @@ pub fn spawn_fetch_skills(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
     });
 }
 
-/// Search ClawHub marketplace.
-pub fn spawn_search_clawhub(backend: BackendRef, query: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            let encoded: String = query
-                .chars()
-                .map(|c| {
-                    if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
-                        c.to_string()
-                    } else {
-                        format!("%{:02X}", c as u32)
-                    }
-                })
-                .collect();
-            let url = format!("{base_url}/api/clawhub/search?q={encoded}");
-            if let Ok(resp) = client.get(&url).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let results = parse_clawhub_results(&body);
-                    let _ = tx.send(AppEvent::ClawHubLoaded(results));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::ClawHubLoaded(Vec::new()));
-        }
-    });
-}
-
-/// Browse ClawHub marketplace.
-pub fn spawn_browse_clawhub(backend: BackendRef, sort: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            let url = format!("{base_url}/api/clawhub/browse?sort={sort}");
-            if let Ok(resp) = client.get(&url).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let results = parse_clawhub_results(&body);
-                    let _ = tx.send(AppEvent::ClawHubLoaded(results));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::ClawHubLoaded(Vec::new()));
-        }
-    });
-}
-
-fn parse_clawhub_results(body: &serde_json::Value) -> Vec<ClawHubResult> {
-    // API returns {"items": [...]} wrapper, fall back to bare array for compat
-    let items = body
-        .get("items")
-        .and_then(|v| v.as_array())
-        .or_else(|| body.as_array());
-
-    items
-        .map(|arr| {
-            arr.iter()
-                .map(|r| ClawHubResult {
-                    name: r["name"].as_str().unwrap_or("").to_string(),
-                    slug: r["slug"].as_str().unwrap_or("").to_string(),
-                    description: r["description"].as_str().unwrap_or("").to_string(),
-                    downloads: r["downloads"].as_u64().unwrap_or(0),
-                    runtime: r["runtime"].as_str().unwrap_or("").to_string(),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Install a skill from ClawHub.
-pub fn spawn_install_skill(backend: BackendRef, slug: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .post(format!("{base_url}/api/clawhub/install"))
-                .json(&serde_json::json!({"slug": slug}))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::SkillInstalled(slug));
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Failed to install {slug}")));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::FetchError(
-                "Skill installation not available in in-process mode".to_string(),
-            ));
-        }
-    });
-}
-
 /// Uninstall a skill.
 pub fn spawn_uninstall_skill(backend: BackendRef, name: String, tx: mpsc::Sender<AppEvent>) {
     std::thread::spawn(move || match backend {
@@ -1858,60 +1355,66 @@ pub fn spawn_fetch_models(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
     std::thread::spawn(move || match backend {
         BackendRef::Daemon(base_url) => {
             let client = daemon_client();
-            if let Ok(resp) = client.get(format!("{base_url}/api/models")).send() {
+            if let Ok(resp) = client.get(format!("{base_url}/api/brain")).send() {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let models: Vec<ModelInfo> = body
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|m| ModelInfo {
-                                    id: m["id"].as_str().unwrap_or("").to_string(),
-                                    provider: m["provider"].as_str().unwrap_or("").to_string(),
-                                    tier: m["tier"].as_str().unwrap_or("").to_string(),
-                                    context_window: m["context_window"].as_u64().unwrap_or(0),
-                                    cost_input: m["cost_input"].as_f64().unwrap_or(0.0),
-                                    cost_output: m["cost_output"].as_f64().unwrap_or(0.0),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::SettingsModelsLoaded(models));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::SettingsModelsLoaded(Vec::new()));
-        }
-    });
-}
+                    let loaded = body["loaded"].as_bool().unwrap_or(false);
+                    if loaded {
+                        // Parse endpoints
+                        let endpoints: Vec<EndpointInfo> = body
+                            .get("endpoints")
+                            .and_then(|e| e.as_object())
+                            .map(|obj| {
+                                obj.iter()
+                                    .map(|(name, e)| EndpointInfo {
+                                        name: name.clone(),
+                                        provider: e["provider"].as_str().unwrap_or("").to_string(),
+                                        model: e["model"].as_str().unwrap_or("").to_string(),
+                                        format: e["format"].as_str().unwrap_or("").to_string(),
+                                        base_url: e["base_url"].as_str().unwrap_or("").to_string(),
+                                        ready: e["ready"].as_bool().unwrap_or(false),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
 
-/// Fetch settings tools.
-pub fn spawn_fetch_tools(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            if let Ok(resp) = client.get(format!("{base_url}/api/tools")).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let tools: Vec<ToolInfo> = body
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|t| ToolInfo {
-                                    name: t["name"].as_str().unwrap_or("").to_string(),
-                                    description: t["description"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::SettingsToolsLoaded(tools));
+                        // Parse modalities
+                        let modalities: Vec<ModalityInfo> = body
+                            .get("modalities")
+                            .and_then(|m| m.as_object())
+                            .map(|obj| {
+                                obj.iter()
+                                    .map(|(name, m)| ModalityInfo {
+                                        name: name.clone(),
+                                        primary: m["primary"].as_str().unwrap_or("").to_string(),
+                                        fallbacks: m["fallbacks"]
+                                            .as_array()
+                                            .map(|arr| {
+                                                arr.iter()
+                                                    .filter_map(|v| v.as_str().map(String::from))
+                                                    .collect()
+                                            })
+                                            .unwrap_or_default(),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        let _ = tx.send(AppEvent::SettingsModelsLoaded { endpoints, modalities });
+                    } else {
+                        // Brain not loaded — send empty
+                        let _ = tx.send(AppEvent::SettingsModelsLoaded {
+                            endpoints: Vec::new(),
+                            modalities: Vec::new(),
+                        });
+                    }
                 }
             }
         }
         BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::SettingsToolsLoaded(Vec::new()));
+            let _ = tx.send(AppEvent::SettingsModelsLoaded {
+                endpoints: Vec::new(),
+                modalities: Vec::new(),
+            });
         }
     });
 }
@@ -2030,40 +1533,6 @@ pub fn spawn_test_provider(backend: BackendRef, name: String, tx: mpsc::Sender<A
 }
 
 /// Fetch peers.
-pub fn spawn_fetch_peers(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            if let Ok(resp) = client.get(format!("{base_url}/api/peers")).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let peers: Vec<PeerInfo> = body
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|p| PeerInfo {
-                                    node_id: p["node_id"].as_str().unwrap_or("").to_string(),
-                                    node_name: p["node_name"].as_str().unwrap_or("").to_string(),
-                                    address: p["address"].as_str().unwrap_or("").to_string(),
-                                    state: p["state"].as_str().unwrap_or("").to_string(),
-                                    agent_count: p["agent_count"].as_u64().unwrap_or(0),
-                                    protocol_version: p["protocol_version"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::PeersLoaded(peers));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::PeersLoaded(Vec::new()));
-        }
-    });
-}
-
 /// Fetch log entries (uses audit endpoint, polled frequently).
 pub fn spawn_fetch_logs(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
     std::thread::spawn(move || match backend {
@@ -2103,510 +1572,6 @@ pub fn spawn_fetch_logs(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
         }
         BackendRef::InProcess(_) => {
             let _ = tx.send(AppEvent::LogsLoaded(Vec::new()));
-        }
-    });
-}
-
-// ── Hands events ────────────────────────────────────────────────────────────
-
-/// Fetch hand definitions (marketplace).
-pub fn spawn_fetch_hands(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            if let Ok(resp) = client.get(format!("{base_url}/api/hands")).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let hands: Vec<HandInfo> = body["hands"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|h| HandInfo {
-                                    id: h["id"].as_str().unwrap_or("").to_string(),
-                                    name: h["name"].as_str().unwrap_or("").to_string(),
-                                    description: h["description"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    category: h["category"].as_str().unwrap_or("").to_string(),
-                                    icon: h["icon"].as_str().unwrap_or("").to_string(),
-                                    requirements_met: h["requirements_met"]
-                                        .as_bool()
-                                        .unwrap_or(false),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::HandsLoaded(hands));
-                }
-            }
-        }
-        BackendRef::InProcess(kernel) => {
-            let defs = kernel.hand_registry.list_definitions();
-            let hands: Vec<HandInfo> = defs
-                .iter()
-                .map(|d| {
-                    let reqs_met = kernel
-                        .hand_registry
-                        .check_requirements(&d.id)
-                        .map(|r| r.iter().all(|(_, ok)| *ok))
-                        .unwrap_or(false);
-                    HandInfo {
-                        id: d.id.clone(),
-                        name: d.name.clone(),
-                        description: d.description.clone(),
-                        category: d.category.to_string(),
-                        icon: d.icon.clone(),
-                        requirements_met: reqs_met,
-                    }
-                })
-                .collect();
-            let _ = tx.send(AppEvent::HandsLoaded(hands));
-        }
-    });
-}
-
-/// Fetch active hand instances.
-pub fn spawn_fetch_active_hands(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            if let Ok(resp) = client.get(format!("{base_url}/api/hands/active")).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let instances: Vec<HandInstanceInfo> = body["instances"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|i| HandInstanceInfo {
-                                    instance_id: i["instance_id"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    hand_id: i["hand_id"].as_str().unwrap_or("").to_string(),
-                                    status: i["status"].as_str().unwrap_or("").to_string(),
-                                    agent_name: i["agent_name"].as_str().unwrap_or("").to_string(),
-                                    agent_id: i["agent_id"].as_str().unwrap_or("").to_string(),
-                                    activated_at: i["activated_at"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::ActiveHandsLoaded(instances));
-                }
-            }
-        }
-        BackendRef::InProcess(kernel) => {
-            let instances: Vec<HandInstanceInfo> = kernel
-                .hand_registry
-                .list_instances()
-                .iter()
-                .map(|i| HandInstanceInfo {
-                    instance_id: i.instance_id.to_string(),
-                    hand_id: i.hand_id.clone(),
-                    status: i.status.to_string(),
-                    agent_name: i.agent_name.clone(),
-                    agent_id: i.agent_id.map(|a| a.to_string()).unwrap_or_default(),
-                    activated_at: i.activated_at.to_rfc3339(),
-                })
-                .collect();
-            let _ = tx.send(AppEvent::ActiveHandsLoaded(instances));
-        }
-    });
-}
-
-/// Activate a hand.
-pub fn spawn_activate_hand(backend: BackendRef, hand_id: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .post(format!("{base_url}/api/hands/{hand_id}/activate"))
-                .json(&serde_json::json!({}))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::HandActivated(hand_id));
-                }
-                Ok(resp) => {
-                    let msg = resp
-                        .json::<serde_json::Value>()
-                        .ok()
-                        .and_then(|b| b["error"].as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "Activation failed".to_string());
-                    let _ = tx.send(AppEvent::FetchError(msg));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Failed to activate: {e}")));
-                }
-            }
-        }
-        BackendRef::InProcess(kernel) => {
-            match kernel.activate_hand(&hand_id, std::collections::HashMap::new()) {
-                Ok(_) => {
-                    let _ = tx.send(AppEvent::HandActivated(hand_id));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Activation failed: {e}")));
-                }
-            }
-        }
-    });
-}
-
-/// Deactivate a hand instance.
-pub fn spawn_deactivate_hand(backend: BackendRef, instance_id: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .delete(format!("{base_url}/api/hands/instances/{instance_id}"))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::HandDeactivated(instance_id));
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::FetchError(format!(
-                        "Failed to deactivate {instance_id}"
-                    )));
-                }
-            }
-        }
-        BackendRef::InProcess(kernel) => match uuid::Uuid::parse_str(&instance_id) {
-            Ok(uuid) => match kernel.deactivate_hand(uuid) {
-                Ok(()) => {
-                    let _ = tx.send(AppEvent::HandDeactivated(instance_id));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Deactivate failed: {e}")));
-                }
-            },
-            Err(e) => {
-                let _ = tx.send(AppEvent::FetchError(format!("Invalid instance ID: {e}")));
-            }
-        },
-    });
-}
-
-/// Pause a hand instance.
-pub fn spawn_pause_hand(backend: BackendRef, instance_id: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .post(format!(
-                    "{base_url}/api/hands/instances/{instance_id}/pause"
-                ))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::HandPaused(instance_id));
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::FetchError(format!(
-                        "Failed to pause {instance_id}"
-                    )));
-                }
-            }
-        }
-        BackendRef::InProcess(kernel) => match uuid::Uuid::parse_str(&instance_id) {
-            Ok(uuid) => match kernel.pause_hand(uuid) {
-                Ok(()) => {
-                    let _ = tx.send(AppEvent::HandPaused(instance_id));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Pause failed: {e}")));
-                }
-            },
-            Err(e) => {
-                let _ = tx.send(AppEvent::FetchError(format!("Invalid instance ID: {e}")));
-            }
-        },
-    });
-}
-
-/// Resume a hand instance.
-pub fn spawn_resume_hand(backend: BackendRef, instance_id: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .post(format!(
-                    "{base_url}/api/hands/instances/{instance_id}/resume"
-                ))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::HandResumed(instance_id));
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::FetchError(format!(
-                        "Failed to resume {instance_id}"
-                    )));
-                }
-            }
-        }
-        BackendRef::InProcess(kernel) => match uuid::Uuid::parse_str(&instance_id) {
-            Ok(uuid) => match kernel.resume_hand(uuid) {
-                Ok(()) => {
-                    let _ = tx.send(AppEvent::HandResumed(instance_id));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Resume failed: {e}")));
-                }
-            },
-            Err(e) => {
-                let _ = tx.send(AppEvent::FetchError(format!("Invalid instance ID: {e}")));
-            }
-        },
-    });
-}
-
-// ── Extension spawn functions ───────────────────────────────────────────────
-
-/// Fetch all extensions (available + installed).
-pub fn spawn_fetch_extensions(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            if let Ok(resp) = client
-                .get(format!("{base_url}/api/integrations/available"))
-                .send()
-            {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    // Also fetch installed to merge status
-                    let installed_ids: Vec<String> = client
-                        .get(format!("{base_url}/api/integrations"))
-                        .send()
-                        .ok()
-                        .and_then(|r| r.json::<serde_json::Value>().ok())
-                        .and_then(|b| {
-                            b["installed"].as_array().map(|arr| {
-                                arr.iter()
-                                    .filter_map(|i| i["id"].as_str().map(String::from))
-                                    .collect()
-                            })
-                        })
-                        .unwrap_or_default();
-
-                    let extensions: Vec<ExtensionInfo> = body["integrations"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|e| {
-                                    let id = e["id"].as_str().unwrap_or("").to_string();
-                                    let installed = installed_ids.contains(&id);
-                                    ExtensionInfo {
-                                        id: id.clone(),
-                                        name: e["name"].as_str().unwrap_or("").to_string(),
-                                        description: e["description"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        icon: e["icon"].as_str().unwrap_or("").to_string(),
-                                        category: e["category"].as_str().unwrap_or("").to_string(),
-                                        installed,
-                                        status: if installed {
-                                            "installed".to_string()
-                                        } else {
-                                            "available".to_string()
-                                        },
-                                        tags: e["tags"]
-                                            .as_array()
-                                            .map(|t| {
-                                                t.iter()
-                                                    .filter_map(|v| v.as_str().map(String::from))
-                                                    .collect()
-                                            })
-                                            .unwrap_or_default(),
-                                        has_oauth: e["has_oauth"].as_bool().unwrap_or(false),
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::ExtensionsLoaded(extensions));
-                }
-            }
-        }
-        BackendRef::InProcess(kernel) => {
-            let registry = kernel
-                .extension_registry
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
-            let extensions: Vec<ExtensionInfo> = registry
-                .list_templates()
-                .iter()
-                .map(|t| {
-                    let installed = registry.is_installed(&t.id);
-                    ExtensionInfo {
-                        id: t.id.clone(),
-                        name: t.name.clone(),
-                        description: t.description.clone(),
-                        icon: t.icon.clone(),
-                        category: t.category.to_string(),
-                        installed,
-                        status: if installed {
-                            "installed".to_string()
-                        } else {
-                            "available".to_string()
-                        },
-                        tags: t.tags.clone(),
-                        has_oauth: t.oauth.is_some(),
-                    }
-                })
-                .collect();
-            let _ = tx.send(AppEvent::ExtensionsLoaded(extensions));
-        }
-    });
-}
-
-/// Fetch extension health data.
-pub fn spawn_fetch_extension_health(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            if let Ok(resp) = client
-                .get(format!("{base_url}/api/integrations/health"))
-                .send()
-            {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let entries: Vec<ExtensionHealthInfo> = body["health"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|h| ExtensionHealthInfo {
-                                    id: h["id"].as_str().unwrap_or("").to_string(),
-                                    status: h["status"].as_str().unwrap_or("").to_string(),
-                                    tool_count: h["tool_count"].as_u64().unwrap_or(0) as usize,
-                                    last_ok: h["last_ok"].as_str().unwrap_or("").to_string(),
-                                    last_error: h["last_error"].as_str().unwrap_or("").to_string(),
-                                    consecutive_failures: h["consecutive_failures"]
-                                        .as_u64()
-                                        .unwrap_or(0)
-                                        as u32,
-                                    reconnecting: h["reconnecting"].as_bool().unwrap_or(false),
-                                    connected_since: h["connected_since"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let _ = tx.send(AppEvent::ExtensionHealthLoaded(entries));
-                }
-            }
-        }
-        BackendRef::InProcess(kernel) => {
-            let health = kernel.extension_health.all_health();
-            let entries: Vec<ExtensionHealthInfo> = health
-                .iter()
-                .map(|h| ExtensionHealthInfo {
-                    id: h.id.clone(),
-                    status: h.status.to_string(),
-                    tool_count: h.tool_count,
-                    last_ok: h.last_ok.map(|t| t.to_rfc3339()).unwrap_or_default(),
-                    last_error: h.last_error.clone().unwrap_or_default(),
-                    consecutive_failures: h.consecutive_failures,
-                    reconnecting: h.reconnecting,
-                    connected_since: h
-                        .connected_since
-                        .map(|t| t.to_rfc3339())
-                        .unwrap_or_default(),
-                })
-                .collect();
-            let _ = tx.send(AppEvent::ExtensionHealthLoaded(entries));
-        }
-    });
-}
-
-/// Install an extension.
-pub fn spawn_install_extension(backend: BackendRef, id: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .post(format!("{base_url}/api/integrations/add"))
-                .json(&serde_json::json!({"id": id}))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::ExtensionInstalled(id));
-                }
-                Ok(resp) => {
-                    let body = resp.json::<serde_json::Value>().ok();
-                    let err = body
-                        .and_then(|b| b["error"].as_str().map(String::from))
-                        .unwrap_or_else(|| format!("Failed to install {id}"));
-                    let _ = tx.send(AppEvent::FetchError(err));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Install failed: {e}")));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::FetchError(
-                "Install via in-process mode not supported — use CLI".to_string(),
-            ));
-        }
-    });
-}
-
-/// Remove an extension.
-pub fn spawn_remove_extension(backend: BackendRef, id: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .delete(format!("{base_url}/api/integrations/{id}"))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let _ = tx.send(AppEvent::ExtensionRemoved(id));
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Failed to remove {id}")));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::FetchError(
-                "Remove via in-process mode not supported — use CLI".to_string(),
-            ));
-        }
-    });
-}
-
-/// Reconnect an extension's MCP server.
-pub fn spawn_reconnect_extension(backend: BackendRef, id: String, tx: mpsc::Sender<AppEvent>) {
-    std::thread::spawn(move || match backend {
-        BackendRef::Daemon(base_url) => {
-            let client = daemon_client();
-            match client
-                .post(format!("{base_url}/api/integrations/{id}/reconnect"))
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let tool_count = resp
-                        .json::<serde_json::Value>()
-                        .ok()
-                        .and_then(|b| b["tool_count"].as_u64())
-                        .unwrap_or(0) as usize;
-                    let _ = tx.send(AppEvent::ExtensionReconnected(id, tool_count));
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::FetchError(format!("Failed to reconnect {id}")));
-                }
-            }
-        }
-        BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::FetchError(
-                "Reconnect via in-process mode not supported".to_string(),
-            ));
         }
     });
 }
@@ -2780,6 +1745,162 @@ pub fn spawn_comms_task(
             let _ = tx.send(AppEvent::CommsTaskResult(
                 "Task post not supported in-process".to_string(),
             ));
+        }
+    });
+}
+
+// ── Brain config spawn functions ────────────────────────────────────────────
+
+pub fn spawn_add_endpoint(
+    backend: BackendRef,
+    name: String,
+    provider: String,
+    model: String,
+    endpoint_base_url: String,
+    format: String,
+    tx: mpsc::Sender<AppEvent>,
+) {
+    std::thread::spawn(move || match backend {
+        BackendRef::Daemon(base_url) => {
+            let client = daemon_client();
+            let url = format!("{base_url}/api/brain/endpoints/{name}");
+            match client
+                .put(&url)
+                .json(&serde_json::json!({
+                    "provider": provider,
+                    "model": model,
+                    "base_url": endpoint_base_url,
+                    "format": format,
+                }))
+                .send()
+            {
+                Ok(r) if r.status().is_success() => {
+                    let _ = tx.send(AppEvent::EndpointAdded(name));
+                }
+                Ok(r) => {
+                    let msg = r.text().unwrap_or_else(|_| "Unknown error".to_string());
+                    let _ = tx.send(AppEvent::EndpointError(msg));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::EndpointError(e.to_string()));
+                }
+            }
+        }
+        BackendRef::InProcess(_) => {
+            let _ = tx.send(AppEvent::EndpointError("Not supported in-process".to_string()));
+        }
+    });
+}
+
+pub fn spawn_delete_endpoint(backend: BackendRef, name: String, tx: mpsc::Sender<AppEvent>) {
+    std::thread::spawn(move || match backend {
+        BackendRef::Daemon(base_url) => {
+            let client = daemon_client();
+            let url = format!("{base_url}/api/brain/endpoints/{name}");
+            match client.delete(&url).send() {
+                Ok(r) if r.status().is_success() => {
+                    let _ = tx.send(AppEvent::EndpointDeleted(name));
+                }
+                Ok(r) => {
+                    let msg = r.text().unwrap_or_else(|_| "Unknown error".to_string());
+                    let _ = tx.send(AppEvent::EndpointError(msg));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::EndpointError(e.to_string()));
+                }
+            }
+        }
+        BackendRef::InProcess(_) => {
+            let _ = tx.send(AppEvent::EndpointError("Not supported in-process".to_string()));
+        }
+    });
+}
+
+pub fn spawn_add_modality(
+    backend: BackendRef,
+    name: String,
+    primary: String,
+    fallbacks: Vec<String>,
+    tx: mpsc::Sender<AppEvent>,
+) {
+    std::thread::spawn(move || match backend {
+        BackendRef::Daemon(base_url) => {
+            let client = daemon_client();
+            let url = format!("{base_url}/api/brain/modalities/{name}");
+            match client
+                .put(&url)
+                .json(&serde_json::json!({
+                    "primary": primary,
+                    "fallbacks": fallbacks,
+                }))
+                .send()
+            {
+                Ok(r) if r.status().is_success() => {
+                    let _ = tx.send(AppEvent::ModalityAdded(name));
+                }
+                Ok(r) => {
+                    let msg = r.text().unwrap_or_else(|_| "Unknown error".to_string());
+                    let _ = tx.send(AppEvent::ModalityError(msg));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::ModalityError(e.to_string()));
+                }
+            }
+        }
+        BackendRef::InProcess(_) => {
+            let _ = tx.send(AppEvent::ModalityError("Not supported in-process".to_string()));
+        }
+    });
+}
+
+pub fn spawn_delete_modality(backend: BackendRef, name: String, tx: mpsc::Sender<AppEvent>) {
+    std::thread::spawn(move || match backend {
+        BackendRef::Daemon(base_url) => {
+            let client = daemon_client();
+            let url = format!("{base_url}/api/brain/modalities/{name}");
+            match client.delete(&url).send() {
+                Ok(r) if r.status().is_success() => {
+                    let _ = tx.send(AppEvent::ModalityDeleted(name));
+                }
+                Ok(r) => {
+                    let msg = r.text().unwrap_or_else(|_| "Unknown error".to_string());
+                    let _ = tx.send(AppEvent::ModalityError(msg));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::ModalityError(e.to_string()));
+                }
+            }
+        }
+        BackendRef::InProcess(_) => {
+            let _ = tx.send(AppEvent::ModalityError("Not supported in-process".to_string()));
+        }
+    });
+}
+
+pub fn spawn_set_default_modality(backend: BackendRef, modality: String, tx: mpsc::Sender<AppEvent>) {
+    std::thread::spawn(move || match backend {
+        BackendRef::Daemon(base_url) => {
+            let client = daemon_client();
+            let url = format!("{base_url}/api/brain/default-modality");
+            match client
+                .put(&url)
+                .json(&serde_json::json!({"default_modality": modality}))
+                .send()
+            {
+                Ok(r) if r.status().is_success() => {
+                    let _ = tx.send(AppEvent::DefaultModalitySet(modality));
+                }
+                Ok(r) => {
+                    let msg = r.text().unwrap_or_else(|_| "Unknown error".to_string());
+                    let _ = tx.send(AppEvent::ModalityError(msg));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::ModalityError(e.to_string()));
+                }
+            }
+        }
+        BackendRef::InProcess(_) => {
+            let _ = tx.send(AppEvent::ModalityError("Not supported in-process".to_string()));
         }
     });
 }

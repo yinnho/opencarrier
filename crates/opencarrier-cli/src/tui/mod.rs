@@ -12,8 +12,8 @@ use opencarrier_kernel::OpenCarrierKernel;
 use opencarrier_runtime::llm_driver::StreamEvent;
 use opencarrier_types::agent::AgentId;
 use screens::{
-    agents, audit, channels, chat, comms, dashboard, extensions, hands, logs, memory, peers,
-    security, sessions, settings, skills, templates, triggers, usage, welcome, wizard, workflows,
+    agents, audit, chat, comms, dashboard, logs, memory,
+    security, sessions, settings, skills, templates, usage, welcome, wizard,
 };
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
@@ -44,15 +44,9 @@ enum Tab {
     Agents,
     Chat,
     Sessions,
-    Workflows,
-    Triggers,
     Memory,
-    Channels,
     Skills,
-    Hands,
-    Extensions,
     Templates,
-    Peers,
     Comms,
     Security,
     Audit,
@@ -66,15 +60,9 @@ const TABS: &[Tab] = &[
     Tab::Agents,
     Tab::Chat,
     Tab::Sessions,
-    Tab::Workflows,
-    Tab::Triggers,
     Tab::Memory,
-    Tab::Channels,
     Tab::Skills,
-    Tab::Hands,
-    Tab::Extensions,
     Tab::Templates,
-    Tab::Peers,
     Tab::Comms,
     Tab::Security,
     Tab::Audit,
@@ -90,15 +78,9 @@ impl Tab {
             Tab::Agents => "Agents",
             Tab::Chat => "Chat",
             Tab::Sessions => "Sessions",
-            Tab::Workflows => "Workflows",
-            Tab::Triggers => "Triggers",
             Tab::Memory => "Memory",
-            Tab::Channels => "Channels",
             Tab::Skills => "Skills",
-            Tab::Hands => "Hands",
-            Tab::Extensions => "Extensions",
             Tab::Templates => "Templates",
-            Tab::Peers => "Peers",
             Tab::Comms => "Comms",
             Tab::Security => "Security",
             Tab::Audit => "Audit",
@@ -158,20 +140,14 @@ struct App {
     agents: agents::AgentSelectState,
     chat: chat::ChatState,
     dashboard: dashboard::DashboardState,
-    channels: channels::ChannelState,
-    workflows: workflows::WorkflowState,
-    triggers: triggers::TriggerState,
     sessions: sessions::SessionsState,
     memory: memory::MemoryState,
     skills: skills::SkillsState,
-    hands: hands::HandsState,
-    extensions: extensions::ExtensionsState,
     templates: templates::TemplatesState,
     security: security::SecurityState,
     audit: audit::AuditState,
     usage: usage::UsageState,
     settings: settings::SettingsState,
-    peers: peers::PeersState,
     comms: comms::CommsState,
     logs: logs::LogsState,
 
@@ -197,20 +173,14 @@ impl App {
             agents: agents::AgentSelectState::new(),
             chat: chat::ChatState::new(),
             dashboard: dashboard::DashboardState::new(),
-            channels: channels::ChannelState::new(),
-            workflows: workflows::WorkflowState::new(),
-            triggers: triggers::TriggerState::new(),
             sessions: sessions::SessionsState::new(),
             memory: memory::MemoryState::new(),
             skills: skills::SkillsState::new(),
-            hands: hands::HandsState::new(),
-            extensions: extensions::ExtensionsState::new(),
             templates: templates::TemplatesState::new(),
             security: security::SecurityState::new(),
             audit: audit::AuditState::new(),
             usage: usage::UsageState::new(),
             settings: settings::SettingsState::new(),
-            peers: peers::PeersState::new(),
             comms: comms::CommsState::new(),
             logs: logs::LogsState::new(),
             kernel_booting: false,
@@ -254,53 +224,6 @@ impl App {
             AppEvent::AuditLoaded(rows) => {
                 self.dashboard.recent_audit = rows;
                 self.dashboard.loading = false;
-            }
-            AppEvent::ChannelListLoaded(list) => {
-                if !list.is_empty() {
-                    self.channels.channels = list;
-                    self.channels.list_state.select(Some(0));
-                }
-                self.channels.loading = false;
-            }
-            AppEvent::ChannelTestResult { success, message } => {
-                self.channels.test_result = Some((success, message));
-            }
-            AppEvent::WorkflowListLoaded(list) => {
-                self.workflows.workflows = list;
-                if !self.workflows.workflows.is_empty() {
-                    self.workflows.list_state.select(Some(0));
-                }
-                self.workflows.loading = false;
-            }
-            AppEvent::WorkflowRunsLoaded(runs) => {
-                self.workflows.runs = runs;
-                if !self.workflows.runs.is_empty() {
-                    self.workflows.runs_list_state.select(Some(0));
-                }
-                self.workflows.loading = false;
-            }
-            AppEvent::WorkflowRunResult(result) => {
-                self.workflows.run_result = Some(result);
-                self.workflows.loading = false;
-            }
-            AppEvent::WorkflowCreated(_id) => {
-                self.workflows.status_msg = "Workflow created!".to_string();
-                self.refresh_workflows();
-            }
-            AppEvent::TriggerListLoaded(list) => {
-                self.triggers.triggers = list;
-                if !self.triggers.triggers.is_empty() {
-                    self.triggers.list_state.select(Some(0));
-                }
-                self.triggers.loading = false;
-            }
-            AppEvent::TriggerCreated(_id) => {
-                self.triggers.status_msg = "Trigger created!".to_string();
-                self.refresh_triggers();
-            }
-            AppEvent::TriggerDeleted(id) => {
-                self.triggers.triggers.retain(|t| t.id != id);
-                self.triggers.status_msg = format!("Trigger {id} deleted.");
             }
             AppEvent::AgentKilled { id } => {
                 self.agents.status_msg = format!("Agent {id} killed.");
@@ -349,14 +272,9 @@ impl App {
             AppEvent::FetchError(err) => {
                 // Route to the active tab's status message
                 match self.active_tab {
-                    Tab::Workflows => self.workflows.status_msg = err,
-                    Tab::Triggers => self.triggers.status_msg = err,
-                    Tab::Channels => self.channels.status_msg = err,
                     Tab::Sessions => self.sessions.status_msg = err,
                     Tab::Memory => self.memory.status_msg = err,
                     Tab::Skills => self.skills.status_msg = err,
-                    Tab::Hands => self.hands.status_msg = err,
-                    Tab::Extensions => self.extensions.status_msg = err,
                     Tab::Templates => self.templates.status_msg = err,
                     Tab::Settings => self.settings.status_msg = err,
                     _ => {}
@@ -412,17 +330,6 @@ impl App {
                 }
                 self.skills.loading = false;
             }
-            AppEvent::ClawHubLoaded(results) => {
-                self.skills.clawhub_results = results;
-                if !self.skills.clawhub_results.is_empty() {
-                    self.skills.clawhub_list.select(Some(0));
-                }
-                self.skills.loading = false;
-            }
-            AppEvent::SkillInstalled(name) => {
-                self.skills.status_msg = format!("Installed: {name}");
-                self.refresh_skills();
-            }
             AppEvent::SkillUninstalled(name) => {
                 self.skills.installed.retain(|s| s.name != name);
                 self.skills.status_msg = format!("Uninstalled: {name}");
@@ -477,17 +384,14 @@ impl App {
                 }
                 self.settings.loading = false;
             }
-            AppEvent::SettingsModelsLoaded(models) => {
-                self.settings.models = models;
-                if !self.settings.models.is_empty() {
-                    self.settings.model_list.select(Some(0));
+            AppEvent::SettingsModelsLoaded { endpoints, modalities } => {
+                self.settings.endpoints = endpoints;
+                self.settings.modalities = modalities;
+                if !self.settings.endpoints.is_empty() {
+                    self.settings.endpoint_list.select(Some(0));
                 }
-                self.settings.loading = false;
-            }
-            AppEvent::SettingsToolsLoaded(tools) => {
-                self.settings.tools = tools;
-                if !self.settings.tools.is_empty() {
-                    self.settings.tool_list.select(Some(0));
+                if !self.settings.modalities.is_empty() {
+                    self.settings.modality_list.select(Some(0));
                 }
                 self.settings.loading = false;
             }
@@ -502,12 +406,31 @@ impl App {
             AppEvent::ProviderTestResult(result) => {
                 self.settings.test_result = Some(result);
             }
-            AppEvent::PeersLoaded(list) => {
-                self.peers.peers = list;
-                if !self.peers.peers.is_empty() && self.peers.list_state.selected().is_none() {
-                    self.peers.list_state.select(Some(0));
-                }
-                self.peers.loading = false;
+            AppEvent::EndpointAdded(name) => {
+                self.settings.status_msg = format!("Endpoint '{name}' added");
+                self.refresh_settings_models();
+            }
+            AppEvent::EndpointDeleted(name) => {
+                self.settings.status_msg = format!("Endpoint '{name}' deleted");
+                self.refresh_settings_models();
+            }
+            AppEvent::EndpointError(e) => {
+                self.settings.status_msg = format!("Error: {e}");
+            }
+            AppEvent::ModalityAdded(name) => {
+                self.settings.status_msg = format!("Modality '{name}' added");
+                self.refresh_settings_models();
+            }
+            AppEvent::ModalityDeleted(name) => {
+                self.settings.status_msg = format!("Modality '{name}' deleted");
+                self.refresh_settings_models();
+            }
+            AppEvent::ModalityError(e) => {
+                self.settings.status_msg = format!("Error: {e}");
+            }
+            AppEvent::DefaultModalitySet(modality) => {
+                self.settings.status_msg = format!("Default modality set to '{modality}'");
+                self.refresh_settings_models();
             }
             AppEvent::CommsTopologyLoaded { nodes, edges } => {
                 self.comms.nodes = nodes;
@@ -532,79 +455,6 @@ impl App {
                 self.logs.entries = entries;
                 self.logs.refilter();
                 self.logs.loading = false;
-            }
-            AppEvent::HandsLoaded(list) => {
-                self.hands.definitions = list;
-                if !self.hands.definitions.is_empty() {
-                    self.hands.marketplace_list.select(Some(0));
-                }
-                self.hands.loading = false;
-            }
-            AppEvent::ActiveHandsLoaded(list) => {
-                self.hands.instances = list;
-                if !self.hands.instances.is_empty() && self.hands.active_list.selected().is_none() {
-                    self.hands.active_list.select(Some(0));
-                }
-                self.hands.loading = false;
-            }
-            AppEvent::HandActivated(name) => {
-                self.hands.status_msg = format!("Activated: {name}");
-                self.refresh_hands();
-            }
-            AppEvent::HandDeactivated(id) => {
-                self.hands.instances.retain(|i| i.instance_id != id);
-                self.hands.status_msg = format!("Deactivated: {id}");
-            }
-            AppEvent::HandPaused(id) => {
-                if let Some(inst) = self
-                    .hands
-                    .instances
-                    .iter_mut()
-                    .find(|i| i.instance_id == id)
-                {
-                    inst.status = "Paused".to_string();
-                }
-                self.hands.status_msg = "Hand paused".to_string();
-            }
-            AppEvent::HandResumed(id) => {
-                if let Some(inst) = self
-                    .hands
-                    .instances
-                    .iter_mut()
-                    .find(|i| i.instance_id == id)
-                {
-                    inst.status = "Active".to_string();
-                }
-                self.hands.status_msg = "Hand resumed".to_string();
-            }
-            AppEvent::ExtensionsLoaded(list) => {
-                self.extensions.all_extensions = list;
-                if !self.extensions.all_extensions.is_empty()
-                    && self.extensions.browse_list.selected().is_none()
-                {
-                    self.extensions.browse_list.select(Some(0));
-                }
-                self.extensions.loading = false;
-            }
-            AppEvent::ExtensionHealthLoaded(entries) => {
-                self.extensions.health_entries = entries;
-                if !self.extensions.health_entries.is_empty()
-                    && self.extensions.health_list.selected().is_none()
-                {
-                    self.extensions.health_list.select(Some(0));
-                }
-            }
-            AppEvent::ExtensionInstalled(id) => {
-                self.extensions.status_msg = format!("Installed: {id}");
-                self.refresh_extensions();
-            }
-            AppEvent::ExtensionRemoved(id) => {
-                self.extensions.status_msg = format!("Removed: {id}");
-                self.refresh_extensions();
-            }
-            AppEvent::ExtensionReconnected(id, tools) => {
-                self.extensions.status_msg = format!("Reconnected {id}: {tools} tools");
-                self.refresh_extension_health();
             }
         }
     }
@@ -659,35 +509,35 @@ impl App {
                     return;
                 }
                 KeyCode::F(5) => {
-                    self.switch_tab(Tab::Workflows);
-                    return;
-                }
-                KeyCode::F(6) => {
-                    self.switch_tab(Tab::Triggers);
-                    return;
-                }
-                KeyCode::F(7) => {
                     self.switch_tab(Tab::Memory);
                     return;
                 }
-                KeyCode::F(8) => {
-                    self.switch_tab(Tab::Channels);
-                    return;
-                }
-                KeyCode::F(9) => {
+                KeyCode::F(6) => {
                     self.switch_tab(Tab::Skills);
                     return;
                 }
-                KeyCode::F(10) => {
+                KeyCode::F(7) => {
                     self.switch_tab(Tab::Templates);
                     return;
                 }
+                KeyCode::F(8) => {
+                    self.switch_tab(Tab::Comms);
+                    return;
+                }
+                KeyCode::F(9) => {
+                    self.switch_tab(Tab::Security);
+                    return;
+                }
+                KeyCode::F(10) => {
+                    self.switch_tab(Tab::Audit);
+                    return;
+                }
                 KeyCode::F(11) => {
-                    self.switch_tab(Tab::Peers);
+                    self.switch_tab(Tab::Usage);
                     return;
                 }
                 KeyCode::F(12) => {
-                    self.switch_tab(Tab::Security);
+                    self.switch_tab(Tab::Settings);
                     return;
                 }
                 _ => {}
@@ -749,27 +599,27 @@ impl App {
                         return;
                     }
                     KeyCode::Char('5') => {
-                        self.switch_tab(Tab::Workflows);
-                        return;
-                    }
-                    KeyCode::Char('6') => {
-                        self.switch_tab(Tab::Triggers);
-                        return;
-                    }
-                    KeyCode::Char('7') => {
                         self.switch_tab(Tab::Memory);
                         return;
                     }
-                    KeyCode::Char('8') => {
-                        self.switch_tab(Tab::Channels);
-                        return;
-                    }
-                    KeyCode::Char('9') => {
+                    KeyCode::Char('6') => {
                         self.switch_tab(Tab::Skills);
                         return;
                     }
-                    KeyCode::Char('0') => {
+                    KeyCode::Char('7') => {
                         self.switch_tab(Tab::Templates);
+                        return;
+                    }
+                    KeyCode::Char('8') => {
+                        self.switch_tab(Tab::Comms);
+                        return;
+                    }
+                    KeyCode::Char('9') => {
+                        self.switch_tab(Tab::Security);
+                        return;
+                    }
+                    KeyCode::Char('0') => {
+                        self.switch_tab(Tab::Audit);
                         return;
                     }
                     _ => {}
@@ -813,18 +663,6 @@ impl App {
                     let action = self.chat.handle_key(key);
                     self.handle_chat_action(action);
                 }
-                Tab::Channels => {
-                    let action = self.channels.handle_key(key);
-                    self.handle_channel_action(action);
-                }
-                Tab::Workflows => {
-                    let action = self.workflows.handle_key(key);
-                    self.handle_workflow_action(action);
-                }
-                Tab::Triggers => {
-                    let action = self.triggers.handle_key(key);
-                    self.handle_trigger_action(action);
-                }
                 Tab::Sessions => {
                     let action = self.sessions.handle_key(key);
                     self.handle_sessions_action(action);
@@ -836,14 +674,6 @@ impl App {
                 Tab::Skills => {
                     let action = self.skills.handle_key(key);
                     self.handle_skills_action(action);
-                }
-                Tab::Extensions => {
-                    let action = self.extensions.handle_key(key);
-                    self.handle_extensions_action(action);
-                }
-                Tab::Hands => {
-                    let action = self.hands.handle_key(key);
-                    self.handle_hands_action(action);
                 }
                 Tab::Templates => {
                     let action = self.templates.handle_key(key);
@@ -864,10 +694,6 @@ impl App {
                 Tab::Settings => {
                     let action = self.settings.handle_key(key);
                     self.handle_settings_action(action);
-                }
-                Tab::Peers => {
-                    let action = self.peers.handle_key(key);
-                    self.handle_peers_action(action);
                 }
                 Tab::Comms => {
                     let action = self.comms.handle_key(key);
@@ -890,20 +716,14 @@ impl App {
         self.welcome.tick();
         self.chat.tick();
         self.dashboard.tick();
-        self.channels.tick();
-        self.workflows.tick();
-        self.triggers.tick();
         self.sessions.tick();
         self.memory.tick();
         self.skills.tick();
-        self.hands.tick();
-        self.extensions.tick();
         self.templates.tick();
         self.security.tick();
         self.audit.tick();
         self.usage.tick();
         self.settings.tick();
-        self.peers.tick();
         self.comms.tick();
         self.logs.tick();
 
@@ -911,7 +731,6 @@ impl App {
         if self.phase == Phase::Main {
             match self.active_tab {
                 Tab::Logs if self.logs.should_poll() => self.refresh_logs(),
-                Tab::Peers if self.peers.should_poll() => self.refresh_peers(),
                 Tab::Comms if self.comms.should_poll() => self.refresh_comms(),
                 _ => {}
             }
@@ -948,20 +767,14 @@ impl App {
         match tab {
             Tab::Dashboard => self.refresh_dashboard(),
             Tab::Agents => self.refresh_agents(),
-            Tab::Channels => self.refresh_channels(),
-            Tab::Workflows => self.refresh_workflows(),
-            Tab::Triggers => self.refresh_triggers(),
             Tab::Sessions => self.refresh_sessions(),
             Tab::Memory => self.refresh_memory(),
             Tab::Skills => self.refresh_skills(),
-            Tab::Hands => self.refresh_hands(),
-            Tab::Extensions => self.refresh_extensions(),
             Tab::Templates => self.refresh_templates(),
             Tab::Security => self.refresh_security(),
             Tab::Audit => self.refresh_audit(),
             Tab::Usage => self.refresh_usage(),
             Tab::Settings => self.refresh_settings_providers(),
-            Tab::Peers => self.refresh_peers(),
             Tab::Comms => self.refresh_comms(),
             Tab::Logs => self.refresh_logs(),
             Tab::Chat => {} // Chat doesn't need refresh on enter
@@ -975,7 +788,6 @@ impl App {
         // Load initial data for visible tabs
         self.refresh_agents();
         self.refresh_dashboard();
-        self.refresh_channels();
     }
 
     // ─── Data refresh helpers ────────────────────────────────────────────────
@@ -999,31 +811,6 @@ impl App {
         }
     }
 
-    fn refresh_channels(&mut self) {
-        if let Some(backend) = self.backend.to_ref() {
-            self.channels.loading = true;
-            event::spawn_fetch_channels(backend, self.event_tx.clone());
-        }
-        // Also build defaults from env detection
-        if self.channels.channels.is_empty() {
-            self.channels.build_default_channels();
-        }
-    }
-
-    fn refresh_workflows(&mut self) {
-        if let Some(backend) = self.backend.to_ref() {
-            self.workflows.loading = true;
-            event::spawn_fetch_workflows(backend, self.event_tx.clone());
-        }
-    }
-
-    fn refresh_triggers(&mut self) {
-        if let Some(backend) = self.backend.to_ref() {
-            self.triggers.loading = true;
-            event::spawn_fetch_triggers(backend, self.event_tx.clone());
-        }
-    }
-
     fn refresh_sessions(&mut self) {
         if let Some(backend) = self.backend.to_ref() {
             self.sessions.loading = true;
@@ -1042,27 +829,6 @@ impl App {
         if let Some(backend) = self.backend.to_ref() {
             self.skills.loading = true;
             event::spawn_fetch_skills(backend, self.event_tx.clone());
-        }
-    }
-
-    fn refresh_hands(&mut self) {
-        if let Some(backend) = self.backend.to_ref() {
-            self.hands.loading = true;
-            event::spawn_fetch_hands(backend.clone(), self.event_tx.clone());
-            event::spawn_fetch_active_hands(backend, self.event_tx.clone());
-        }
-    }
-
-    fn refresh_extensions(&mut self) {
-        if let Some(backend) = self.backend.to_ref() {
-            self.extensions.loading = true;
-            event::spawn_fetch_extensions(backend, self.event_tx.clone());
-        }
-    }
-
-    fn refresh_extension_health(&mut self) {
-        if let Some(backend) = self.backend.to_ref() {
-            event::spawn_fetch_extension_health(backend, self.event_tx.clone());
         }
     }
 
@@ -1104,19 +870,6 @@ impl App {
         if let Some(backend) = self.backend.to_ref() {
             self.settings.loading = true;
             event::spawn_fetch_models(backend, self.event_tx.clone());
-        }
-    }
-
-    fn refresh_settings_tools(&mut self) {
-        if let Some(backend) = self.backend.to_ref() {
-            event::spawn_fetch_tools(backend, self.event_tx.clone());
-        }
-    }
-
-    fn refresh_peers(&mut self) {
-        if let Some(backend) = self.backend.to_ref() {
-            self.peers.loading = true;
-            event::spawn_fetch_peers(backend, self.event_tx.clone());
         }
     }
 
@@ -1368,116 +1121,6 @@ impl App {
         }
     }
 
-    fn handle_channel_action(&mut self, action: channels::ChannelAction) {
-        match action {
-            channels::ChannelAction::Continue => {}
-            channels::ChannelAction::Refresh => self.refresh_channels(),
-            channels::ChannelAction::TestChannel(name) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_test_channel(backend, name, self.event_tx.clone());
-                }
-            }
-            channels::ChannelAction::ToggleChannel(_name, _enabled) => {
-                // Toggle is handled locally in the state; daemon toggle
-                // could be spawned here if the API supports it.
-            }
-            channels::ChannelAction::SaveChannel(name, values) => {
-                // Save channel credentials via daemon API
-                if let Some(backend) = self.backend.to_ref() {
-                    let tx = self.event_tx.clone();
-                    std::thread::spawn(move || {
-                        if let event::BackendRef::Daemon(base_url) = backend {
-                            let client = reqwest::blocking::Client::builder()
-                                .timeout(std::time::Duration::from_secs(10))
-                                .build()
-                                .ok();
-                            if let Some(client) = client {
-                                let mut fields = serde_json::Map::new();
-                                for (k, v) in &values {
-                                    fields.insert(k.clone(), serde_json::Value::String(v.clone()));
-                                }
-                                let body = serde_json::json!({ "fields": fields });
-                                let _ = client
-                                    .post(format!("{base_url}/api/channels/{name}/configure"))
-                                    .json(&body)
-                                    .send();
-                            }
-                        }
-                        // Signal tick so the UI refreshes next cycle
-                        let _ = tx.send(event::AppEvent::Tick);
-                    });
-                }
-                // Immediately trigger a refresh of the channel list
-                self.refresh_channels();
-            }
-        }
-    }
-
-    fn handle_workflow_action(&mut self, action: workflows::WorkflowAction) {
-        match action {
-            workflows::WorkflowAction::Continue => {}
-            workflows::WorkflowAction::Refresh => self.refresh_workflows(),
-            workflows::WorkflowAction::LoadRuns(wf_id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    self.workflows.loading = true;
-                    event::spawn_fetch_workflow_runs(backend, wf_id, self.event_tx.clone());
-                }
-            }
-            workflows::WorkflowAction::CreateWorkflow {
-                name,
-                description,
-                steps_json,
-            } => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_create_workflow(
-                        backend,
-                        name,
-                        description,
-                        steps_json,
-                        self.event_tx.clone(),
-                    );
-                }
-            }
-            workflows::WorkflowAction::RunWorkflow { id, input } => {
-                if let Some(backend) = self.backend.to_ref() {
-                    self.workflows.loading = true;
-                    event::spawn_run_workflow(backend, id, input, self.event_tx.clone());
-                }
-            }
-        }
-    }
-
-    fn handle_trigger_action(&mut self, action: triggers::TriggerAction) {
-        match action {
-            triggers::TriggerAction::Continue => {}
-            triggers::TriggerAction::Refresh => self.refresh_triggers(),
-            triggers::TriggerAction::CreateTrigger {
-                agent_id,
-                pattern_type,
-                pattern_param,
-                prompt,
-                max_fires,
-            } => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_create_trigger(
-                        backend,
-                        agent_id,
-                        pattern_type,
-                        pattern_param,
-                        prompt,
-                        max_fires,
-                        self.event_tx.clone(),
-                    );
-                }
-            }
-            triggers::TriggerAction::DeleteTrigger(id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_delete_trigger(backend, id, self.event_tx.clone());
-                }
-            }
-        }
-    }
-
     fn handle_sessions_action(&mut self, action: sessions::SessionsAction) {
         match action {
             sessions::SessionsAction::Continue => {}
@@ -1533,23 +1176,6 @@ impl App {
         match action {
             skills::SkillsAction::Continue => {}
             skills::SkillsAction::RefreshInstalled => self.refresh_skills(),
-            skills::SkillsAction::SearchClawHub(query) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    self.skills.loading = true;
-                    event::spawn_search_clawhub(backend, query, self.event_tx.clone());
-                }
-            }
-            skills::SkillsAction::BrowseClawHub(sort) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    self.skills.loading = true;
-                    event::spawn_browse_clawhub(backend, sort, self.event_tx.clone());
-                }
-            }
-            skills::SkillsAction::InstallSkill(slug) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_install_skill(backend, slug, self.event_tx.clone());
-                }
-            }
             skills::SkillsAction::UninstallSkill(name) => {
                 if let Some(backend) = self.backend.to_ref() {
                     event::spawn_uninstall_skill(backend, name, self.event_tx.clone());
@@ -1559,62 +1185,6 @@ impl App {
                 if let Some(backend) = self.backend.to_ref() {
                     self.skills.loading = true;
                     event::spawn_fetch_mcp_servers(backend, self.event_tx.clone());
-                }
-            }
-        }
-    }
-
-    fn handle_extensions_action(&mut self, action: extensions::ExtensionsAction) {
-        match action {
-            extensions::ExtensionsAction::Continue => {}
-            extensions::ExtensionsAction::RefreshAll => self.refresh_extensions(),
-            extensions::ExtensionsAction::RefreshHealth => self.refresh_extension_health(),
-            extensions::ExtensionsAction::Install(id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_install_extension(backend, id, self.event_tx.clone());
-                }
-            }
-            extensions::ExtensionsAction::Remove(id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_remove_extension(backend, id, self.event_tx.clone());
-                }
-            }
-            extensions::ExtensionsAction::Reconnect(id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_reconnect_extension(backend, id, self.event_tx.clone());
-                }
-            }
-        }
-    }
-
-    fn handle_hands_action(&mut self, action: hands::HandsAction) {
-        match action {
-            hands::HandsAction::Continue => {}
-            hands::HandsAction::RefreshDefinitions => self.refresh_hands(),
-            hands::HandsAction::RefreshActive => {
-                if let Some(backend) = self.backend.to_ref() {
-                    self.hands.loading = true;
-                    event::spawn_fetch_active_hands(backend, self.event_tx.clone());
-                }
-            }
-            hands::HandsAction::ActivateHand(hand_id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_activate_hand(backend, hand_id, self.event_tx.clone());
-                }
-            }
-            hands::HandsAction::DeactivateHand(instance_id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_deactivate_hand(backend, instance_id, self.event_tx.clone());
-                }
-            }
-            hands::HandsAction::PauseHand(instance_id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_pause_hand(backend, instance_id, self.event_tx.clone());
-                }
-            }
-            hands::HandsAction::ResumeHand(instance_id) => {
-                if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_resume_hand(backend, instance_id, self.event_tx.clone());
                 }
             }
         }
@@ -1674,7 +1244,6 @@ impl App {
             settings::SettingsAction::Continue => {}
             settings::SettingsAction::RefreshProviders => self.refresh_settings_providers(),
             settings::SettingsAction::RefreshModels => self.refresh_settings_models(),
-            settings::SettingsAction::RefreshTools => self.refresh_settings_tools(),
             settings::SettingsAction::SaveProviderKey { name, key } => {
                 if let Some(backend) = self.backend.to_ref() {
                     event::spawn_save_provider_key(backend, name, key, self.event_tx.clone());
@@ -1690,13 +1259,33 @@ impl App {
                     event::spawn_test_provider(backend, name, self.event_tx.clone());
                 }
             }
-        }
-    }
-
-    fn handle_peers_action(&mut self, action: peers::PeersAction) {
-        match action {
-            peers::PeersAction::Continue => {}
-            peers::PeersAction::Refresh => self.refresh_peers(),
+            settings::SettingsAction::AddEndpoint { name, provider, model, base_url, format } => {
+                if let Some(backend) = self.backend.to_ref() {
+                    event::spawn_add_endpoint(
+                        backend, name, provider, model, base_url, format, self.event_tx.clone(),
+                    );
+                }
+            }
+            settings::SettingsAction::DeleteEndpoint(name) => {
+                if let Some(backend) = self.backend.to_ref() {
+                    event::spawn_delete_endpoint(backend, name, self.event_tx.clone());
+                }
+            }
+            settings::SettingsAction::AddModality { name, primary, fallbacks } => {
+                if let Some(backend) = self.backend.to_ref() {
+                    event::spawn_add_modality(backend, name, primary, fallbacks, self.event_tx.clone());
+                }
+            }
+            settings::SettingsAction::DeleteModality(name) => {
+                if let Some(backend) = self.backend.to_ref() {
+                    event::spawn_delete_modality(backend, name, self.event_tx.clone());
+                }
+            }
+            settings::SettingsAction::SetDefaultModality(modality) => {
+                if let Some(backend) = self.backend.to_ref() {
+                    event::spawn_set_default_modality(backend, modality, self.event_tx.clone());
+                }
+            }
         }
     }
 
@@ -1739,9 +1328,26 @@ impl App {
             let client = crate::daemon_client();
             if let Ok(resp) = client.get(format!("{base_url}/api/agents/{id}")).send() {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let modality = body["modality"].as_str().unwrap_or("?");
-                    let model = body["model_name"].as_str().unwrap_or("?");
-                    self.chat.model_label = format!("{modality}/{model}");
+                    // model.modality is nested
+                    let modality = body["model"]["modality"]
+                        .as_str()
+                        .unwrap_or_else(|| body["modality"].as_str().unwrap_or("?"));
+                    // Resolve model name from Brain
+                    if let Ok(brain_resp) = client.get(format!("{base_url}/api/brain")).send() {
+                        if let Ok(brain) = brain_resp.json::<serde_json::Value>() {
+                            let model_name = brain
+                                .get("endpoints")
+                                .and_then(|eps| {
+                                    brain.get("modalities")
+                                        .and_then(|mods| mods.get(modality))
+                                        .and_then(|m| m["primary"].as_str())
+                                        .and_then(|ep_name| eps.get(ep_name))
+                                })
+                                .and_then(|ep| ep["model"].as_str())
+                                .unwrap_or("?");
+                            self.chat.model_label = format!("{modality}/{model_name}");
+                        }
+                    }
                 }
             }
         }
@@ -1852,49 +1458,53 @@ impl App {
         let models = match &self.backend {
             Backend::Daemon { base_url } => {
                 let client = crate::daemon_client();
-                match client.get(format!("{base_url}/api/models")).send() {
+                match client.get(format!("{base_url}/api/brain")).send() {
                     Ok(resp) => match resp.json::<serde_json::Value>() {
-                        Ok(body) => body["models"]
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter(|m| m["available"].as_bool().unwrap_or(false))
-                                    .map(|m| chat::ModelEntry {
-                                        id: m["id"].as_str().unwrap_or("").to_string(),
-                                        display_name: m["display_name"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        provider: m["provider"].as_str().unwrap_or("").to_string(),
-                                        tier: m["tier"].as_str().unwrap_or("Balanced").to_string(),
+                        Ok(body) => {
+                            let loaded = body["loaded"].as_bool().unwrap_or(false);
+                            if !loaded {
+                                Vec::new()
+                            } else {
+                                let endpoints = body.get("endpoints").and_then(|e| e.as_object());
+                                body.get("modalities")
+                                    .and_then(|m| m.as_object())
+                                    .map(|obj| {
+                                        obj.iter()
+                                            .map(|(name, m)| {
+                                                let primary = m["primary"].as_str().unwrap_or("");
+                                                let (model_name, ready) = endpoints
+                                                    .and_then(|eps| eps.get(primary))
+                                                    .map(|ep| {
+                                                        (
+                                                            ep["model"].as_str().unwrap_or("unknown"),
+                                                            ep["ready"].as_bool().unwrap_or(false),
+                                                        )
+                                                    })
+                                                    .unwrap_or(("unknown", false));
+                                                chat::ModelEntry {
+                                                    modality: name.clone(),
+                                                    model_name: model_name.to_string(),
+                                                    endpoint: primary.to_string(),
+                                                    ready,
+                                                }
+                                            })
+                                            .collect()
                                     })
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
+                                    .unwrap_or_default()
+                            }
+                        }
                         Err(_) => Vec::new(),
                     },
                     Err(_) => Vec::new(),
                 }
             }
-            Backend::InProcess { kernel } => {
-                let catalog = kernel.model_catalog.read().unwrap();
-                catalog
-                    .available_models()
-                    .into_iter()
-                    .map(|e| chat::ModelEntry {
-                        id: e.id.clone(),
-                        display_name: e.display_name.clone(),
-                        provider: e.provider.clone(),
-                        tier: format!("{:?}", e.tier),
-                    })
-                    .collect()
-            }
+            Backend::InProcess { .. } => Vec::new(),
             Backend::None => Vec::new(),
         };
 
         if models.is_empty() {
             self.chat
-                .push_message(chat::Role::System, "No models available.".to_string());
+                .push_message(chat::Role::System, "No modalities available. Check Brain config.".to_string());
             return;
         }
 
@@ -1904,8 +1514,8 @@ impl App {
         self.chat.show_model_picker = true;
     }
 
-    fn switch_model(&mut self, model_id: &str) {
-        if self.chat.model_label.ends_with(model_id) {
+    fn switch_model(&mut self, modality: &str) {
+        if self.chat.model_label.starts_with(modality) {
             return;
         }
 
@@ -1916,29 +1526,25 @@ impl App {
                     let url = format!("{base_url}/api/agents/{agent_id}/model");
                     match client
                         .put(&url)
-                        .json(&serde_json::json!({"model": model_id}))
+                        .json(&serde_json::json!({"model": modality}))
                         .send()
                     {
                         Ok(r) if r.status().is_success() => {
-                            if let Ok(resp) = client
-                                .get(format!("{base_url}/api/agents/{agent_id}"))
-                                .send()
-                            {
-                                if let Ok(body) = resp.json::<serde_json::Value>() {
-                                    let modality = body["modality"].as_str().unwrap_or("?");
-                                    let model = body["model_name"].as_str().unwrap_or("?");
-                                    self.chat.model_label = format!("{modality}/{model}");
-                                }
+                            // PUT response already has modality + model name
+                            if let Ok(body) = r.json::<serde_json::Value>() {
+                                let resolved_mod = body["modality"].as_str().unwrap_or(modality);
+                                let resolved_model = body["model"].as_str().unwrap_or("?");
+                                self.chat.model_label = format!("{resolved_mod}/{resolved_model}");
                             }
                             self.chat.push_message(
                                 chat::Role::System,
-                                format!("Switched to {model_id}"),
+                                format!("Switched modality to {modality}"),
                             );
                         }
                         _ => {
                             self.chat.push_message(
                                 chat::Role::System,
-                                format!("Failed to switch to {model_id}"),
+                                format!("Failed to switch to {modality}"),
                             );
                         }
                     }
@@ -1946,13 +1552,13 @@ impl App {
             }
             (Backend::InProcess { kernel }, Some(target)) => {
                 if let Some(id) = target.agent_id_inprocess {
-                    let result = kernel.registry.update_modality(id, model_id.to_string());
+                    let result = kernel.registry.update_modality(id, modality.to_string());
                     match result {
                         Ok(()) => {
-                            self.chat.model_label = model_id.to_string();
+                            self.chat.model_label = modality.to_string();
                             self.chat.push_message(
                                 chat::Role::System,
-                                format!("Switched to {model_id}"),
+                                format!("Switched modality to {modality}"),
                             );
                         }
                         Err(e) => {
@@ -2020,11 +1626,14 @@ impl App {
                             if let Ok(body) = resp.json::<serde_json::Value>() {
                                 if let Some(arr) = body.as_array() {
                                     for a in arr {
+                                        let modality = a["modality"].as_str().unwrap_or("?");
+                                        let model = a["model"].as_str().unwrap_or("?");
                                         lines.push(format!(
-                                            "{} [{}] {}",
+                                            "{} [{}] {}/{}",
                                             a["name"].as_str().unwrap_or("?"),
                                             a["state"].as_str().unwrap_or("?"),
-                                            a["model_name"].as_str().unwrap_or("?"),
+                                            modality,
+                                            model,
                                         ));
                                     }
                                 }
@@ -2118,42 +1727,6 @@ impl App {
                     self.switch_model(args);
                 }
             }
-            "/hands" => match &self.backend {
-                Backend::InProcess { kernel } => {
-                    let defs = kernel.hand_registry.list_definitions();
-                    let instances = kernel.hand_registry.list_instances();
-                    let mut msg = format!("Available hands ({}):\n", defs.len());
-                    for d in &defs {
-                        let reqs_met = kernel
-                            .hand_registry
-                            .check_requirements(&d.id)
-                            .map(|r| r.iter().all(|(_, ok)| *ok))
-                            .unwrap_or(false);
-                        let badge = if reqs_met { "Ready" } else { "Setup" };
-                        msg.push_str(&format!(
-                            "  {} {} — {} [{}]\n",
-                            d.icon, d.name, d.description, badge
-                        ));
-                    }
-                    if !instances.is_empty() {
-                        msg.push_str(&format!("\nActive hands ({}):\n", instances.len()));
-                        for i in &instances {
-                            msg.push_str(&format!(
-                                "  {} — {} ({})\n",
-                                i.agent_name, i.hand_id, i.status
-                            ));
-                        }
-                    }
-                    self.chat.push_message(chat::Role::System, msg);
-                }
-                _ => {
-                    self.chat.push_message(
-                        chat::Role::System,
-                        "Hands info requires in-process mode. Use the Hands tab instead."
-                            .to_string(),
-                    );
-                }
-            },
             _ => {
                 self.chat.push_message(
                     chat::Role::System,
@@ -2199,20 +1772,14 @@ impl App {
                     Tab::Dashboard => dashboard::draw(frame, chunks[1], &mut self.dashboard),
                     Tab::Agents => agents::draw(frame, chunks[1], &mut self.agents),
                     Tab::Chat => chat::draw(frame, chunks[1], &mut self.chat),
-                    Tab::Channels => channels::draw(frame, chunks[1], &mut self.channels),
-                    Tab::Workflows => workflows::draw(frame, chunks[1], &mut self.workflows),
-                    Tab::Triggers => triggers::draw(frame, chunks[1], &mut self.triggers),
                     Tab::Sessions => sessions::draw(frame, chunks[1], &mut self.sessions),
                     Tab::Memory => memory::draw(frame, chunks[1], &mut self.memory),
                     Tab::Skills => skills::draw(frame, chunks[1], &mut self.skills),
-                    Tab::Hands => hands::draw(frame, chunks[1], &mut self.hands),
-                    Tab::Extensions => extensions::draw(frame, chunks[1], &mut self.extensions),
                     Tab::Templates => templates::draw(frame, chunks[1], &mut self.templates),
                     Tab::Security => security::draw(frame, chunks[1], &mut self.security),
                     Tab::Audit => audit::draw(frame, chunks[1], &mut self.audit),
                     Tab::Usage => usage::draw(frame, chunks[1], &mut self.usage),
                     Tab::Settings => settings::draw(frame, chunks[1], &mut self.settings),
-                    Tab::Peers => peers::draw(frame, chunks[1], &mut self.peers),
                     Tab::Comms => comms::draw(frame, chunks[1], &mut self.comms),
                     Tab::Logs => logs::draw(frame, chunks[1], &mut self.logs),
                 }

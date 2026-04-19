@@ -3,9 +3,8 @@
 //! Supports three autonomous modes:
 //! - **Continuous**: Agent self-prompts on a fixed interval.
 //! - **Periodic**: Agent wakes on a simplified cron schedule (e.g. "every 5m").
-//! - **Proactive**: Agent wakes when matching events fire (via the trigger engine).
+//! - **Proactive**: Agent wakes when matching events fire (trigger engine removed in batch-1).
 
-use crate::triggers::TriggerPattern;
 use dashmap::DashMap;
 use opencarrier_types::agent::{AgentId, ScheduleMode};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -199,48 +198,7 @@ impl BackgroundExecutor {
     }
 }
 
-/// Parse a proactive condition string into a `TriggerPattern`.
-///
-/// Supported formats:
-/// - `"event:agent_spawned"` → `TriggerPattern::AgentSpawned { name_pattern: "*" }`
-/// - `"event:agent_terminated"` → `TriggerPattern::AgentTerminated`
-/// - `"event:lifecycle"` → `TriggerPattern::Lifecycle`
-/// - `"event:system"` → `TriggerPattern::System`
-/// - `"memory:some_key"` → `TriggerPattern::MemoryKeyPattern { key_pattern: "some_key" }`
-/// - `"all"` → `TriggerPattern::All`
-pub fn parse_condition(condition: &str) -> Option<TriggerPattern> {
-    let condition = condition.trim();
-
-    if condition.eq_ignore_ascii_case("all") {
-        return Some(TriggerPattern::All);
-    }
-
-    if let Some(event_kind) = condition.strip_prefix("event:") {
-        let kind = event_kind.trim().to_lowercase();
-        return match kind.as_str() {
-            "agent_spawned" => Some(TriggerPattern::AgentSpawned {
-                name_pattern: "*".to_string(),
-            }),
-            "agent_terminated" => Some(TriggerPattern::AgentTerminated),
-            "lifecycle" => Some(TriggerPattern::Lifecycle),
-            "system" => Some(TriggerPattern::System),
-            "memory_update" => Some(TriggerPattern::MemoryUpdate),
-            other => {
-                warn!(condition = %condition, "Unknown event condition: {other}");
-                None
-            }
-        };
-    }
-
-    if let Some(key) = condition.strip_prefix("memory:") {
-        return Some(TriggerPattern::MemoryKeyPattern {
-            key_pattern: key.trim().to_string(),
-        });
-    }
-
-    warn!(condition = %condition, "Unrecognized proactive condition format");
-    None
-}
+// batch-1 removed: parse_condition function (triggers engine removed)
 
 /// Parse a simplified cron expression into seconds.
 ///
@@ -317,50 +275,7 @@ mod tests {
         assert_eq!(parse_cron_to_secs("gibberish"), 300);
     }
 
-    #[test]
-    fn test_parse_condition_events() {
-        assert!(matches!(
-            parse_condition("event:agent_spawned"),
-            Some(TriggerPattern::AgentSpawned { .. })
-        ));
-        assert!(matches!(
-            parse_condition("event:agent_terminated"),
-            Some(TriggerPattern::AgentTerminated)
-        ));
-        assert!(matches!(
-            parse_condition("event:lifecycle"),
-            Some(TriggerPattern::Lifecycle)
-        ));
-        assert!(matches!(
-            parse_condition("event:system"),
-            Some(TriggerPattern::System)
-        ));
-        assert!(matches!(
-            parse_condition("event:memory_update"),
-            Some(TriggerPattern::MemoryUpdate)
-        ));
-    }
-
-    #[test]
-    fn test_parse_condition_memory() {
-        match parse_condition("memory:agent.*.status") {
-            Some(TriggerPattern::MemoryKeyPattern { key_pattern }) => {
-                assert_eq!(key_pattern, "agent.*.status");
-            }
-            other => panic!("Expected MemoryKeyPattern, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_parse_condition_all() {
-        assert!(matches!(parse_condition("all"), Some(TriggerPattern::All)));
-    }
-
-    #[test]
-    fn test_parse_condition_unknown() {
-        assert!(parse_condition("event:unknown_thing").is_none());
-        assert!(parse_condition("badprefix:foo").is_none());
-    }
+    // batch-1 removed: parse_condition tests (triggers engine removed)
 
     #[tokio::test]
     async fn test_continuous_shutdown() {

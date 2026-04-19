@@ -8,7 +8,7 @@ use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, C
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::embedding::EmbeddingDriver;
 use crate::kernel_handle::KernelHandle;
-use crate::llm_driver::{Brain, CompletionRequest, LlmDriver, LlmError, StreamEvent};
+use crate::llm_driver::{Brain, CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
 use crate::llm_errors;
 use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::mcp::McpConnection;
@@ -297,6 +297,10 @@ pub async fn run_agent_loop(
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
 
+    // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
+    let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
+    let mut available_tools: &[ToolDefinition] = &tools_owned;
+
     for iteration in 0..max_iterations {
         debug!(iteration, "Agent loop iteration");
 
@@ -331,17 +335,15 @@ pub async fn run_agent_loop(
             cb(LoopPhase::Thinking);
         }
 
-        // Call LLM: use Brain if available, otherwise fall back to driver
-        let mut response = if let Some(ref brain) = brain {
-            let modality = if manifest.model.modality.is_empty() {
-                "chat"
-            } else {
-                &manifest.model.modality
-            };
-            brain.think(modality, request).await.map_err(|e| OpenCarrierError::LlmDriver(e.to_string()))?
+        // Call LLM with unified fallback across Brain endpoints
+        let modality = if manifest.model.modality.is_empty() {
+            "chat"
         } else {
-            call_with_retry(&*driver, request, None, None).await?
+            &manifest.model.modality
         };
+        let mut response = call_with_fallback(
+            brain.as_ref(), &*driver, modality, request,
+        ).await?;
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
@@ -729,43 +731,19 @@ pub async fn run_agent_loop(
 
                 append_tool_error_guidance(&mut tool_result_blocks);
 
-                // Detect approval denials and inject guidance to prevent infinite retry loops
-                let denial_count = tool_result_blocks
-                    .iter()
-                    .filter(|b| {
-                        matches!(b, ContentBlock::ToolResult { content, is_error: true, .. }
-                        if content.contains("requires human approval and was denied"))
-                    })
-                    .count();
-                if denial_count > 0 {
-                    tool_result_blocks.push(ContentBlock::Text {
-                        text: format!(
-                            "[System: {} tool call(s) were denied by approval policy. \
-                             Do NOT retry denied tools. Explain to the user what you \
-                             wanted to do and that it requires their approval. \
-                             Hint: set auto_approve = true in [approval] section of \
-                             config.toml, or start with --yolo flag, to auto-approve \
-                             all tool calls.]",
-                            denial_count
-                        ),
-                        provider_metadata: None,
-                    });
-                }
-
                 // Detect tool errors and inject guidance to prevent fabrication
                 let error_count = tool_result_blocks
                     .iter()
                     .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
                     .count();
-                let non_denial_errors = error_count.saturating_sub(denial_count);
-                if non_denial_errors > 0 {
+                if error_count > 0 {
                     tool_result_blocks.push(ContentBlock::Text {
                         text: format!(
                             "[System: {} tool(s) returned errors. Report the error honestly \
                              to the user. Do NOT fabricate results or pretend the tool succeeded. \
                              If a search or fetch failed, tell the user it failed and suggest \
                              alternatives instead of making up data.]",
-                            non_denial_errors
+                            error_count
                         ),
                         provider_metadata: None,
                     });
@@ -778,6 +756,32 @@ pub async fn run_agent_loop(
                 };
                 session.messages.push(tool_results_msg.clone());
                 messages.push(tool_results_msg);
+
+                // Dynamic tool refresh: if tools that install/modify skills were called,
+                // rebuild the tool list so the LLM can use new tools in the next iteration.
+                let tools_may_have_changed = response.tool_calls.iter().any(|tc| {
+                    matches!(
+                        tc.name.as_str(),
+                        "train_write" | "clone_install" | "file_write"
+                    )
+                });
+                if tools_may_have_changed {
+                    if let Some(ref kernel) = kernel {
+                        let agent_id_str = session.agent_id.to_string();
+                        if let Some(new_tools) = kernel.refresh_tools(&agent_id_str) {
+                            if new_tools.len() != available_tools.len() {
+                                let added = new_tools.len().saturating_sub(available_tools.len());
+                                info!(
+                                    added,
+                                    total = new_tools.len(),
+                                    "Tool list refreshed after skill installation"
+                                );
+                                tools_owned = new_tools;
+                                available_tools = &tools_owned;
+                            }
+                        }
+                    }
+                }
 
                 // Interim save after tool execution to prevent data loss on crash
                 if let Err(e) = memory.save_session_async(session).await {
@@ -1084,6 +1088,139 @@ async fn stream_with_retry(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// Unified fallback — tries Brain endpoints in order with report()
+// ---------------------------------------------------------------------------
+
+/// Call LLM with unified fallback across Brain endpoints (non-streaming).
+///
+/// If Brain is present, gets the ordered endpoint list and tries each in turn,
+/// reporting results back to Brain. Falls back to the raw driver if Brain is
+/// absent or returns no endpoints.
+#[allow(dead_code)] // Will be wired up in Phase 3
+async fn call_with_fallback(
+    brain: Option<&Arc<dyn Brain>>,
+    fallback_driver: &dyn LlmDriver,
+    modality: &str,
+    request: CompletionRequest,
+) -> OpenCarrierResult<CompletionResponse> {
+    let Some(brain) = brain else {
+        return call_with_retry(fallback_driver, request, None, None).await;
+    };
+
+    let endpoints = brain.endpoints_for(modality);
+    if endpoints.is_empty() {
+        return call_with_retry(fallback_driver, request, None, None).await;
+    }
+
+    let mut last_error: Option<OpenCarrierError> = None;
+    for ep in &endpoints {
+        if let Some(driver) = brain.driver_for_endpoint(&ep.id) {
+            let mut req = request.clone();
+            req.model = ep.model.clone();
+            let start = std::time::Instant::now();
+            match call_with_retry(&*driver, req, Some(&ep.provider), None).await {
+                Ok(response) => {
+                    let latency = start.elapsed().as_millis() as u64;
+                    brain.report(opencarrier_types::brain::EndpointReport {
+                        endpoint_id: ep.id.clone(),
+                        success: true,
+                        latency_ms: latency,
+                        error: None,
+                    });
+                    return Ok(response);
+                }
+                Err(e) => {
+                    let latency = start.elapsed().as_millis() as u64;
+                    let err_str = format!("{e}");
+                    brain.report(opencarrier_types::brain::EndpointReport {
+                        endpoint_id: ep.id.clone(),
+                        success: false,
+                        latency_ms: latency,
+                        error: Some(err_str),
+                    });
+                    tracing::warn!(
+                        endpoint = %ep.id,
+                        error = %e,
+                        "Endpoint failed in fallback chain, trying next"
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        OpenCarrierError::LlmDriver(format!(
+            "All endpoints exhausted for modality '{modality}'"
+        ))
+    }))
+}
+
+/// Call LLM with unified fallback across Brain endpoints (streaming).
+///
+/// Same logic as `call_with_fallback` but uses `stream_with_retry`.
+#[allow(dead_code)] // Will be wired up in Phase 3
+async fn stream_with_fallback(
+    brain: Option<&Arc<dyn Brain>>,
+    fallback_driver: &dyn LlmDriver,
+    modality: &str,
+    request: CompletionRequest,
+    tx: tokio::sync::mpsc::Sender<StreamEvent>,
+) -> OpenCarrierResult<CompletionResponse> {
+    let Some(brain) = brain else {
+        return stream_with_retry(fallback_driver, request, tx, None, None).await;
+    };
+
+    let endpoints = brain.endpoints_for(modality);
+    if endpoints.is_empty() {
+        return stream_with_retry(fallback_driver, request, tx, None, None).await;
+    }
+
+    let mut last_error: Option<OpenCarrierError> = None;
+    for ep in &endpoints {
+        if let Some(driver) = brain.driver_for_endpoint(&ep.id) {
+            let mut req = request.clone();
+            req.model = ep.model.clone();
+            let start = std::time::Instant::now();
+            match stream_with_retry(&*driver, req, tx.clone(), Some(&ep.provider), None).await {
+                Ok(response) => {
+                    let latency = start.elapsed().as_millis() as u64;
+                    brain.report(opencarrier_types::brain::EndpointReport {
+                        endpoint_id: ep.id.clone(),
+                        success: true,
+                        latency_ms: latency,
+                        error: None,
+                    });
+                    return Ok(response);
+                }
+                Err(e) => {
+                    let latency = start.elapsed().as_millis() as u64;
+                    let err_str = format!("{e}");
+                    brain.report(opencarrier_types::brain::EndpointReport {
+                        endpoint_id: ep.id.clone(),
+                        success: false,
+                        latency_ms: latency,
+                        error: Some(err_str),
+                    });
+                    tracing::warn!(
+                        endpoint = %ep.id,
+                        error = %e,
+                        "Streaming endpoint failed in fallback chain, trying next"
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        OpenCarrierError::LlmDriver(format!(
+            "All streaming endpoints exhausted for modality '{modality}'"
+        ))
+    }))
+}
+
 /// Run the agent execution loop with streaming support.
 ///
 /// Like `run_agent_loop`, but sends `StreamEvent`s to the provided channel
@@ -1272,6 +1409,10 @@ pub async fn run_agent_loop_streaming(
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
 
+    // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
+    let mut tools_owned_streaming: Vec<ToolDefinition> = available_tools.to_vec();
+    let mut available_tools: &[ToolDefinition] = &tools_owned_streaming;
+
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
 
@@ -1322,25 +1463,18 @@ pub async fn run_agent_loop_streaming(
             }
         }
 
-        // Stream LLM: use Brain if available (non-streaming for now), otherwise driver
-        let mut response = if let Some(ref brain) = brain {
-            let modality = if manifest.model.modality.is_empty() {
-                "chat"
-            } else {
-                &manifest.model.modality
-            };
-            // TODO: Add brain.stream() for true streaming support
-            brain.think(modality, request).await.map_err(|e| OpenCarrierError::LlmDriver(e.to_string()))?
+        // Stream LLM: Brain selects the driver + model, then we stream directly.
+        // Brain handles routing (modality → endpoint) and fallback chain selection.
+        // The actual streaming call goes through driver.stream() for real token-by-token output.
+        // Call LLM with unified streaming fallback across Brain endpoints
+        let modality = if manifest.model.modality.is_empty() {
+            "chat"
         } else {
-            stream_with_retry(
-                &*driver,
-                request,
-                stream_tx.clone(),
-                None,
-                None,
-            )
-            .await?
+            &manifest.model.modality
         };
+        let mut response = stream_with_fallback(
+            brain.as_ref(), &*driver, modality, request, stream_tx.clone(),
+        ).await?;
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
@@ -1734,43 +1868,19 @@ pub async fn run_agent_loop_streaming(
 
                 append_tool_error_guidance(&mut tool_result_blocks);
 
-                // Detect approval denials and inject guidance to prevent infinite retry loops
-                let denial_count = tool_result_blocks
-                    .iter()
-                    .filter(|b| {
-                        matches!(b, ContentBlock::ToolResult { content, is_error: true, .. }
-                        if content.contains("requires human approval and was denied"))
-                    })
-                    .count();
-                if denial_count > 0 {
-                    tool_result_blocks.push(ContentBlock::Text {
-                        text: format!(
-                            "[System: {} tool call(s) were denied by approval policy. \
-                             Do NOT retry denied tools. Explain to the user what you \
-                             wanted to do and that it requires their approval. \
-                             Hint: set auto_approve = true in [approval] section of \
-                             config.toml, or start with --yolo flag, to auto-approve \
-                             all tool calls.]",
-                            denial_count
-                        ),
-                        provider_metadata: None,
-                    });
-                }
-
                 // Detect tool errors and inject guidance to prevent fabrication
                 let error_count = tool_result_blocks
                     .iter()
                     .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
                     .count();
-                let non_denial_errors = error_count.saturating_sub(denial_count);
-                if non_denial_errors > 0 {
+                if error_count > 0 {
                     tool_result_blocks.push(ContentBlock::Text {
                         text: format!(
                             "[System: {} tool(s) returned errors. Report the error honestly \
                              to the user. Do NOT fabricate results or pretend the tool succeeded. \
                              If a search or fetch failed, tell the user it failed and suggest \
                              alternatives instead of making up data.]",
-                            non_denial_errors
+                            error_count
                         ),
                         provider_metadata: None,
                     });
@@ -1782,6 +1892,31 @@ pub async fn run_agent_loop_streaming(
                 };
                 session.messages.push(tool_results_msg.clone());
                 messages.push(tool_results_msg);
+
+                // Dynamic tool refresh (streaming path)
+                let tools_may_have_changed = response.tool_calls.iter().any(|tc| {
+                    matches!(
+                        tc.name.as_str(),
+                        "train_write" | "clone_install" | "file_write"
+                    )
+                });
+                if tools_may_have_changed {
+                    if let Some(ref kernel) = kernel {
+                        let agent_id_str = session.agent_id.to_string();
+                        if let Some(new_tools) = kernel.refresh_tools(&agent_id_str) {
+                            if new_tools.len() != available_tools.len() {
+                                let added = new_tools.len().saturating_sub(available_tools.len());
+                                info!(
+                                    added,
+                                    total = new_tools.len(),
+                                    "Tool list refreshed after skill installation (streaming)"
+                                );
+                                tools_owned_streaming = new_tools;
+                                available_tools = &tools_owned_streaming;
+                            }
+                        }
+                    }
+                }
 
                 if let Err(e) = memory.save_session_async(session).await {
                     warn!("Failed to interim-save session: {e}");

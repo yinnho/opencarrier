@@ -8,6 +8,7 @@ mod launcher;
 mod mcp;
 pub mod progress;
 pub mod serve;
+mod acp;
 pub mod table;
 mod templates;
 mod tui;
@@ -61,10 +62,7 @@ fn install_ctrlc_handler() {
 
 const AFTER_HELP: &str = "\
 \x1b[1mQuick Start:\x1b[0m
-  yinghe                    直接启动（自动绑定，如未绑定）
-  yinghe --no-bind          启动不绑定（使用本地 LLM 配置）
-  yinghe bind               单独绑定命令
-  yinghe unbind             解除绑定
+  yinghe                    直接启动
 
 \x1b[1;36mExamples:\x1b[0m
   yinghe agent new coder      创建新的 coder agent
@@ -82,7 +80,7 @@ const AFTER_HELP: &str = "\
     about = "\u{1F40D} OpenCarrier \u{2014} Open-source Agent Operating System",
     long_about = "\u{1F40D} OpenCarrier \u{2014} Open-source Agent Operating System\n\n\
                   Deploy, manage, and orchestrate AI agents from your terminal.\n\
-                  40 channels \u{00b7} 60 skills \u{00b7} 50+ models \u{00b7} infinite possibilities.",
+                  50+ models \u{00b7} infinite possibilities.",
     after_help = AFTER_HELP,
 )]
 struct Cli {
@@ -98,30 +96,16 @@ impl Default for Cli {
     fn default() -> Self {
         Self {
             config: None,
-            command: Some(Commands::Start {
-                yolo: false,
-                cloud_url: None,
-                no_bind: false,
-            }),
+            command: Some(Commands::Start),
         }
     }
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the carrier (default command - auto-binds if needed).
+    /// Start the carrier (default command).
     #[command(name = "start", alias = "s")]
-    Start {
-        /// Auto-approve all tool calls (no confirmation prompts).
-        #[arg(long)]
-        yolo: bool,
-        /// Cloud API URL (defaults to https://carrier.yinnho.cn).
-        #[arg(long)]
-        cloud_url: Option<String>,
-        /// Skip binding check and use local LLM config.
-        #[arg(long)]
-        no_bind: bool,
-    },
+    Start,
     /// Initialize OpenCarrier (create ~/.opencarrier/ and default config).
     Init {
         /// Quick mode: no prompts, just write config + .env (for CI/scripts).
@@ -133,30 +117,13 @@ enum Commands {
     /// Manage agents (new, list, chat, kill, spawn) [*].
     #[command(subcommand)]
     Agent(AgentCommands),
-    /// Manage workflows (list, create, run) [*].
-    #[command(subcommand)]
-    Workflow(WorkflowCommands),
-    /// Manage event triggers (list, create, delete) [*].
-    #[command(subcommand)]
-    Trigger(TriggerCommands),
-    /// Migrate from another agent framework to OpenCarrier.
-    Migrate(MigrateArgs),
-    /// Manage skills (install, list, search, create, remove) [*].
-    #[command(subcommand)]
-    Skill(SkillCommands),
-    /// Manage channel integrations (setup, test, enable, disable) [*].
-    #[command(subcommand)]
-    Channel(ChannelCommands),
-    /// Manage hands (list, activate, deactivate, info) [*].
-    #[command(subcommand)]
-    Hand(HandCommands),
     /// Show or edit configuration (show, edit, get, set, keys) [*].
     #[command(subcommand)]
     Config(ConfigCommands),
-    /// Quick chat with the default agent.
+    /// Chat with a specific agent (分身).
     Chat {
-        /// Optional agent name or ID to chat with.
-        agent: Option<String>,
+        /// Agent name or ID to chat with.
+        agent: String,
     },
     /// Show kernel status.
     Status {
@@ -183,47 +150,15 @@ enum Commands {
     },
     /// Start MCP (Model Context Protocol) server over stdio.
     Mcp,
-    /// Start A2A serve mode (stdin/stdout JSON-RPC for agentd).
-    Serve,
-    /// Add an integration (one-click MCP server setup).
-    Add {
-        /// Integration name (e.g., "github", "slack", "notion").
-        name: String,
-        /// API key or token to store in the vault.
-        #[arg(long)]
-        key: Option<String>,
-    },
-    /// Remove an installed integration.
-    Remove {
-        /// Integration name.
-        name: String,
-    },
-    /// List or search integrations.
-    Integrations {
-        /// Search query (optional — lists all if omitted).
-        query: Option<String>,
-    },
-    /// Manage the credential vault (init, set, list, remove) [*].
-    #[command(subcommand)]
-    Vault(VaultCommands),
-    /// Scaffold a new skill or integration template.
-    New {
-        /// What to scaffold.
-        #[arg(value_enum)]
-        kind: ScaffoldKind,
-    },
+    /// ACP mode (auto-detected: used when stdin is a pipe, not a terminal).
+    #[command(hide = true)]
+    Acp,
     /// Launch the interactive terminal dashboard.
     Tui,
     /// Browse models, aliases, and providers [*].
     #[command(subcommand)]
     Models(ModelsCommands),
-    /// Daemon control (start, stop, status) [*].
-    #[command(subcommand)]
-    Gateway(GatewayCommands),
-    /// Manage execution approvals (list, approve, reject) [*].
-    #[command(subcommand)]
-    Approvals(ApprovalsCommands),
-    /// Manage scheduled jobs (list, create, delete, enable, disable) [*].
+        /// Manage scheduled jobs (list, create, delete, enable, disable) [*].
     #[command(subcommand)]
     Cron(CronCommands),
     /// List conversation sessions.
@@ -243,62 +178,22 @@ enum Commands {
         #[arg(long, short)]
         follow: bool,
     },
-    /// Quick daemon health check.
-    Health {
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
     /// Security tools and audit trail [*].
     #[command(subcommand)]
     Security(SecurityCommands),
     /// Search and manage agent memory (KV store) [*].
     #[command(subcommand)]
     Memory(MemoryCommands),
-    /// Device pairing and token management [*].
-    #[command(subcommand)]
-    Devices(DevicesCommands),
-    /// Generate device pairing QR code.
-    Qr,
-    /// Webhook helpers and trigger management [*].
-    #[command(subcommand)]
-    Webhooks(WebhooksCommands),
-    /// Interactive onboarding wizard.
-    Onboard {
-        /// Quick non-interactive mode.
-        #[arg(long)]
-        quick: bool,
-    },
-    /// Quick non-interactive initialization.
-    Setup {
-        /// Quick mode (same as `init --quick`).
-        #[arg(long)]
-        quick: bool,
-    },
-    /// Interactive setup wizard for credentials and channels.
-    Configure,
-    /// Bind to cloud for proxy LLM mode (use App to authorize).
-    Bind {
-        /// Cloud API URL (defaults to https://carrier.yinnho.cn).
-        #[arg(long)]
-        cloud_url: Option<String>,
-        /// Unbind from cloud (remove stored token).
-        #[arg(long)]
-        unbind: bool,
-    },
     /// Send a one-shot message to an agent.
     Message {
         /// Agent name or ID.
         agent: String,
-        /// Message text.
-        text: String,
+        /// Message text. Reads from stdin if omitted or "-".
+        text: Option<String>,
         /// Output as JSON for scripting.
         #[arg(long)]
         json: bool,
     },
-    /// System info and version [*].
-    #[command(subcommand)]
-    System(SystemCommands),
     /// Reset local config and state.
     Reset {
         /// Skip confirmation prompt.
@@ -314,6 +209,8 @@ enum Commands {
         #[arg(long)]
         keep_config: bool,
     },
+    /// Configure LLM providers (interactive API key setup).
+    Providers,
     /// Hub operations — search and install clones from openclone-hub.
     Hub {
         #[command(subcommand)]
@@ -339,147 +236,6 @@ enum HubCommands {
 }
 
 #[derive(Subcommand)]
-enum VaultCommands {
-    /// Initialize the credential vault.
-    Init,
-    /// Store a credential in the vault.
-    Set {
-        /// Credential key (env var name).
-        key: String,
-    },
-    /// List all keys in the vault (values are hidden).
-    List,
-    /// Remove a credential from the vault.
-    Remove {
-        /// Credential key.
-        key: String,
-    },
-}
-
-#[derive(Clone, clap::ValueEnum)]
-enum ScaffoldKind {
-    Skill,
-    Integration,
-}
-
-#[derive(clap::Args)]
-struct MigrateArgs {
-    /// Source framework to migrate from.
-    #[arg(long, value_enum)]
-    from: MigrateSourceArg,
-    /// Path to the source workspace (auto-detected if not set).
-    #[arg(long)]
-    source_dir: Option<PathBuf>,
-    /// Dry run — show what would be imported without making changes.
-    #[arg(long)]
-    dry_run: bool,
-}
-
-#[derive(Clone, clap::ValueEnum)]
-enum MigrateSourceArg {
-    Openclaw,
-    Langchain,
-    Autogpt,
-}
-
-#[derive(Subcommand)]
-enum SkillCommands {
-    /// Install a skill from FangHub or a local directory.
-    Install {
-        /// Skill name, local path, or git URL.
-        source: String,
-    },
-    /// List installed skills.
-    List,
-    /// Remove an installed skill.
-    Remove {
-        /// Skill name.
-        name: String,
-    },
-    /// Search FangHub for skills.
-    Search {
-        /// Search query.
-        query: String,
-    },
-    /// Create a new skill scaffold.
-    Create,
-}
-
-#[derive(Subcommand)]
-enum ChannelCommands {
-    /// List configured channels and their status.
-    List,
-    /// Interactive setup wizard for a channel.
-    Setup {
-        /// Channel name (telegram, discord, slack, whatsapp, etc.). Shows picker if omitted.
-        channel: Option<String>,
-    },
-    /// Test a channel by sending a test message.
-    Test {
-        /// Channel name.
-        channel: String,
-    },
-    /// Enable a channel.
-    Enable {
-        /// Channel name.
-        channel: String,
-    },
-    /// Disable a channel without removing its configuration.
-    Disable {
-        /// Channel name.
-        channel: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum HandCommands {
-    /// List all available hands.
-    List,
-    /// Show currently active hand instances.
-    Active,
-    /// Install a hand from a local directory containing HAND.toml.
-    Install {
-        /// Path to the hand directory (must contain HAND.toml).
-        path: String,
-    },
-    /// Activate a hand by ID.
-    Activate {
-        /// Hand ID (e.g. "clip", "lead", "researcher").
-        id: String,
-    },
-    /// Deactivate an active hand instance.
-    Deactivate {
-        /// Hand ID.
-        id: String,
-    },
-    /// Show detailed info about a hand.
-    Info {
-        /// Hand ID.
-        id: String,
-    },
-    /// Check dependency status for a hand.
-    CheckDeps {
-        /// Hand ID.
-        id: String,
-    },
-    /// Install missing dependencies for a hand.
-    InstallDeps {
-        /// Hand ID.
-        id: String,
-    },
-    /// Pause a running hand instance.
-    Pause {
-        /// Instance ID (from `hand active`).
-        id: String,
-    },
-    /// Resume a paused hand instance.
-    Resume {
-        /// Instance ID (from `hand active`).
-        id: String,
-    },
-}
-
-#[derive(Subcommand)]
 enum ConfigCommands {
     /// Show the current configuration.
     Show,
@@ -501,21 +257,6 @@ enum ConfigCommands {
     Unset {
         /// Dotted key path to remove (e.g. "api.cors_origin").
         key: String,
-    },
-    /// Save an API key to ~/.opencarrier/.env (prompts interactively).
-    SetKey {
-        /// Provider name (groq, anthropic, openai, gemini, deepseek, etc.).
-        provider: String,
-    },
-    /// Remove an API key from ~/.opencarrier/.env.
-    DeleteKey {
-        /// Provider name.
-        provider: String,
-    },
-    /// Test provider connectivity with the stored API key.
-    TestKey {
-        /// Provider name.
-        provider: String,
     },
 }
 
@@ -554,78 +295,6 @@ enum AgentCommands {
         /// Agent ID (UUID).
         agent_id: String,
     },
-    /// Set an agent property (e.g., model).
-    Set {
-        /// Agent ID (UUID).
-        agent_id: String,
-        /// Field to set (model).
-        field: String,
-        /// New value.
-        value: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum WorkflowCommands {
-    /// List all registered workflows.
-    List,
-    /// Create a workflow from a JSON file.
-    Create {
-        /// Path to a JSON file describing the workflow.
-        file: PathBuf,
-    },
-    /// Get a workflow by ID.
-    Get {
-        /// Workflow ID (UUID).
-        workflow_id: String,
-    },
-    /// Update a workflow from a JSON file.
-    Update {
-        /// Workflow ID (UUID).
-        workflow_id: String,
-        /// Path to a JSON file with the updated workflow definition.
-        file: PathBuf,
-    },
-    /// Delete a workflow by ID.
-    Delete {
-        /// Workflow ID (UUID).
-        workflow_id: String,
-    },
-    /// Run a workflow by ID.
-    Run {
-        /// Workflow ID (UUID).
-        workflow_id: String,
-        /// Input text for the workflow.
-        input: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum TriggerCommands {
-    /// List all triggers (optionally filtered by agent).
-    List {
-        /// Optional agent ID to filter by.
-        #[arg(long)]
-        agent_id: Option<String>,
-    },
-    /// Create a trigger for an agent.
-    Create {
-        /// Agent ID (UUID) that owns the trigger.
-        agent_id: String,
-        /// Trigger pattern as JSON (e.g. '{"lifecycle":{}}' or '{"agent_spawned":{"name_pattern":"*"}}').
-        pattern_json: String,
-        /// Prompt template (use {{event}} placeholder).
-        #[arg(long, default_value = "Event: {{event}}")]
-        prompt: String,
-        /// Maximum number of times to fire (0 = unlimited).
-        #[arg(long, default_value = "0")]
-        max_fires: u64,
-    },
-    /// Delete a trigger by ID.
-    Delete {
-        /// Trigger ID (UUID).
-        trigger_id: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -645,50 +314,10 @@ enum ModelsCommands {
         #[arg(long)]
         json: bool,
     },
-    /// List known LLM providers and their auth status.
-    Providers {
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
     /// Set the default model for the daemon.
     Set {
         /// Model ID or alias (e.g. "gpt-4o", "claude-sonnet"). Interactive picker if omitted.
         model: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum GatewayCommands {
-    /// Start the kernel daemon.
-    Start,
-    /// Stop the running daemon.
-    Stop,
-    /// Show daemon status.
-    Status {
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum ApprovalsCommands {
-    /// List pending approvals.
-    List {
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Approve a pending request.
-    Approve {
-        /// Approval ID.
-        id: String,
-    },
-    /// Reject a pending request.
-    Reject {
-        /// Approval ID.
-        id: String,
     },
 }
 
@@ -788,65 +417,6 @@ enum MemoryCommands {
     },
 }
 
-#[derive(Subcommand)]
-enum DevicesCommands {
-    /// List paired devices.
-    List {
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Start a new device pairing flow.
-    Pair,
-    /// Remove a paired device.
-    Remove {
-        /// Device ID.
-        id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum WebhooksCommands {
-    /// List configured webhooks.
-    List {
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Create a new webhook trigger.
-    Create {
-        /// Agent name or ID.
-        agent: String,
-        /// Webhook callback URL.
-        url: String,
-    },
-    /// Delete a webhook.
-    Delete {
-        /// Webhook ID.
-        id: String,
-    },
-    /// Send a test payload to a webhook.
-    Test {
-        /// Webhook ID.
-        id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum SystemCommands {
-    /// Show detailed system info.
-    Info {
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show version information.
-    Version {
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
-}
 
 fn config_log_level() -> String {
     let config_path = if let Ok(home) = std::env::var("OPENCARRIER_HOME") {
@@ -879,6 +449,7 @@ fn init_tracing_stderr() {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(config_log_level())),
         )
+        .with_writer(std::io::stderr)
         .init();
 }
 
@@ -945,21 +516,21 @@ fn main() {
         init_tracing_stderr();
     }
 
-    // 使用 unwrap_or 处理默认命令
-    let command = cli.command.unwrap_or(Commands::Start {
-        yolo: false,
-        cloud_url: None,
-        no_bind: false,
+    // 默认命令：根据 stdin 类型自动选择
+    // - stdin 是 pipe（被外部 spawn）→ ACP 模式
+    // - stdin 是 TTY（用户在终端）→ 启动 daemon
+    let command = cli.command.unwrap_or_else(|| {
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            Commands::Acp
+        } else {
+            Commands::Start
+        }
     });
 
     match command {
         Commands::Tui => tui::run(cli.config),
         Commands::Init { quick } => cmd_init(quick),
-        Commands::Start {
-            yolo,
-            cloud_url,
-            no_bind,
-        } => cmd_start(cli.config, yolo, cloud_url, no_bind),
+        Commands::Start => cmd_start(cli.config),
         Commands::Stop => cmd_stop(),
         Commands::Agent(sub) => match sub {
             AgentCommands::New { template } => cmd_agent_new(cli.config, template),
@@ -974,58 +545,6 @@ fn main() {
                 }
             }
             AgentCommands::Kill { agent_id } => cmd_agent_kill(cli.config, &agent_id),
-            AgentCommands::Set {
-                agent_id,
-                field,
-                value,
-            } => cmd_agent_set(&agent_id, &field, &value),
-        },
-        Commands::Workflow(sub) => match sub {
-            WorkflowCommands::List => cmd_workflow_list(),
-            WorkflowCommands::Create { file } => cmd_workflow_create(file),
-            WorkflowCommands::Get { workflow_id } => cmd_workflow_get(&workflow_id),
-            WorkflowCommands::Update { workflow_id, file } => {
-                cmd_workflow_update(&workflow_id, file)
-            }
-            WorkflowCommands::Delete { workflow_id } => cmd_workflow_delete(&workflow_id),
-            WorkflowCommands::Run { workflow_id, input } => cmd_workflow_run(&workflow_id, &input),
-        },
-        Commands::Trigger(sub) => match sub {
-            TriggerCommands::List { agent_id } => cmd_trigger_list(agent_id.as_deref()),
-            TriggerCommands::Create {
-                agent_id,
-                pattern_json,
-                prompt,
-                max_fires,
-            } => cmd_trigger_create(&agent_id, &pattern_json, &prompt, max_fires),
-            TriggerCommands::Delete { trigger_id } => cmd_trigger_delete(&trigger_id),
-        },
-        Commands::Migrate(args) => cmd_migrate(args),
-        Commands::Skill(sub) => match sub {
-            SkillCommands::Install { source } => cmd_skill_install(&source),
-            SkillCommands::List => cmd_skill_list(),
-            SkillCommands::Remove { name } => cmd_skill_remove(&name),
-            SkillCommands::Search { query } => cmd_skill_search(&query),
-            SkillCommands::Create => cmd_skill_create(),
-        },
-        Commands::Channel(sub) => match sub {
-            ChannelCommands::List => cmd_channel_list(),
-            ChannelCommands::Setup { channel } => cmd_channel_setup(channel.as_deref()),
-            ChannelCommands::Test { channel } => cmd_channel_test(&channel),
-            ChannelCommands::Enable { channel } => cmd_channel_toggle(&channel, true),
-            ChannelCommands::Disable { channel } => cmd_channel_toggle(&channel, false),
-        },
-        Commands::Hand(sub) => match sub {
-            HandCommands::List => cmd_hand_list(),
-            HandCommands::Active => cmd_hand_active(),
-            HandCommands::Install { path } => cmd_hand_install(&path),
-            HandCommands::Activate { id } => cmd_hand_activate(&id),
-            HandCommands::Deactivate { id } => cmd_hand_deactivate(&id),
-            HandCommands::Info { id } => cmd_hand_info(&id),
-            HandCommands::CheckDeps { id } => cmd_hand_check_deps(&id),
-            HandCommands::InstallDeps { id } => cmd_hand_install_deps(&id),
-            HandCommands::Pause { id } => cmd_hand_pause(&id),
-            HandCommands::Resume { id } => cmd_hand_resume(&id),
         },
         Commands::Config(sub) => match sub {
             ConfigCommands::Show => cmd_config_show(),
@@ -1033,9 +552,6 @@ fn main() {
             ConfigCommands::Get { key } => cmd_config_get(&key),
             ConfigCommands::Set { key, value } => cmd_config_set(&key, &value),
             ConfigCommands::Unset { key } => cmd_config_unset(&key),
-            ConfigCommands::SetKey { provider } => cmd_config_set_key(&provider),
-            ConfigCommands::DeleteKey { provider } => cmd_config_delete_key(&provider),
-            ConfigCommands::TestKey { provider } => cmd_config_test_key(&provider),
         },
         Commands::Chat { agent } => cmd_quick_chat(cli.config, agent),
         Commands::Status { json } => cmd_status(cli.config, json),
@@ -1043,33 +559,12 @@ fn main() {
         Commands::Dashboard => cmd_dashboard(),
         Commands::Completion { shell } => cmd_completion(shell),
         Commands::Mcp => mcp::run_mcp_server(cli.config),
-        Commands::Serve => serve::run_serve_mode(cli.config),
-        Commands::Add { name, key } => cmd_integration_add(&name, key.as_deref()),
-        Commands::Remove { name } => cmd_integration_remove(&name),
-        Commands::Integrations { query } => cmd_integrations_list(query.as_deref()),
-        Commands::Vault(sub) => match sub {
-            VaultCommands::Init => cmd_vault_init(),
-            VaultCommands::Set { key } => cmd_vault_set(&key),
-            VaultCommands::List => cmd_vault_list(),
-            VaultCommands::Remove { key } => cmd_vault_remove(&key),
-        },
-        Commands::New { kind } => cmd_scaffold(kind),
+        Commands::Acp => serve::run_acp_mode(cli.config),
         // ── New commands ────────────────────────────────────────────────
         Commands::Models(sub) => match sub {
             ModelsCommands::List { provider, json } => cmd_models_list(provider.as_deref(), json),
             ModelsCommands::Aliases { json } => cmd_models_aliases(json),
-            ModelsCommands::Providers { json } => cmd_models_providers(json),
             ModelsCommands::Set { model } => cmd_models_set(model),
-        },
-        Commands::Gateway(sub) => match sub {
-            GatewayCommands::Start => cmd_start(cli.config, false, None, false),
-            GatewayCommands::Stop => cmd_stop(),
-            GatewayCommands::Status { json } => cmd_status(cli.config, json),
-        },
-        Commands::Approvals(sub) => match sub {
-            ApprovalsCommands::List { json } => cmd_approvals_list(json),
-            ApprovalsCommands::Approve { id } => cmd_approvals_respond(&id, true),
-            ApprovalsCommands::Reject { id } => cmd_approvals_respond(&id, false),
         },
         Commands::Cron(sub) => match sub {
             CronCommands::List { json } => cmd_cron_list(json),
@@ -1085,7 +580,6 @@ fn main() {
         },
         Commands::Sessions { agent, json } => cmd_sessions(agent.as_deref(), json),
         Commands::Logs { lines, follow } => cmd_logs(lines, follow),
-        Commands::Health { json } => cmd_health(json),
         Commands::Security(sub) => match sub {
             SecurityCommands::Status { json } => cmd_security_status(json),
             SecurityCommands::Audit { limit, json } => cmd_security_audit(limit, json),
@@ -1097,31 +591,24 @@ fn main() {
             MemoryCommands::Set { agent, key, value } => cmd_memory_set(&agent, &key, &value),
             MemoryCommands::Delete { agent, key } => cmd_memory_delete(&agent, &key),
         },
-        Commands::Devices(sub) => match sub {
-            DevicesCommands::List { json } => cmd_devices_list(json),
-            DevicesCommands::Pair => cmd_devices_pair(),
-            DevicesCommands::Remove { id } => cmd_devices_remove(&id),
-        },
-        Commands::Qr => cmd_devices_pair(),
-        Commands::Webhooks(sub) => match sub {
-            WebhooksCommands::List { json } => cmd_webhooks_list(json),
-            WebhooksCommands::Create { agent, url } => cmd_webhooks_create(&agent, &url),
-            WebhooksCommands::Delete { id } => cmd_webhooks_delete(&id),
-            WebhooksCommands::Test { id } => cmd_webhooks_test(&id),
-        },
-        Commands::Onboard { quick } | Commands::Setup { quick } => cmd_init(quick),
-        Commands::Configure => cmd_init(false),
-        Commands::Bind { cloud_url, unbind } => cmd_bind(cloud_url, unbind),
-        Commands::Message { agent, text, json } => cmd_message(&agent, &text, json),
-        Commands::System(sub) => match sub {
-            SystemCommands::Info { json } => cmd_system_info(json),
-            SystemCommands::Version { json } => cmd_system_version(json),
-        },
+        Commands::Message { agent, text, json } => {
+            let msg = match text {
+                Some(t) if t != "-" => t.clone(),
+                _ => {
+                    let mut buf = String::new();
+                    use std::io::Read;
+                    std::io::stdin().read_to_string(&mut buf).unwrap_or(0);
+                    buf.trim().to_string()
+                }
+            };
+            cmd_message(&agent, &msg, json)
+        }
         Commands::Reset { confirm } => cmd_reset(confirm),
         Commands::Uninstall {
             confirm,
             keep_config,
         } => cmd_uninstall(confirm, keep_config),
+        Commands::Providers => cmd_providers(),
         Commands::Hub { sub } => {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             rt.block_on(cmd_hub(sub));
@@ -1240,101 +727,6 @@ pub(crate) fn daemon_json(
 // Commands
 // ---------------------------------------------------------------------------
 
-/// Bind carrier to cloud for proxy LLM mode
-fn cmd_bind(cloud_url: Option<String>, unbind: bool) {
-    use opencarrier_runtime::cloud_client::CarrierCloudClient;
-
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-
-    rt.block_on(async {
-        let client = CarrierCloudClient::new(cloud_url.clone());
-
-        if unbind {
-            // Unbind: remove stored token
-            match client.clear_binding().await {
-                Ok(()) => {
-                    ui::success("Successfully unbound from cloud.");
-                    ui::hint("Run 'yinghe bind' to bind again.");
-                }
-                Err(e) => {
-                    ui::error(&format!("Failed to unbind: {}", e));
-                    std::process::exit(1);
-                }
-            }
-            return;
-        }
-
-        // Check if already bound
-        if let Some(binding) = client.get_binding().await {
-            ui::success(&format!(
-                "Already bound (carrier_id: {})",
-                binding.carrier_id
-            ));
-            ui::hint("Run 'yinghe bind --unbind' to remove binding.");
-            return;
-        }
-
-        // Start pairing flow
-        println!();
-        ui::section("Carrier Cloud Binding");
-        ui::blank();
-        println!("  This will bind your carrier to the cloud for proxy LLM mode.");
-        println!("  After binding, you can use LLM without setting API keys locally.");
-        ui::blank();
-
-        // Create pairing code
-        let pairing = match client.create_pairing_code().await {
-            Ok(p) => p,
-            Err(e) => {
-                ui::error(&format!("Failed to create pairing code: {}", e));
-                std::process::exit(1);
-            }
-        };
-
-        // Display pairing code
-        println!();
-        println!("  ╔═══════════════════════════════════════════════════════════╗");
-        println!("  ║                    配对码                                   ║");
-        println!("  ╠═══════════════════════════════════════════════════════════╣");
-        println!("  ║                                                           ║");
-        println!("  ║   {:<53} ║", pairing.pairing_code);
-        println!("  ║                                                           ║");
-        println!(
-            "  ║   有效期: {:<44} ║",
-            format!("{} 分钟", pairing.expires_in / 60)
-        );
-        println!("  ║                                                           ║");
-        println!("  ║   请在 App 上输入此配对码进行绑定                          ║");
-        println!("  ║                                                           ║");
-        println!("  ╚═══════════════════════════════════════════════════════════╝");
-        println!();
-        println!("  等待绑定...");
-
-        // Wait for binding
-        match client
-            .wait_for_binding(&pairing.pairing_code, pairing.expires_in)
-            .await
-        {
-            Ok(binding) => {
-                println!();
-                ui::success(&format!(
-                    "Binding successful! (carrier_id: {})",
-                    binding.carrier_id
-                ));
-                ui::blank();
-                ui::hint("You can now use proxy LLM mode without setting API keys.");
-                ui::hint("Set provider='proxy' in your config to use cloud LLM.");
-            }
-            Err(e) => {
-                println!();
-                ui::error(&format!("Binding failed: {}", e));
-                ui::hint("Please try again with 'yinghe bind'");
-                std::process::exit(1);
-            }
-        }
-    });
-}
-
 fn cmd_init(quick: bool) {
     let home = match dirs::home_dir() {
         Some(h) => h,
@@ -1447,7 +839,7 @@ fn cmd_init_interactive(opencarrier_dir: &std::path::Path) {
                     // subcommand).  The chat TUI takes over the terminal with
                     // raw mode so stderr output is suppressed.  We can't
                     // reinitialize tracing (global subscriber is set once).
-                    cmd_quick_chat(None, None);
+                    cmd_quick_chat(None, "clone-creator".to_string());
                 }
             }
         }
@@ -1582,8 +974,7 @@ fn write_config_if_missing(
     if config_path.exists() {
         ui::check_ok(&format!("Config already exists: {}", config_path.display()));
     } else {
-        let default_config = format!(
-            r#"# OpenCarrier Agent OS configuration
+        let default_config = r#"# OpenCarrier Agent OS configuration
 # See https://github.com/RightNow-AI/opencarrier for documentation
 
 # For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
@@ -1595,7 +986,7 @@ config = "brain.json"
 [memory]
 decay_rate = 0.05
 "#
-        );
+        .to_string();
         std::fs::write(&config_path, &default_config).unwrap_or_else(|e| {
             ui::error_with_fix("Failed to write config", &e.to_string());
             std::process::exit(1);
@@ -1605,79 +996,7 @@ decay_rate = 0.05
     }
 }
 
-/// 检查绑定状态，如果未绑定则自动进入绑定流程
-fn ensure_binding(cloud_url: Option<String>) -> bool {
-    use opencarrier_runtime::cloud_client::CarrierCloudClient;
-
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-
-    rt.block_on(async {
-        let client = CarrierCloudClient::new(cloud_url.clone());
-
-        // 检查是否已绑定
-        if let Some(binding) = client.get_binding().await {
-            ui::success(&format!("已绑定 (carrier_id: {})", binding.carrier_id));
-            return true;
-        }
-
-        // 未绑定，进入绑定流程
-        ui::blank();
-        ui::section("载体绑定");
-        ui::blank();
-        println!("  载体未绑定，将进入配对流程...");
-        println!("  绑定后可使用云端 LLM 代理模式。");
-        ui::blank();
-
-        // 创建配对码
-        let pairing = match client.create_pairing_code().await {
-            Ok(p) => p,
-            Err(e) => {
-                ui::error(&format!("创建配对码失败: {}", e));
-                return false;
-            }
-        };
-
-        // 显示配对码
-        ui::blank();
-        println!("  ╔═══════════════════════════════════════════════════════════╗");
-        println!("  ║                    配对码                                   ║");
-        println!("  ╠═══════════════════════════════════════════════════════════╣");
-        println!("  ║                                                           ║");
-        println!("  ║   {:<53} ║", pairing.pairing_code);
-        println!("  ║                                                           ║");
-        println!(
-            "  ║   有效期: {:<44} ║",
-            format!("{} 分钟", pairing.expires_in / 60)
-        );
-        println!("  ║                                                           ║");
-        println!("  ║   请在 App 上输入此配对码进行绑定                          ║");
-        println!("  ║                                                           ║");
-        println!("  ╚═══════════════════════════════════════════════════════════╝");
-        ui::blank();
-        println!("  等待绑定...");
-
-        // 等待绑定
-        match client
-            .wait_for_binding(&pairing.pairing_code, pairing.expires_in)
-            .await
-        {
-            Ok(binding) => {
-                ui::blank();
-                ui::success(&format!("绑定成功! (carrier_id: {})", binding.carrier_id));
-                ui::hint("正在启动服务...");
-                true
-            }
-            Err(e) => {
-                ui::blank();
-                ui::error(&format!("绑定失败: {}", e));
-                ui::hint("请重试 'yinghe start'");
-                false
-            }
-        }
-    })
-}
-
-fn cmd_start(config: Option<PathBuf>, yolo: bool, cloud_url: Option<String>, no_bind: bool) {
+fn cmd_start(config: Option<PathBuf>) {
     if let Some(base) = find_daemon() {
         ui::error_with_fix(
             &format!("Daemon already running at {base}"),
@@ -1689,22 +1008,13 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool, cloud_url: Option<String>, no_
     ui::banner();
     ui::blank();
 
-    // 检查绑定状态（除非使用 --no-bind 跳过）
-    if !no_bind && !ensure_binding(cloud_url) {
-        std::process::exit(1);
-    }
-
     println!("  启动服务中...");
     ui::blank();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let mut kernel_config = opencarrier_kernel::config::load_config(config.as_deref());
+        let kernel_config = opencarrier_kernel::config::load_config(config.as_deref());
 
-        if yolo {
-            kernel_config.approval.auto_approve = true;
-            kernel_config.approval.apply_shorthands();
-        }
         let kernel = match OpenCarrierKernel::boot_with_config(kernel_config) {
             Ok(k) => k,
             Err(e) => {
@@ -2152,38 +1462,6 @@ fn cmd_agent_kill(config: Option<PathBuf>, agent_id_str: &str) {
     }
 }
 
-fn cmd_agent_set(agent_id_str: &str, field: &str, value: &str) {
-    match field {
-        "model" => {
-            if let Some(base) = find_daemon() {
-                let client = daemon_client();
-                let body = daemon_json(
-                    client
-                        .put(format!("{base}/api/agents/{agent_id_str}/model"))
-                        .json(&serde_json::json!({"model": value}))
-                        .send(),
-                );
-                if body.get("status").is_some() {
-                    println!("Agent {agent_id_str} model set to {value}.");
-                } else {
-                    eprintln!(
-                        "Failed to set model: {}",
-                        body["error"].as_str().unwrap_or("Unknown error")
-                    );
-                    std::process::exit(1);
-                }
-            } else {
-                eprintln!("No running daemon found. Start one with: opencarrier start");
-                std::process::exit(1);
-            }
-        }
-        _ => {
-            eprintln!("Unknown field: {field}. Supported fields: model");
-            std::process::exit(1);
-        }
-    }
-}
-
 fn cmd_agent_new(config: Option<PathBuf>, template_name: Option<String>) {
     let all_templates = templates::load_all_templates();
     if all_templates.is_empty() {
@@ -2515,8 +1793,7 @@ fn cmd_doctor(json: bool, repair: bool) {
             let answer = prompt_input("    Create default config? [Y/n] ");
             if answer.is_empty() || answer.starts_with('y') || answer.starts_with('Y') {
                 let (_provider, _api_key_env, _model) = detect_best_provider();
-                let default_config = format!(
-                    r#"# OpenCarrier Agent OS configuration
+                let default_config = r#"# OpenCarrier Agent OS configuration
 # See https://github.com/RightNow-AI/opencarrier for documentation
 
 # For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
@@ -2528,7 +1805,7 @@ config = "brain.json"
 [memory]
 decay_rate = 0.05
 "#
-                );
+                .to_string();
                 let _ = std::fs::create_dir_all(&opencarrier_dir);
                 if std::fs::write(&config_path, default_config).is_ok() {
                     restrict_file_permissions(&config_path);
@@ -2785,44 +2062,6 @@ decay_rate = 0.05
         all_ok = false;
     }
 
-    // --- Check 10: Channel token format validation ---
-    if !json {
-        println!("\n  Channel Integrations:");
-    }
-    let channel_keys = [
-        ("TELEGRAM_BOT_TOKEN", "Telegram"),
-        ("DISCORD_BOT_TOKEN", "Discord"),
-        ("SLACK_APP_TOKEN", "Slack App"),
-        ("SLACK_BOT_TOKEN", "Slack Bot"),
-    ];
-    for (env_var, name) in &channel_keys {
-        let set = std::env::var(env_var).is_ok();
-        if set {
-            // Format validation
-            let val = std::env::var(env_var).unwrap_or_default();
-            let format_ok = match *env_var {
-                "TELEGRAM_BOT_TOKEN" => val.contains(':'), // Telegram tokens have format "123456:ABC-DEF..."
-                "DISCORD_BOT_TOKEN" => val.len() > 50,     // Discord tokens are typically 59+ chars
-                "SLACK_APP_TOKEN" => val.starts_with("xapp-"),
-                "SLACK_BOT_TOKEN" => val.starts_with("xoxb-"),
-                _ => true,
-            };
-            if format_ok {
-                if !json {
-                    ui::provider_status(name, env_var, true);
-                }
-            } else if !json {
-                ui::check_warn(&format!("{name} ({env_var}) - unexpected token format"));
-            }
-            checks.push(serde_json::json!({"check": "channel", "name": name, "env_var": env_var, "status": if format_ok { "ok" } else { "warn" }}));
-        } else {
-            if !json {
-                ui::provider_status(name, env_var, false);
-            }
-            checks.push(serde_json::json!({"check": "channel", "name": name, "env_var": env_var, "status": "warn"}));
-        }
-    }
-
     // --- Check 11: .env keys vs config api_key_env consistency ---
     {
         let opencarrier_dir = cli_opencarrier_home();
@@ -2957,13 +2196,13 @@ decay_rate = 0.05
         }
         let skills_dir = cli_opencarrier_home().join("skills");
         let mut skill_reg = opencarrier_skills::registry::SkillRegistry::new(skills_dir.clone());
-        skill_reg.load_bundled();
-        let bundled_count = skill_reg.count();
+        let _ = skill_reg.load_all();
+        let skill_count = skill_reg.count();
         if !json {
-            ui::check_ok(&format!("Bundled skills loaded: {bundled_count}"));
+            ui::check_ok(&format!("Skills loaded: {skill_count}"));
         }
         checks.push(
-            serde_json::json!({"check": "bundled_skills", "status": "ok", "count": bundled_count}),
+            serde_json::json!({"check": "skills", "status": "ok", "count": skill_count}),
         );
 
         // Check workspace skills if home dir available
@@ -2971,7 +2210,7 @@ decay_rate = 0.05
             match skill_reg.load_workspace_skills(&skills_dir) {
                 Ok(_) => {
                     let total = skill_reg.count();
-                    let ws_count = total.saturating_sub(bundled_count);
+                    let ws_count = total.saturating_sub(skill_count);
                     if ws_count > 0 {
                         if !json {
                             ui::check_ok(&format!("Workspace skills loaded: {ws_count}"));
@@ -3022,28 +2261,6 @@ decay_rate = 0.05
             }
             checks.push(serde_json::json!({"check": "skill_injection_scan", "status": "ok"}));
         }
-    }
-
-    // --- Check 14: Extension registry health ---
-    {
-        if !json {
-            println!("\n  Extensions:");
-        }
-        let opencarrier_dir = cli_opencarrier_home();
-        let mut ext_registry =
-            opencarrier_extensions::registry::IntegrationRegistry::new(&opencarrier_dir);
-        ext_registry.load_bundled();
-        let _ = ext_registry.load_installed();
-        let template_count = ext_registry.template_count();
-        let installed_count = ext_registry.installed_count();
-        if !json {
-            ui::check_ok(&format!(
-                "Available integration templates: {template_count}"
-            ));
-            ui::check_ok(&format!("Installed integrations: {installed_count}"));
-        }
-        checks.push(serde_json::json!({"check": "extensions_available", "status": "ok", "count": template_count}));
-        checks.push(serde_json::json!({"check": "extensions_installed", "status": "ok", "count": installed_count}));
     }
 
     // --- Check 15: Daemon health detail (if running) ---
@@ -3441,285 +2658,6 @@ fn cmd_completion(shell: clap_complete::Shell) {
     clap_complete::generate(shell, &mut cmd, "opencarrier", &mut std::io::stdout());
 }
 
-// ---------------------------------------------------------------------------
-// Workflow commands
-// ---------------------------------------------------------------------------
-
-fn cmd_workflow_list() {
-    let base = require_daemon("workflow list");
-    let client = daemon_client();
-    let body = daemon_json(client.get(format!("{base}/api/workflows")).send());
-
-    match body.as_array() {
-        Some(workflows) if workflows.is_empty() => println!("No workflows registered."),
-        Some(workflows) => {
-            println!("{:<38} {:<20} {:<6} CREATED", "ID", "NAME", "STEPS");
-            println!("{}", "-".repeat(80));
-            for w in workflows {
-                println!(
-                    "{:<38} {:<20} {:<6} {}",
-                    w["id"].as_str().unwrap_or("?"),
-                    w["name"].as_str().unwrap_or("?"),
-                    w["steps"].as_u64().unwrap_or(0),
-                    w["created_at"].as_str().unwrap_or("?"),
-                );
-            }
-        }
-        None => println!("No workflows registered."),
-    }
-}
-
-fn cmd_workflow_create(file: PathBuf) {
-    let base = require_daemon("workflow create");
-    if !file.exists() {
-        eprintln!("Workflow file not found: {}", file.display());
-        std::process::exit(1);
-    }
-    let contents = std::fs::read_to_string(&file).unwrap_or_else(|e| {
-        eprintln!("Error reading workflow file: {e}");
-        std::process::exit(1);
-    });
-    let json_body: serde_json::Value = serde_json::from_str(&contents).unwrap_or_else(|e| {
-        eprintln!("Invalid JSON: {e}");
-        std::process::exit(1);
-    });
-
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/workflows"))
-            .json(&json_body)
-            .send(),
-    );
-
-    if let Some(id) = body["workflow_id"].as_str() {
-        println!("Workflow created successfully!");
-        println!("  ID: {id}");
-    } else {
-        eprintln!(
-            "Failed to create workflow: {}",
-            body["error"].as_str().unwrap_or("Unknown error")
-        );
-        std::process::exit(1);
-    }
-}
-
-fn cmd_workflow_run(workflow_id: &str, input: &str) {
-    let base = require_daemon("workflow run");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/workflows/{workflow_id}/run"))
-            .json(&serde_json::json!({"input": input}))
-            .send(),
-    );
-
-    if let Some(output) = body["output"].as_str() {
-        println!("Workflow completed!");
-        println!("  Run ID: {}", body["run_id"].as_str().unwrap_or("?"));
-        println!("  Output:\n{output}");
-    } else {
-        eprintln!(
-            "Workflow failed: {}",
-            body["error"].as_str().unwrap_or("Unknown error")
-        );
-        std::process::exit(1);
-    }
-}
-
-fn cmd_workflow_get(workflow_id: &str) {
-    let base = require_daemon("workflow get");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .get(format!("{base}/api/workflows/{workflow_id}"))
-            .send(),
-    );
-
-    if body.get("error").is_some() {
-        eprintln!(
-            "Workflow not found: {}",
-            body["error"].as_str().unwrap_or("Unknown error")
-        );
-        std::process::exit(1);
-    }
-
-    println!("Workflow: {}", body["name"].as_str().unwrap_or("?"));
-    println!("  ID:          {}", body["id"].as_str().unwrap_or("?"));
-    println!(
-        "  Description: {}",
-        body["description"].as_str().unwrap_or("")
-    );
-    println!(
-        "  Created:     {}",
-        body["created_at"].as_str().unwrap_or("?")
-    );
-
-    if let Some(steps) = body["steps"].as_array() {
-        println!("  Steps ({}):", steps.len());
-        for (i, s) in steps.iter().enumerate() {
-            let name = s["name"].as_str().unwrap_or("step");
-            let agent = s["agent"]
-                .get("name")
-                .or_else(|| s["agent"].get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            println!("    #{}: {} -> {}", i + 1, name, agent);
-        }
-    }
-}
-
-fn cmd_workflow_update(workflow_id: &str, file: PathBuf) {
-    let base = require_daemon("workflow update");
-    if !file.exists() {
-        eprintln!("Workflow file not found: {}", file.display());
-        std::process::exit(1);
-    }
-    let contents = std::fs::read_to_string(&file).unwrap_or_else(|e| {
-        eprintln!("Error reading workflow file: {e}");
-        std::process::exit(1);
-    });
-    let json_body: serde_json::Value = serde_json::from_str(&contents).unwrap_or_else(|e| {
-        eprintln!("Invalid JSON: {e}");
-        std::process::exit(1);
-    });
-
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .put(format!("{base}/api/workflows/{workflow_id}"))
-            .json(&json_body)
-            .send(),
-    );
-
-    if body["status"].as_str() == Some("updated") {
-        println!("Workflow updated successfully!");
-        println!("  ID: {}", body["workflow_id"].as_str().unwrap_or("?"));
-    } else {
-        eprintln!(
-            "Failed to update workflow: {}",
-            body["error"].as_str().unwrap_or("Unknown error")
-        );
-        std::process::exit(1);
-    }
-}
-
-fn cmd_workflow_delete(workflow_id: &str) {
-    let base = require_daemon("workflow delete");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .delete(format!("{base}/api/workflows/{workflow_id}"))
-            .send(),
-    );
-
-    if body["status"].as_str() == Some("removed") {
-        println!("Workflow deleted successfully!");
-        println!("  ID: {}", body["workflow_id"].as_str().unwrap_or("?"));
-    } else {
-        eprintln!(
-            "Failed to delete workflow: {}",
-            body["error"].as_str().unwrap_or("Unknown error")
-        );
-        std::process::exit(1);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Trigger commands
-// ---------------------------------------------------------------------------
-
-fn cmd_trigger_list(agent_id: Option<&str>) {
-    let base = require_daemon("trigger list");
-    let client = daemon_client();
-
-    let url = match agent_id {
-        Some(id) => format!("{base}/api/triggers?agent_id={id}"),
-        None => format!("{base}/api/triggers"),
-    };
-    let body = daemon_json(client.get(&url).send());
-
-    match body.as_array() {
-        Some(triggers) if triggers.is_empty() => println!("No triggers registered."),
-        Some(triggers) => {
-            println!(
-                "{:<38} {:<38} {:<8} {:<6} PATTERN",
-                "TRIGGER ID", "AGENT ID", "ENABLED", "FIRES"
-            );
-            println!("{}", "-".repeat(110));
-            for t in triggers {
-                println!(
-                    "{:<38} {:<38} {:<8} {:<6} {}",
-                    t["id"].as_str().unwrap_or("?"),
-                    t["agent_id"].as_str().unwrap_or("?"),
-                    t["enabled"].as_bool().unwrap_or(false),
-                    t["fire_count"].as_u64().unwrap_or(0),
-                    t["pattern"],
-                );
-            }
-        }
-        None => println!("No triggers registered."),
-    }
-}
-
-fn cmd_trigger_create(agent_id: &str, pattern_json: &str, prompt: &str, max_fires: u64) {
-    let base = require_daemon("trigger create");
-    let pattern: serde_json::Value = serde_json::from_str(pattern_json).unwrap_or_else(|e| {
-        eprintln!("Invalid pattern JSON: {e}");
-        eprintln!("Examples:");
-        eprintln!("  '{{\"lifecycle\":{{}}}}'");
-        eprintln!("  '{{\"agent_spawned\":{{\"name_pattern\":\"*\"}}}}'");
-        eprintln!("  '{{\"agent_terminated\":{{}}}}'");
-        eprintln!("  '{{\"all\":{{}}}}'");
-        std::process::exit(1);
-    });
-
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/triggers"))
-            .json(&serde_json::json!({
-                "agent_id": agent_id,
-                "pattern": pattern,
-                "prompt_template": prompt,
-                "max_fires": max_fires,
-            }))
-            .send(),
-    );
-
-    if let Some(id) = body["trigger_id"].as_str() {
-        println!("Trigger created successfully!");
-        println!("  Trigger ID: {id}");
-        println!("  Agent ID:   {agent_id}");
-    } else {
-        eprintln!(
-            "Failed to create trigger: {}",
-            body["error"].as_str().unwrap_or("Unknown error")
-        );
-        std::process::exit(1);
-    }
-}
-
-fn cmd_trigger_delete(trigger_id: &str) {
-    let base = require_daemon("trigger delete");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .delete(format!("{base}/api/triggers/{trigger_id}"))
-            .send(),
-    );
-
-    if body.get("status").is_some() {
-        println!("Trigger {trigger_id} deleted.");
-    } else {
-        eprintln!(
-            "Failed to delete trigger: {}",
-            body["error"].as_str().unwrap_or("Unknown error")
-        );
-        std::process::exit(1);
-    }
-}
-
 /// Require a running daemon — exit with helpful message if not found.
 fn require_daemon(command: &str) -> String {
     find_daemon().unwrap_or_else(|| {
@@ -3743,957 +2681,8 @@ fn boot_kernel(config: Option<PathBuf>) -> OpenCarrierKernel {
 }
 
 // ---------------------------------------------------------------------------
-// Migrate command (disabled - migrate crate removed)
-// ---------------------------------------------------------------------------
-
-fn cmd_migrate(_args: MigrateArgs) {
-    eprintln!("Error: Migration feature has been disabled (migrate crate removed)");
-    std::process::exit(1);
-}
-
-// ---------------------------------------------------------------------------
 // Skill commands
 // ---------------------------------------------------------------------------
-
-fn cmd_skill_install(source: &str) {
-    let home = opencarrier_home();
-    let skills_dir = home.join("skills");
-    std::fs::create_dir_all(&skills_dir).unwrap_or_else(|e| {
-        eprintln!("Error creating skills directory: {e}");
-        std::process::exit(1);
-    });
-
-    let source_path = PathBuf::from(source);
-    if source_path.exists() && source_path.is_dir() {
-        // Local directory install
-        let manifest_path = source_path.join("skill.toml");
-        if !manifest_path.exists() {
-            // Check if it's an OpenClaw skill
-            if opencarrier_skills::openclaw_compat::detect_openclaw_skill(&source_path) {
-                println!("Detected OpenClaw skill format. Converting...");
-                match opencarrier_skills::openclaw_compat::convert_openclaw_skill(&source_path) {
-                    Ok(manifest) => {
-                        let dest = skills_dir.join(&manifest.skill.name);
-                        // Copy skill directory
-                        copy_dir_recursive(&source_path, &dest);
-                        if let Err(e) =
-                            opencarrier_skills::openclaw_compat::write_opencarrier_manifest(
-                                &dest, &manifest,
-                            )
-                        {
-                            eprintln!("Failed to write manifest: {e}");
-                            std::process::exit(1);
-                        }
-                        println!("Installed OpenClaw skill: {}", manifest.skill.name);
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to convert OpenClaw skill: {e}");
-                        std::process::exit(1);
-                    }
-                }
-                return;
-            }
-            eprintln!("No skill.toml found in {source}");
-            std::process::exit(1);
-        }
-
-        // Read manifest to get skill name
-        let toml_str = std::fs::read_to_string(&manifest_path).unwrap_or_else(|e| {
-            eprintln!("Error reading skill.toml: {e}");
-            std::process::exit(1);
-        });
-        let manifest: opencarrier_skills::SkillManifest =
-            toml::from_str(&toml_str).unwrap_or_else(|e| {
-                eprintln!("Error parsing skill.toml: {e}");
-                std::process::exit(1);
-            });
-
-        let dest = skills_dir.join(&manifest.skill.name);
-        copy_dir_recursive(&source_path, &dest);
-        println!(
-            "Installed skill: {} v{}",
-            manifest.skill.name, manifest.skill.version
-        );
-    } else {
-        // Remote install from FangHub
-        println!("Installing {source} from FangHub...");
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let client = opencarrier_skills::marketplace::MarketplaceClient::new(
-            opencarrier_skills::marketplace::MarketplaceConfig::default(),
-        );
-        match rt.block_on(client.install(source, &skills_dir)) {
-            Ok(version) => println!("Installed {source} {version}"),
-            Err(e) => {
-                eprintln!("Failed to install skill: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-}
-
-fn cmd_skill_list() {
-    let home = opencarrier_home();
-    let skills_dir = home.join("skills");
-
-    let mut registry = opencarrier_skills::registry::SkillRegistry::new(skills_dir);
-    match registry.load_all() {
-        Ok(0) => println!("No skills installed."),
-        Ok(count) => {
-            println!("{count} skill(s) installed:\n");
-            println!(
-                "{:<20} {:<10} {:<8} DESCRIPTION",
-                "NAME", "VERSION", "TOOLS"
-            );
-            println!("{}", "-".repeat(70));
-            for skill in registry.list() {
-                println!(
-                    "{:<20} {:<10} {:<8} {}",
-                    skill.manifest.skill.name,
-                    skill.manifest.skill.version,
-                    skill.manifest.tools.provided.len(),
-                    skill.manifest.skill.description,
-                );
-            }
-        }
-        Err(e) => {
-            eprintln!("Error loading skills: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_skill_remove(name: &str) {
-    let home = opencarrier_home();
-    let skills_dir = home.join("skills");
-
-    let mut registry = opencarrier_skills::registry::SkillRegistry::new(skills_dir);
-    let _ = registry.load_all();
-    match registry.remove(name) {
-        Ok(()) => println!("Removed skill: {name}"),
-        Err(e) => {
-            eprintln!("Failed to remove skill: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_skill_search(query: &str) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let client = opencarrier_skills::marketplace::MarketplaceClient::new(
-        opencarrier_skills::marketplace::MarketplaceConfig::default(),
-    );
-    match rt.block_on(client.search(query)) {
-        Ok(results) if results.is_empty() => println!("No skills found for \"{query}\"."),
-        Ok(results) => {
-            println!("Skills matching \"{query}\":\n");
-            for r in results {
-                println!("  {} ({})", r.name, r.stars);
-                if !r.description.is_empty() {
-                    println!("    {}", r.description);
-                }
-                println!("    {}", r.url);
-                println!();
-            }
-        }
-        Err(e) => {
-            eprintln!("Search failed: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_skill_create() {
-    let name = prompt_input("Skill name: ");
-    let description = prompt_input("Description: ");
-    let runtime = prompt_input("Runtime (python/node/wasm) [python]: ");
-    let runtime = if runtime.is_empty() {
-        "python".to_string()
-    } else {
-        runtime
-    };
-
-    let home = opencarrier_home();
-    let skill_dir = home.join("skills").join(&name);
-    std::fs::create_dir_all(skill_dir.join("src")).unwrap_or_else(|e| {
-        eprintln!("Error creating skill directory: {e}");
-        std::process::exit(1);
-    });
-
-    let manifest = format!(
-        r#"[skill]
-name = "{name}"
-version = "0.1.0"
-description = "{description}"
-author = ""
-license = "MIT"
-tags = []
-
-[runtime]
-type = "{runtime}"
-entry = "src/main.py"
-
-[[tools.provided]]
-name = "{tool_name}"
-description = "{description}"
-input_schema = {{ type = "object", properties = {{ input = {{ type = "string" }} }}, required = ["input"] }}
-
-[requirements]
-tools = []
-capabilities = []
-"#,
-        tool_name = name.replace('-', "_"),
-    );
-
-    std::fs::write(skill_dir.join("skill.toml"), &manifest).unwrap();
-
-    // Create entry point
-    let entry_content = match runtime.as_str() {
-        "python" => format!(
-            r#"#!/usr/bin/env python3
-"""OpenCarrier skill: {name}"""
-import json
-import sys
-
-def main():
-    payload = json.loads(sys.stdin.read())
-    tool_name = payload["tool"]
-    input_data = payload["input"]
-
-    # TODO: Implement your skill logic here
-    result = {{"result": f"Processed: {{input_data.get('input', '')}}"}}
-
-    print(json.dumps(result))
-
-if __name__ == "__main__":
-    main()
-"#
-        ),
-        _ => "// TODO: Implement your skill\n".to_string(),
-    };
-
-    let entry_path = if runtime == "python" {
-        "src/main.py"
-    } else {
-        "src/index.js"
-    };
-    std::fs::write(skill_dir.join(entry_path), entry_content).unwrap();
-
-    println!("\nSkill created: {}", skill_dir.display());
-    println!("\nFiles:");
-    println!("  skill.toml");
-    println!("  {entry_path}");
-    println!("\nNext steps:");
-    println!("  1. Edit the entry point to implement your skill logic");
-    println!("  2. Test locally: opencarrier skill test");
-    println!(
-        "  3. Install: opencarrier skill install {}",
-        skill_dir.display()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Channel commands
-// ---------------------------------------------------------------------------
-
-fn cmd_channel_list() {
-    let home = opencarrier_home();
-    let config_path = home.join("config.toml");
-
-    if !config_path.exists() {
-        println!("No configuration found. Run `opencarrier init` first.");
-        return;
-    }
-
-    let config_str = std::fs::read_to_string(&config_path).unwrap_or_default();
-
-    println!("Channel Integrations:\n");
-    println!("{:<12} {:<10} STATUS", "CHANNEL", "ENV VAR");
-    println!("{}", "-".repeat(50));
-
-    let channels: Vec<(&str, &str)> = vec![
-        ("webchat", ""),
-        ("telegram", "TELEGRAM_BOT_TOKEN"),
-        ("discord", "DISCORD_BOT_TOKEN"),
-        ("slack", "SLACK_BOT_TOKEN"),
-        ("whatsapp", "WA_ACCESS_TOKEN"),
-        ("signal", ""),
-        ("matrix", "MATRIX_TOKEN"),
-        ("email", "EMAIL_PASSWORD"),
-    ];
-
-    for (name, env_var) in channels {
-        let configured = config_str.contains(&format!("[channels.{name}]"));
-        let env_set = if env_var.is_empty() {
-            true
-        } else {
-            std::env::var(env_var).is_ok()
-        };
-
-        let status = match (configured, env_set) {
-            (true, true) => "Ready",
-            (true, false) => "Missing env",
-            (false, _) => "Not configured",
-        };
-
-        println!(
-            "{:<12} {:<10} {}",
-            name,
-            if env_var.is_empty() { "—" } else { env_var },
-            status,
-        );
-    }
-
-    println!("\nUse `opencarrier channel setup <channel>` to configure a channel.");
-}
-
-fn cmd_channel_setup(channel: Option<&str>) {
-    let channel = match channel {
-        Some(c) => c.to_string(),
-        None => {
-            // Interactive channel picker
-            ui::section("Channel Setup");
-            ui::blank();
-            let channel_list = [
-                ("telegram", "Telegram bot (BotFather)"),
-                ("discord", "Discord bot"),
-                ("slack", "Slack app (Socket Mode)"),
-                ("whatsapp", "WhatsApp Cloud API"),
-                ("email", "Email (IMAP/SMTP)"),
-                ("signal", "Signal (signal-cli)"),
-                ("matrix", "Matrix homeserver"),
-            ];
-
-            for (i, (name, desc)) in channel_list.iter().enumerate() {
-                println!("    {:>2}. {:<12} {}", i + 1, name, desc.dimmed());
-            }
-            ui::blank();
-
-            let choice = prompt_input("  Choose channel [1]: ");
-            let idx = if choice.is_empty() {
-                0
-            } else {
-                choice
-                    .parse::<usize>()
-                    .unwrap_or(1)
-                    .saturating_sub(1)
-                    .min(channel_list.len() - 1)
-            };
-            channel_list[idx].0.to_string()
-        }
-    };
-
-    match channel.as_str() {
-        "telegram" => {
-            ui::section("Setting up Telegram");
-            ui::blank();
-            println!("  1. Open Telegram and message @BotFather");
-            println!("  2. Send /newbot and follow the prompts");
-            println!("  3. Copy the bot token");
-            ui::blank();
-
-            let token = prompt_input("  Paste your bot token: ");
-            if token.is_empty() {
-                ui::error("No token provided. Setup cancelled.");
-                return;
-            }
-
-            let config_block = "\n[channels.telegram]\nbot_token_env = \"TELEGRAM_BOT_TOKEN\"\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("telegram", config_block);
-
-            // Save token to .env
-            match dotenv::save_env_key("TELEGRAM_BOT_TOKEN", &token) {
-                Ok(()) => ui::success("Token saved to ~/.opencarrier/.env"),
-                Err(_) => println!("    export TELEGRAM_BOT_TOKEN={token}"),
-            }
-
-            ui::blank();
-            ui::success("Telegram configured");
-            notify_daemon_restart();
-        }
-        "discord" => {
-            ui::section("Setting up Discord");
-            ui::blank();
-            println!("  1. Go to https://discord.com/developers/applications");
-            println!("  2. Create a New Application");
-            println!("  3. Go to Bot section and click 'Add Bot'");
-            println!("  4. Copy the bot token");
-            println!("  5. Under Privileged Gateway Intents, enable:");
-            println!("     - Message Content Intent");
-            println!("  6. Use OAuth2 URL Generator to invite bot to your server");
-            ui::blank();
-
-            let token = prompt_input("  Paste your bot token: ");
-            if token.is_empty() {
-                ui::error("No token provided. Setup cancelled.");
-                return;
-            }
-
-            let config_block = "\n[channels.discord]\nbot_token_env = \"DISCORD_BOT_TOKEN\"\ndefault_agent = \"coder\"\n";
-            maybe_write_channel_config("discord", config_block);
-
-            match dotenv::save_env_key("DISCORD_BOT_TOKEN", &token) {
-                Ok(()) => ui::success("Token saved to ~/.opencarrier/.env"),
-                Err(_) => println!("    export DISCORD_BOT_TOKEN={token}"),
-            }
-
-            ui::blank();
-            ui::success("Discord configured");
-            notify_daemon_restart();
-        }
-        "slack" => {
-            ui::section("Setting up Slack");
-            ui::blank();
-            println!("  1. Go to https://api.slack.com/apps");
-            println!("  2. Create New App -> From Scratch");
-            println!("  3. Enable Socket Mode (Settings -> Socket Mode)");
-            println!("  4. Copy the App-Level Token (xapp-...)");
-            println!("  5. Go to OAuth & Permissions, add scopes:");
-            println!("     - chat:write, app_mentions:read, im:history");
-            println!("  6. Install to workspace and copy Bot Token (xoxb-...)");
-            ui::blank();
-
-            let app_token = prompt_input("  Paste your App Token (xapp-...): ");
-            let bot_token = prompt_input("  Paste your Bot Token (xoxb-...): ");
-
-            let config_block = "\n[channels.slack]\napp_token_env = \"SLACK_APP_TOKEN\"\nbot_token_env = \"SLACK_BOT_TOKEN\"\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("slack", config_block);
-
-            if !app_token.is_empty() {
-                match dotenv::save_env_key("SLACK_APP_TOKEN", &app_token) {
-                    Ok(()) => ui::success("App token saved to ~/.opencarrier/.env"),
-                    Err(_) => println!("    export SLACK_APP_TOKEN={app_token}"),
-                }
-            }
-            if !bot_token.is_empty() {
-                match dotenv::save_env_key("SLACK_BOT_TOKEN", &bot_token) {
-                    Ok(()) => ui::success("Bot token saved to ~/.opencarrier/.env"),
-                    Err(_) => println!("    export SLACK_BOT_TOKEN={bot_token}"),
-                }
-            }
-
-            ui::blank();
-            ui::success("Slack configured");
-            notify_daemon_restart();
-        }
-        "whatsapp" => {
-            ui::section("Setting up WhatsApp");
-            ui::blank();
-            println!("  WhatsApp Cloud API (recommended for production):");
-            println!("  1. Go to https://developers.facebook.com");
-            println!("  2. Create a Business App");
-            println!("  3. Add WhatsApp product");
-            println!("  4. Set up a test phone number");
-            println!("  5. Copy Phone Number ID and Access Token");
-            ui::blank();
-
-            let phone_id = prompt_input("  Phone Number ID: ");
-            let access_token = prompt_input("  Access Token: ");
-            let verify_token = prompt_input("  Verify Token: ");
-
-            let config_block = "\n[channels.whatsapp]\nmode = \"cloud_api\"\nphone_number_id_env = \"WA_PHONE_ID\"\naccess_token_env = \"WA_ACCESS_TOKEN\"\nverify_token_env = \"WA_VERIFY_TOKEN\"\nwebhook_port = 8443\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("whatsapp", config_block);
-
-            for (key, val) in [
-                ("WA_PHONE_ID", &phone_id),
-                ("WA_ACCESS_TOKEN", &access_token),
-                ("WA_VERIFY_TOKEN", &verify_token),
-            ] {
-                if !val.is_empty() {
-                    match dotenv::save_env_key(key, val) {
-                        Ok(()) => ui::success(&format!("{key} saved to ~/.opencarrier/.env")),
-                        Err(_) => println!("    export {key}={val}"),
-                    }
-                }
-            }
-
-            ui::blank();
-            ui::success("WhatsApp configured");
-            notify_daemon_restart();
-        }
-        "email" => {
-            ui::section("Setting up Email");
-            ui::blank();
-            println!("  For Gmail, use an App Password:");
-            println!("  https://myaccount.google.com/apppasswords");
-            ui::blank();
-
-            let username = prompt_input("  Email address: ");
-            if username.is_empty() {
-                ui::error("No email provided. Setup cancelled.");
-                return;
-            }
-
-            let password = prompt_input("  App password (or Enter to set later): ");
-
-            let config_block = format!(
-                "\n[channels.email]\nimap_host = \"imap.gmail.com\"\nimap_port = 993\nsmtp_host = \"smtp.gmail.com\"\nsmtp_port = 587\nusername = \"{username}\"\npassword_env = \"EMAIL_PASSWORD\"\npoll_interval = 30\ndefault_agent = \"assistant\"\n"
-            );
-            maybe_write_channel_config("email", &config_block);
-
-            if !password.is_empty() {
-                match dotenv::save_env_key("EMAIL_PASSWORD", &password) {
-                    Ok(()) => ui::success("Password saved to ~/.opencarrier/.env"),
-                    Err(_) => println!("    export EMAIL_PASSWORD=your_app_password"),
-                }
-            } else {
-                ui::hint(
-                    "Set later: opencarrier config set-key email (or export EMAIL_PASSWORD=...)",
-                );
-            }
-
-            ui::blank();
-            ui::success("Email configured");
-            notify_daemon_restart();
-        }
-        "signal" => {
-            ui::section("Setting up Signal");
-            ui::blank();
-            println!("  Signal requires signal-cli (https://github.com/AsamK/signal-cli).");
-            ui::blank();
-            println!("  1. Install signal-cli:");
-            println!("     - macOS: brew install signal-cli");
-            println!("     - Linux: download from GitHub releases");
-            println!("     - Or use the Docker image");
-            println!("  2. Register or link a phone number:");
-            println!("     signal-cli -u +1YOURPHONE register");
-            println!("     signal-cli -u +1YOURPHONE verify CODE");
-            println!("  3. Start signal-cli in JSON-RPC mode:");
-            println!("     signal-cli -u +1YOURPHONE jsonRpc --socket /tmp/signal-cli.sock");
-            ui::blank();
-
-            let phone = prompt_input("  Your phone number (+1XXXX, or Enter to skip): ");
-
-            let config_block = "\n[channels.signal]\nphone_env = \"SIGNAL_PHONE\"\nsocket_path = \"/tmp/signal-cli.sock\"\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("signal", config_block);
-
-            if !phone.is_empty() {
-                match dotenv::save_env_key("SIGNAL_PHONE", &phone) {
-                    Ok(()) => ui::success("Phone saved to ~/.opencarrier/.env"),
-                    Err(_) => println!("    export SIGNAL_PHONE={phone}"),
-                }
-            }
-
-            ui::blank();
-            ui::success("Signal configured");
-            notify_daemon_restart();
-        }
-        "matrix" => {
-            ui::section("Setting up Matrix");
-            ui::blank();
-            println!("  1. Create a bot account on your Matrix homeserver");
-            println!("     (e.g., register @opencarrier-bot:matrix.org)");
-            println!("  2. Obtain an access token:");
-            println!("     curl -X POST https://matrix.org/_matrix/client/r0/login \\");
-            println!("       -d '{{\"type\":\"m.login.password\",\"user\":\"opencarrier-bot\",\"password\":\"...\"}}'");
-            println!("     Copy the access_token from the response.");
-            println!("  3. Invite the bot to rooms you want it to monitor.");
-            ui::blank();
-
-            let homeserver = prompt_input("  Homeserver URL [https://matrix.org]: ");
-            let homeserver = if homeserver.is_empty() {
-                "https://matrix.org".to_string()
-            } else {
-                homeserver
-            };
-            let token = prompt_input("  Access token: ");
-
-            let config_block = "\n[channels.matrix]\nhomeserver_env = \"MATRIX_HOMESERVER\"\naccess_token_env = \"MATRIX_ACCESS_TOKEN\"\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("matrix", config_block);
-
-            let _ = dotenv::save_env_key("MATRIX_HOMESERVER", &homeserver);
-            if !token.is_empty() {
-                match dotenv::save_env_key("MATRIX_ACCESS_TOKEN", &token) {
-                    Ok(()) => ui::success("Token saved to ~/.opencarrier/.env"),
-                    Err(_) => println!("    export MATRIX_ACCESS_TOKEN={token}"),
-                }
-            }
-
-            ui::blank();
-            ui::success("Matrix configured");
-            notify_daemon_restart();
-        }
-        other => {
-            ui::error_with_fix(
-                &format!("Unknown channel: {other}"),
-                "Available: telegram, discord, slack, whatsapp, email, signal, matrix",
-            );
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Offer to append a channel config block to config.toml if it doesn't already exist.
-fn maybe_write_channel_config(channel: &str, config_block: &str) {
-    let home = opencarrier_home();
-    let config_path = home.join("config.toml");
-
-    if !config_path.exists() {
-        ui::hint("No config.toml found. Run `opencarrier init` first.");
-        return;
-    }
-
-    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let section_header = format!("[channels.{channel}]");
-    if existing.contains(&section_header) {
-        ui::check_ok(&format!("{section_header} already in config.toml"));
-        return;
-    }
-
-    let answer = prompt_input("  Write to config.toml? [Y/n] ");
-    if answer.is_empty() || answer.starts_with('y') || answer.starts_with('Y') {
-        let mut content = existing;
-        content.push_str(config_block);
-        if std::fs::write(&config_path, &content).is_ok() {
-            restrict_file_permissions(&config_path);
-            ui::check_ok(&format!("Added {section_header} to config.toml"));
-        } else {
-            ui::check_fail("Failed to write config.toml");
-        }
-    }
-}
-
-/// After channel config changes, warn user if daemon is running.
-fn notify_daemon_restart() {
-    if find_daemon().is_some() {
-        ui::check_warn("Restart the daemon to activate this channel");
-    } else {
-        ui::hint("Start the daemon: opencarrier start");
-    }
-}
-
-fn cmd_channel_test(channel: &str) {
-    if let Some(base) = find_daemon() {
-        let client = daemon_client();
-        let body = daemon_json(
-            client
-                .post(format!("{base}/api/channels/{channel}/test"))
-                .send(),
-        );
-        if body.get("status").is_some() {
-            println!("Test message sent to {channel}!");
-        } else {
-            eprintln!(
-                "Failed: {}",
-                body["error"].as_str().unwrap_or("Unknown error")
-            );
-        }
-    } else {
-        eprintln!("Channel test requires a running daemon. Start with: opencarrier start");
-        std::process::exit(1);
-    }
-}
-
-fn cmd_channel_toggle(channel: &str, enable: bool) {
-    let action = if enable { "enabled" } else { "disabled" };
-    if let Some(base) = find_daemon() {
-        let client = daemon_client();
-        let endpoint = if enable { "enable" } else { "disable" };
-        let body = daemon_json(
-            client
-                .post(format!("{base}/api/channels/{channel}/{endpoint}"))
-                .send(),
-        );
-        if body.get("status").is_some() {
-            println!("Channel {channel} {action}.");
-        } else {
-            eprintln!(
-                "Failed: {}",
-                body["error"].as_str().unwrap_or("Unknown error")
-            );
-        }
-    } else {
-        println!("Note: Channel {channel} will be {action} when the daemon starts.");
-        println!("Edit ~/.opencarrier/config.toml to persist this change.");
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Hand commands
-// ---------------------------------------------------------------------------
-
-fn cmd_hand_install(path: &str) {
-    let base = require_daemon("hand install");
-    let dir = std::path::Path::new(path);
-    let toml_path = dir.join("HAND.toml");
-    let skill_path = dir.join("SKILL.md");
-
-    if !toml_path.exists() {
-        eprintln!(
-            "Error: No HAND.toml found in {}",
-            dir.canonicalize()
-                .unwrap_or_else(|_| dir.to_path_buf())
-                .display()
-        );
-        std::process::exit(1);
-    }
-
-    let toml_content = std::fs::read_to_string(&toml_path).unwrap_or_else(|e| {
-        eprintln!("Error reading {}: {e}", toml_path.display());
-        std::process::exit(1);
-    });
-    let skill_content = std::fs::read_to_string(&skill_path).unwrap_or_default();
-
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/hands/install"))
-            .json(&serde_json::json!({
-                "toml_content": toml_content,
-                "skill_content": skill_content,
-            }))
-            .send(),
-    );
-
-    if let Some(err) = body.get("error").and_then(|v| v.as_str()) {
-        eprintln!("Error: {err}");
-        std::process::exit(1);
-    }
-
-    println!(
-        "Installed hand: {} ({})",
-        body["name"].as_str().unwrap_or("?"),
-        body["id"].as_str().unwrap_or("?"),
-    );
-    println!(
-        "Use `opencarrier hand activate {}` to start it.",
-        body["id"].as_str().unwrap_or("?")
-    );
-}
-
-fn cmd_hand_list() {
-    let base = require_daemon("hand list");
-    let client = daemon_client();
-    let body = daemon_json(client.get(format!("{base}/api/hands")).send());
-    // API returns {"hands": [...]} or a bare array
-    let arr_val;
-    if let Some(arr) = body.get("hands").and_then(|v| v.as_array()) {
-        arr_val = arr.clone();
-    } else if let Some(arr) = body.as_array() {
-        arr_val = arr.clone();
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-        return;
-    }
-    if let Some(arr) = Some(&arr_val) {
-        if arr.is_empty() {
-            println!("No hands available.");
-            return;
-        }
-        println!("{:<14} {:<20} {:<10} DESCRIPTION", "ID", "NAME", "CATEGORY");
-        println!("{}", "-".repeat(72));
-        for h in arr {
-            println!(
-                "{:<14} {:<20} {:<10} {}",
-                h["id"].as_str().unwrap_or("?"),
-                h["name"].as_str().unwrap_or("?"),
-                h["category"].as_str().unwrap_or("?"),
-                h["description"]
-                    .as_str()
-                    .unwrap_or("")
-                    .chars()
-                    .take(40)
-                    .collect::<String>(),
-            );
-        }
-        println!("\nUse `opencarrier hand activate <id>` to activate a hand.");
-    }
-}
-
-fn cmd_hand_active() {
-    let base = require_daemon("hand active");
-    let client = daemon_client();
-    let body = daemon_json(client.get(format!("{base}/api/hands/active")).send());
-    // API returns {"instances": [...]} or bare array
-    let arr = body
-        .get("instances")
-        .and_then(|v| v.as_array())
-        .or_else(|| body.as_array())
-        .cloned()
-        .unwrap_or_default();
-    if arr.is_empty() {
-        println!("No active hands.");
-        return;
-    }
-    println!("{:<38} {:<14} {:<10} AGENT", "INSTANCE", "HAND", "STATUS");
-    println!("{}", "-".repeat(72));
-    for i in &arr {
-        println!(
-            "{:<38} {:<14} {:<10} {}",
-            i["instance_id"].as_str().unwrap_or("?"),
-            i["hand_id"].as_str().unwrap_or("?"),
-            i["status"].as_str().unwrap_or("?"),
-            i["agent_name"].as_str().unwrap_or("?"),
-        );
-    }
-}
-
-fn cmd_hand_activate(id: &str) {
-    let base = require_daemon("hand activate");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/hands/{id}/activate"))
-            .header("content-type", "application/json")
-            .body("{}")
-            .send(),
-    );
-    if body.get("instance_id").is_some() {
-        println!(
-            "Hand '{}' activated (instance: {}, agent: {})",
-            id,
-            body["instance_id"].as_str().unwrap_or("?"),
-            body["agent_name"].as_str().unwrap_or("?"),
-        );
-    } else {
-        eprintln!(
-            "Failed to activate hand '{}': {}",
-            id,
-            body["error"].as_str().unwrap_or("Unknown error")
-        );
-        std::process::exit(1);
-    }
-}
-
-fn cmd_hand_deactivate(id: &str) {
-    let base = require_daemon("hand deactivate");
-    let client = daemon_client();
-    // First find the instance ID for this hand
-    let active = daemon_json(client.get(format!("{base}/api/hands/active")).send());
-    let arr = active
-        .get("instances")
-        .and_then(|v| v.as_array())
-        .or_else(|| active.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let instance_id = arr.iter().find_map(|i| {
-        if i["hand_id"].as_str() == Some(id) {
-            i["instance_id"].as_str().map(|s| s.to_string())
-        } else {
-            None
-        }
-    });
-
-    match instance_id {
-        Some(iid) => {
-            let body = daemon_json(
-                client
-                    .delete(format!("{base}/api/hands/instances/{iid}"))
-                    .send(),
-            );
-            if body.get("status").is_some() {
-                println!("Hand '{id}' deactivated.");
-            } else {
-                eprintln!(
-                    "Failed: {}",
-                    body["error"].as_str().unwrap_or("Unknown error")
-                );
-                std::process::exit(1);
-            }
-        }
-        None => {
-            eprintln!("No active instance found for hand '{id}'.");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_hand_info(id: &str) {
-    let base = require_daemon("hand info");
-    let client = daemon_client();
-    let body = daemon_json(client.get(format!("{base}/api/hands/{id}")).send());
-    if body.get("error").is_some() {
-        eprintln!("Hand not found: {}", body["error"].as_str().unwrap_or(id));
-        std::process::exit(1);
-    }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&body).unwrap_or_default()
-    );
-}
-
-fn cmd_hand_check_deps(id: &str) {
-    let base = require_daemon("hand check-deps");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/hands/{id}/check-deps"))
-            .send(),
-    );
-    if body.get("error").is_some() {
-        ui::error(&format!(
-            "Failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-    }
-}
-
-fn cmd_hand_install_deps(id: &str) {
-    let base = require_daemon("hand install-deps");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/hands/{id}/install-deps"))
-            .send(),
-    );
-    if body.get("error").is_some() {
-        ui::error(&format!(
-            "Failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    } else {
-        ui::success(&format!("Dependencies installed for hand '{id}'."));
-        if let Some(results) = body.get("results") {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(results).unwrap_or_default()
-            );
-        }
-    }
-}
-
-fn cmd_hand_pause(id: &str) {
-    let base = require_daemon("hand pause");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/hands/instances/{id}/pause"))
-            .send(),
-    );
-    if body.get("error").is_some() {
-        ui::error(&format!(
-            "Failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    } else {
-        ui::success(&format!("Hand instance '{id}' paused."));
-    }
-}
-
-fn cmd_hand_resume(id: &str) {
-    let base = require_daemon("hand resume");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/hands/instances/{id}/resume"))
-            .send(),
-    );
-    if body.get("error").is_some() {
-        ui::error(&format!(
-            "Failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    } else {
-        ui::success(&format!("Hand instance '{id}' resumed."));
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Provider / API key helpers
@@ -4775,6 +2764,186 @@ pub(crate) fn test_api_key(provider: &str, env_var: &str) -> bool {
             status != 401 && status != 403
         }
         Err(_) => true, // network error — don't block setup
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Interactive Providers command
+// ---------------------------------------------------------------------------
+
+fn cmd_providers() {
+    let home = opencarrier_home();
+    let brain_path = home.join("brain.json");
+
+    if !brain_path.exists() {
+        ui::error("No brain.json found. Run `opencarrier start` first to generate one.");
+        return;
+    }
+
+    let brain_content = std::fs::read_to_string(&brain_path).unwrap_or_else(|e| {
+        ui::error(&format!("Failed to read brain.json: {e}"));
+        std::process::exit(1);
+    });
+
+    let brain: opencarrier_types::brain::BrainConfig =
+        serde_json::from_str(&brain_content).unwrap_or_else(|e| {
+            ui::error(&format!("Failed to parse brain.json: {e}"));
+            std::process::exit(1);
+        });
+
+    // Collect unique providers referenced by endpoints, with endpoint count
+    let mut provider_names: Vec<String> = brain
+        .endpoints
+        .values()
+        .map(|e| e.provider.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    provider_names.sort();
+
+    if provider_names.is_empty() {
+        ui::error("No providers found in brain.json.");
+        return;
+    }
+
+    // Load .env to check which keys are set
+    dotenv::load_dotenv();
+
+    loop {
+        println!();
+        println!("{}", "  Providers".bold().bright_cyan());
+        println!("{}", "  ──────────────────────────────────────────────────".bright_black());
+
+        let mut any_missing = false;
+        for (i, provider) in provider_names.iter().enumerate() {
+            let env_var = provider_to_env_var(provider);
+            let key_set = std::env::var(&env_var).map(|v| !v.is_empty()).unwrap_or(false);
+
+            // Also check brain provider config for providers that don't need keys
+            let no_key_needed = brain
+                .providers
+                .get(provider)
+                .map(|p| p.api_key_env.is_empty())
+                .unwrap_or(false);
+
+            let status = if no_key_needed {
+                format!("{}", "🏠 Local".bright_blue())
+            } else if key_set {
+                format!("{}", "✅ Key set".bright_green())
+            } else {
+                any_missing = true;
+                format!("{}", "❌ Key needed".bright_red())
+            };
+
+            // Count endpoints using this provider
+            let ep_count = brain
+                .endpoints
+                .values()
+                .filter(|e| e.provider == *provider)
+                .count();
+
+            println!(
+                "  {} {} {} ({} endpoint{})",
+                format!("[{}]", i + 1).bright_yellow(),
+                format!("{:<14}", provider).bold(),
+                status,
+                ep_count,
+                if ep_count != 1 { "s" } else { "" },
+            );
+        }
+
+        if any_missing {
+            println!(
+                "{}",
+                "\n  ⚠  Some providers need API keys. Select a number to set it."
+                    .bright_yellow()
+            );
+        }
+
+        println!();
+        println!(
+            "{}",
+            "  Enter number to set key, 'q' to quit:".bright_black()
+        );
+        print!("  > ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() {
+            break;
+        }
+        let input = input.trim();
+
+        if input == "q" || input == "quit" || input == "exit" {
+            break;
+        }
+
+        // Parse selection
+        let idx: usize = match input.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= provider_names.len() => n - 1,
+            _ => {
+                // Also allow typing provider name directly
+                if let Some(pos) = provider_names.iter().position(|p| p == input) {
+                    pos
+                } else {
+                    println!("{}", "  Invalid selection.".bright_red());
+                    continue;
+                }
+            }
+        };
+
+        let provider = &provider_names[idx];
+        let no_key_needed = brain
+            .providers
+            .get(provider)
+            .map(|p| p.api_key_env.is_empty())
+            .unwrap_or(false);
+
+        if no_key_needed {
+            println!(
+                "  {} doesn't need an API key (local provider).",
+                provider.bright_cyan()
+            );
+            continue;
+        }
+
+        let env_var = provider_to_env_var(provider);
+        let existing = std::env::var(&env_var).unwrap_or_default();
+        if !existing.is_empty() {
+            println!(
+                "  {} already has a key set ({}...). Enter new key to replace, or press Enter to skip.",
+                provider.bright_cyan(),
+                &existing[..existing.len().min(8)]
+            );
+        }
+
+        let key = prompt_input(&format!("  API key for {}: ", provider.bright_cyan()));
+        if key.is_empty() {
+            println!("  Skipped.");
+            continue;
+        }
+
+        // Save
+        match dotenv::save_env_key(&env_var, &key) {
+            Ok(()) => {
+                // Update in-memory env so status reflects immediately
+                std::env::set_var(&env_var, &key);
+
+                // Test
+                print!("  Testing... ");
+                io::stdout().flush().unwrap();
+                if test_api_key(provider, &env_var) {
+                    println!("{}", "✔ OK".bright_green());
+                } else {
+                    println!("{}", "⚠ could not verify (may still work)".bright_yellow());
+                }
+
+                ui::success(&format!("Saved key for {provider}"));
+            }
+            Err(e) => {
+                ui::error(&format!("Failed to save key: {e}"));
+            }
+        }
     }
 }
 
@@ -5113,110 +3282,12 @@ fn cmd_config_unset(key: &str) {
     ui::success(&format!("Removed key: {key}"));
 }
 
-fn cmd_config_set_key(provider: &str) {
-    let env_var = provider_to_env_var(provider);
-
-    let key = prompt_input(&format!("  Paste your {provider} API key: "));
-    if key.is_empty() {
-        ui::error("No key provided. Cancelled.");
-        return;
-    }
-
-    // Try vault first (best-effort)
-    save_credential_prefer_vault(&env_var, &key);
-
-    // Always save to dotenv as fallback
-    match dotenv::save_env_key(&env_var, &key) {
-        Ok(()) => {
-            ui::success(&format!("Saved {env_var} to ~/.opencarrier/.env"));
-            // Test the key
-            print!("  Testing key... ");
-            io::stdout().flush().unwrap();
-            if test_api_key(provider, &env_var) {
-                println!("{}", "OK".bright_green());
-            } else {
-                println!("{}", "could not verify (may still work)".bright_yellow());
-            }
-        }
-        Err(e) => {
-            ui::error(&format!("Failed to save key: {e}"));
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_config_delete_key(provider: &str) {
-    let env_var = provider_to_env_var(provider);
-
-    // Remove from vault (best-effort)
-    {
-        let home = opencarrier_home();
-        let vault_path = home.join("vault.enc");
-        if vault_path.exists() {
-            let mut vault = opencarrier_extensions::vault::CredentialVault::new(vault_path);
-            if vault.unlock().is_ok() {
-                let _ = vault.remove(&env_var);
-            }
-        }
-    }
-
-    match dotenv::remove_env_key(&env_var) {
-        Ok(()) => ui::success(&format!("Removed {env_var} from ~/.opencarrier/.env")),
-        Err(e) => {
-            ui::error(&format!("Failed to remove key: {e}"));
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_config_test_key(provider: &str) {
-    let env_var = provider_to_env_var(provider);
-
-    if std::env::var(&env_var).is_err() {
-        ui::error(&format!("{env_var} not set"));
-        ui::hint(&format!("Set it: opencarrier config set-key {provider}"));
-        std::process::exit(1);
-    }
-
-    print!("  Testing {provider} ({env_var})... ");
-    io::stdout().flush().unwrap();
-    if test_api_key(provider, &env_var) {
-        println!("{}", "OK".bright_green());
-    } else {
-        println!("{}", "FAILED (401/403)".bright_red());
-        ui::hint(&format!(
-            "Update key: opencarrier config set-key {provider}"
-        ));
-        std::process::exit(1);
-    }
-}
-
-/// Try to store a credential in the vault first; silently falls through if vault
-/// is not initialized or cannot be unlocked. The caller should always also
-/// write to dotenv as a fallback.
-fn save_credential_prefer_vault(env_var: &str, value: &str) {
-    use zeroize::Zeroizing;
-
-    let home = opencarrier_home();
-    let vault_path = home.join("vault.enc");
-    if !vault_path.exists() {
-        return;
-    }
-    let mut vault = opencarrier_extensions::vault::CredentialVault::new(vault_path);
-    if vault.unlock().is_err() {
-        return;
-    }
-    if let Ok(()) = vault.set(env_var.to_string(), Zeroizing::new(value.to_string())) {
-        println!("  {}", "Also stored in encrypted vault".dimmed());
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Quick chat (OpenClaw alias)
+// Quick chat (OpenCarrier alias)
 // ---------------------------------------------------------------------------
 
-fn cmd_quick_chat(config: Option<PathBuf>, agent: Option<String>) {
-    tui::chat_runner::run_chat_tui(config, agent);
+fn cmd_quick_chat(config: Option<PathBuf>, agent: String) {
+    tui::chat_runner::run_chat_tui(config, Some(agent));
 }
 
 // ---------------------------------------------------------------------------
@@ -5241,333 +3312,6 @@ fn prompt_input(prompt: &str) -> String {
     let mut line = String::new();
     io::stdin().lock().read_line(&mut line).unwrap_or(0);
     line.trim().to_string()
-}
-
-pub(crate) fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) {
-    std::fs::create_dir_all(dst).unwrap();
-    if let Ok(entries) = std::fs::read_dir(src) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let dest_path = dst.join(entry.file_name());
-            if path.is_dir() {
-                copy_dir_recursive(&path, &dest_path);
-            } else {
-                let _ = std::fs::copy(&path, &dest_path);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Integration commands (opencarrier add/remove/integrations)
-// ---------------------------------------------------------------------------
-
-fn cmd_integration_add(name: &str, key: Option<&str>) {
-    let home = opencarrier_home();
-    let mut registry = opencarrier_extensions::registry::IntegrationRegistry::new(&home);
-    registry.load_bundled();
-    let _ = registry.load_installed();
-
-    // Check template exists
-    let template = match registry.get_template(name) {
-        Some(t) => t.clone(),
-        None => {
-            ui::error(&format!("Unknown integration: '{name}'"));
-            println!("\nAvailable integrations:");
-            for t in registry.list_templates() {
-                println!("  {} {} — {}", t.icon, t.id, t.description);
-            }
-            std::process::exit(1);
-        }
-    };
-
-    // Set up credential resolver
-    let dotenv_path = home.join(".env");
-    let vault_path = home.join("vault.enc");
-    let vault = if vault_path.exists() {
-        let mut v = opencarrier_extensions::vault::CredentialVault::new(vault_path);
-        if v.unlock().is_ok() {
-            Some(v)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    let mut resolver =
-        opencarrier_extensions::credentials::CredentialResolver::new(vault, Some(&dotenv_path))
-            .with_interactive(true);
-
-    // Build provided keys map
-    let mut provided_keys = std::collections::HashMap::new();
-    if let Some(key_value) = key {
-        // Auto-detect which env var to use (first required_env that's a secret)
-        if let Some(env_var) = template.required_env.iter().find(|e| e.is_secret) {
-            provided_keys.insert(env_var.name.clone(), key_value.to_string());
-        }
-    }
-
-    match opencarrier_extensions::installer::install_integration(
-        &mut registry,
-        &mut resolver,
-        name,
-        &provided_keys,
-    ) {
-        Ok(result) => {
-            match &result.status {
-                opencarrier_extensions::IntegrationStatus::Ready => {
-                    ui::success(&result.message);
-                }
-                opencarrier_extensions::IntegrationStatus::Setup => {
-                    println!("{}", result.message.yellow());
-                    println!("\nTo add credentials:");
-                    for env in &template.required_env {
-                        if env.is_secret {
-                            println!("  opencarrier vault set {}  # {}", env.name, env.help);
-                            if let Some(ref url) = env.get_url {
-                                println!("  Get it here: {url}");
-                            }
-                        }
-                    }
-                }
-                _ => println!("{}", result.message),
-            }
-
-            // If daemon is running, trigger hot-reload
-            if let Some(base_url) = find_daemon() {
-                let client = daemon_client();
-                let _ = client
-                    .post(format!("{base_url}/api/integrations/reload"))
-                    .send();
-            }
-        }
-        Err(e) => {
-            ui::error(&e.to_string());
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_integration_remove(name: &str) {
-    let home = opencarrier_home();
-    let mut registry = opencarrier_extensions::registry::IntegrationRegistry::new(&home);
-    registry.load_bundled();
-    let _ = registry.load_installed();
-
-    match opencarrier_extensions::installer::remove_integration(&mut registry, name) {
-        Ok(msg) => {
-            ui::success(&msg);
-            // Hot-reload daemon
-            if let Some(base_url) = find_daemon() {
-                let client = daemon_client();
-                let _ = client
-                    .post(format!("{base_url}/api/integrations/reload"))
-                    .send();
-            }
-        }
-        Err(e) => {
-            ui::error(&e.to_string());
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_integrations_list(query: Option<&str>) {
-    let home = opencarrier_home();
-    let mut registry = opencarrier_extensions::registry::IntegrationRegistry::new(&home);
-    registry.load_bundled();
-    let _ = registry.load_installed();
-
-    let dotenv_path = home.join(".env");
-    let resolver =
-        opencarrier_extensions::credentials::CredentialResolver::new(None, Some(&dotenv_path));
-
-    let entries = if let Some(q) = query {
-        opencarrier_extensions::installer::search_integrations(&registry, q)
-    } else {
-        opencarrier_extensions::installer::list_integrations(&registry, &resolver)
-    };
-
-    if entries.is_empty() {
-        if let Some(q) = query {
-            println!("No integrations matching '{q}'.");
-        } else {
-            println!("No integrations available.");
-        }
-        return;
-    }
-
-    // Group by category
-    let mut by_category: std::collections::BTreeMap<
-        String,
-        Vec<&opencarrier_extensions::installer::IntegrationListEntry>,
-    > = std::collections::BTreeMap::new();
-    for entry in &entries {
-        by_category
-            .entry(entry.category.clone())
-            .or_default()
-            .push(entry);
-    }
-
-    for (category, items) in &by_category {
-        println!("\n{}", format!("  {category}").bold());
-        for item in items {
-            let status_badge = match &item.status {
-                opencarrier_extensions::IntegrationStatus::Ready => "[Ready]".green().to_string(),
-                opencarrier_extensions::IntegrationStatus::Setup => "[Setup]".yellow().to_string(),
-                opencarrier_extensions::IntegrationStatus::Available => {
-                    "[Available]".dimmed().to_string()
-                }
-                opencarrier_extensions::IntegrationStatus::Error(msg) => {
-                    format!("[Error: {msg}]").red().to_string()
-                }
-                opencarrier_extensions::IntegrationStatus::Disabled => {
-                    "[Disabled]".dimmed().to_string()
-                }
-            };
-            println!(
-                "    {} {:<20} {:<12} {}",
-                item.icon, item.id, status_badge, item.description
-            );
-        }
-    }
-    println!();
-    println!(
-        "  {} integrations ({} installed)",
-        entries.len(),
-        entries
-            .iter()
-            .filter(|e| matches!(
-                e.status,
-                opencarrier_extensions::IntegrationStatus::Ready
-                    | opencarrier_extensions::IntegrationStatus::Setup
-            ))
-            .count()
-    );
-    println!("  Use `opencarrier add <name>` to install an integration.");
-}
-
-// ---------------------------------------------------------------------------
-// Vault commands (opencarrier vault init/set/list/remove)
-// ---------------------------------------------------------------------------
-
-fn cmd_vault_init() {
-    let home = opencarrier_home();
-    let vault_path = home.join("vault.enc");
-    let mut vault = opencarrier_extensions::vault::CredentialVault::new(vault_path);
-
-    match vault.init() {
-        Ok(()) => ui::success("Credential vault initialized."),
-        Err(e) => {
-            ui::error(&e.to_string());
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_vault_set(key: &str) {
-    use zeroize::Zeroizing;
-
-    let home = opencarrier_home();
-    let vault_path = home.join("vault.enc");
-    let mut vault = opencarrier_extensions::vault::CredentialVault::new(vault_path);
-
-    if !vault.exists() {
-        ui::error("Vault not initialized. Run: opencarrier vault init");
-        std::process::exit(1);
-    }
-
-    if let Err(e) = vault.unlock() {
-        ui::error(&format!("Could not unlock vault: {e}"));
-        std::process::exit(1);
-    }
-
-    let value = prompt_input(&format!("Enter value for {key}: "));
-    if value.is_empty() {
-        ui::error("Empty value — not stored.");
-        std::process::exit(1);
-    }
-
-    match vault.set(key.to_string(), Zeroizing::new(value)) {
-        Ok(()) => ui::success(&format!("Stored '{key}' in vault.")),
-        Err(e) => {
-            ui::error(&format!("Failed to store: {e}"));
-            std::process::exit(1);
-        }
-    }
-}
-
-fn cmd_vault_list() {
-    let home = opencarrier_home();
-    let vault_path = home.join("vault.enc");
-    let mut vault = opencarrier_extensions::vault::CredentialVault::new(vault_path);
-
-    if !vault.exists() {
-        println!("Vault not initialized. Run: opencarrier vault init");
-        return;
-    }
-
-    if let Err(e) = vault.unlock() {
-        ui::error(&format!("Could not unlock vault: {e}"));
-        std::process::exit(1);
-    }
-
-    let keys = vault.list_keys();
-    if keys.is_empty() {
-        println!("Vault is empty.");
-    } else {
-        println!("Stored credentials ({}):", keys.len());
-        for key in keys {
-            println!("  {key}");
-        }
-    }
-}
-
-fn cmd_vault_remove(key: &str) {
-    let home = opencarrier_home();
-    let vault_path = home.join("vault.enc");
-    let mut vault = opencarrier_extensions::vault::CredentialVault::new(vault_path);
-
-    if !vault.exists() {
-        ui::error("Vault not initialized.");
-        std::process::exit(1);
-    }
-    if let Err(e) = vault.unlock() {
-        ui::error(&format!("Could not unlock vault: {e}"));
-        std::process::exit(1);
-    }
-
-    match vault.remove(key) {
-        Ok(true) => ui::success(&format!("Removed '{key}' from vault.")),
-        Ok(false) => println!("Key '{key}' not found in vault."),
-        Err(e) => {
-            ui::error(&format!("Failed to remove: {e}"));
-            std::process::exit(1);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Scaffold commands (opencarrier new skill/integration)
-// ---------------------------------------------------------------------------
-
-fn cmd_scaffold(kind: ScaffoldKind) {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let result = match kind {
-        ScaffoldKind::Skill => {
-            opencarrier_extensions::installer::scaffold_skill(&cwd.join("my-skill"))
-        }
-        ScaffoldKind::Integration => {
-            opencarrier_extensions::installer::scaffold_integration(&cwd.join("my-integration"))
-        }
-    };
-    match result {
-        Ok(msg) => ui::success(&msg),
-        Err(e) => {
-            ui::error(&e.to_string());
-            std::process::exit(1);
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5696,73 +3440,6 @@ fn cmd_models_aliases(json: bool) {
     }
 }
 
-fn cmd_models_providers(json: bool) {
-    if let Some(base) = find_daemon() {
-        let client = daemon_client();
-        let body = daemon_json(client.get(format!("{base}/api/providers")).send());
-        if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
-            return;
-        }
-        if let Some(arr) = body.as_array() {
-            println!(
-                "{:<20} {:<12} {:<10} BASE URL",
-                "PROVIDER", "AUTH", "MODELS"
-            );
-            println!("{}", "-".repeat(70));
-            for p in arr {
-                println!(
-                    "{:<20} {:<12} {:<10} {}",
-                    p["id"].as_str().unwrap_or("?"),
-                    p["auth_status"].as_str().unwrap_or("?"),
-                    p["model_count"].as_u64().unwrap_or(0),
-                    p["base_url"].as_str().unwrap_or(""),
-                );
-            }
-        } else {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
-            );
-        }
-    } else {
-        let catalog = opencarrier_runtime::model_catalog::ModelCatalog::new();
-        let providers = catalog.list_providers();
-        if json {
-            let arr: Vec<serde_json::Value> = providers
-                .iter()
-                .map(|p| {
-                    serde_json::json!({
-                        "id": p.id,
-                        "auth_status": format!("{:?}", p.auth_status),
-                        "model_count": p.model_count,
-                        "base_url": p.base_url,
-                    })
-                })
-                .collect();
-            println!("{}", serde_json::to_string_pretty(&arr).unwrap_or_default());
-            return;
-        }
-        println!(
-            "{:<20} {:<12} {:<10} BASE URL",
-            "PROVIDER", "AUTH", "MODELS"
-        );
-        println!("{}", "-".repeat(70));
-        for p in providers {
-            println!(
-                "{:<20} {:<12} {:<10} {}",
-                p.id,
-                format!("{:?}", p.auth_status),
-                p.model_count,
-                p.base_url,
-            );
-        }
-    }
-}
-
 fn cmd_models_set(model: Option<String>) {
     let model = match model {
         Some(m) => m,
@@ -5844,60 +3521,6 @@ fn pick_model() -> String {
         }
         // Accept any string (user might know a model not in catalog)
         return input;
-    }
-}
-
-fn cmd_approvals_list(json: bool) {
-    let base = require_daemon("approvals list");
-    let client = daemon_client();
-    let body = daemon_json(client.get(format!("{base}/api/approvals")).send());
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-        return;
-    }
-    if let Some(arr) = body.as_array() {
-        if arr.is_empty() {
-            println!("No pending approvals.");
-            return;
-        }
-        println!("{:<38} {:<16} {:<12} REQUEST", "ID", "AGENT", "TYPE");
-        println!("{}", "-".repeat(80));
-        for a in arr {
-            println!(
-                "{:<38} {:<16} {:<12} {}",
-                a["id"].as_str().unwrap_or("?"),
-                a["agent_name"].as_str().unwrap_or("?"),
-                a["approval_type"].as_str().unwrap_or("?"),
-                a["description"].as_str().unwrap_or(""),
-            );
-        }
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-    }
-}
-
-fn cmd_approvals_respond(id: &str, approve: bool) {
-    let base = require_daemon("approvals");
-    let client = daemon_client();
-    let endpoint = if approve { "approve" } else { "reject" };
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/approvals/{id}/{endpoint}"))
-            .send(),
-    );
-    if body.get("error").is_some() {
-        ui::error(&format!(
-            "Failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    } else {
-        ui::success(&format!("Approval {id} {endpoint}d."));
     }
 }
 
@@ -6127,39 +3750,6 @@ fn cmd_logs(lines: usize, follow: bool) {
     }
 }
 
-fn cmd_health(json: bool) {
-    match find_daemon() {
-        Some(base) => {
-            let client = daemon_client();
-            let body = daemon_json(client.get(format!("{base}/api/health")).send());
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&body).unwrap_or_default()
-                );
-                return;
-            }
-            ui::success("Daemon is healthy");
-            if let Some(status) = body["status"].as_str() {
-                ui::kv("Status", status);
-            }
-            if let Some(uptime) = body.get("uptime_secs").and_then(|v| v.as_u64()) {
-                let hours = uptime / 3600;
-                let mins = (uptime % 3600) / 60;
-                ui::kv("Uptime", &format!("{hours}h {mins}m"));
-            }
-        }
-        None => {
-            if json {
-                println!("{}", serde_json::json!({"error": "daemon not running"}));
-                std::process::exit(1);
-            }
-            ui::error("Daemon is not running.");
-            ui::hint("Start it with: opencarrier start");
-            std::process::exit(1);
-        }
-    }
-}
 
 fn cmd_security_status(json: bool) {
     let base = require_daemon("security status");
@@ -6352,169 +3942,6 @@ fn cmd_memory_delete(agent: &str, key: &str) {
     }
 }
 
-fn cmd_devices_list(json: bool) {
-    let base = require_daemon("devices list");
-    let client = daemon_client();
-    let body = daemon_json(client.get(format!("{base}/api/pairing/devices")).send());
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-        return;
-    }
-    if let Some(arr) = body.as_array() {
-        if arr.is_empty() {
-            println!("No paired devices.");
-            return;
-        }
-        println!("{:<38} {:<20} LAST SEEN", "ID", "NAME");
-        println!("{}", "-".repeat(70));
-        for d in arr {
-            println!(
-                "{:<38} {:<20} {}",
-                d["id"].as_str().unwrap_or("?"),
-                d["name"].as_str().unwrap_or("?"),
-                d["last_seen"].as_str().unwrap_or("?"),
-            );
-        }
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-    }
-}
-
-fn cmd_devices_pair() {
-    let base = require_daemon("qr");
-    let client = daemon_client();
-    let body = daemon_json(client.post(format!("{base}/api/pairing/request")).send());
-    if let Some(qr) = body["qr_data"].as_str() {
-        ui::section("Device Pairing");
-        ui::blank();
-        // Render a simple text-based QR representation
-        println!("  Scan this QR code with the OpenCarrier mobile app:");
-        ui::blank();
-        println!("  {qr}");
-        ui::blank();
-        if let Some(code) = body["pairing_code"].as_str() {
-            ui::kv("Pairing code", code);
-        }
-        if let Some(expires) = body["expires_at"].as_str() {
-            ui::kv("Expires", expires);
-        }
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-    }
-}
-
-fn cmd_devices_remove(id: &str) {
-    let base = require_daemon("devices remove");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .delete(format!("{base}/api/pairing/devices/{id}"))
-            .send(),
-    );
-    if body.get("error").is_some() {
-        ui::error(&format!(
-            "Failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    } else {
-        ui::success(&format!("Device {id} removed."));
-    }
-}
-
-fn cmd_webhooks_list(json: bool) {
-    let base = require_daemon("webhooks list");
-    let client = daemon_client();
-    let body = daemon_json(client.get(format!("{base}/api/triggers")).send());
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-        return;
-    }
-    if let Some(arr) = body.as_array() {
-        if arr.is_empty() {
-            println!("No webhooks configured.");
-            return;
-        }
-        println!("{:<38} {:<16} URL", "ID", "AGENT");
-        println!("{}", "-".repeat(80));
-        for w in arr {
-            println!(
-                "{:<38} {:<16} {}",
-                w["id"].as_str().unwrap_or("?"),
-                w["agent_id"].as_str().unwrap_or("?"),
-                w["url"].as_str().unwrap_or(""),
-            );
-        }
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-    }
-}
-
-fn cmd_webhooks_create(agent: &str, url: &str) {
-    let base = require_daemon("webhooks create");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/triggers"))
-            .json(&serde_json::json!({
-                "agent_id": agent,
-                "pattern": {"webhook": {"url": url}},
-                "prompt_template": "Webhook event: {{event}}",
-            }))
-            .send(),
-    );
-    if let Some(id) = body["id"].as_str() {
-        ui::success(&format!("Webhook created: {id}"));
-    } else {
-        ui::error(&format!(
-            "Failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    }
-}
-
-fn cmd_webhooks_delete(id: &str) {
-    let base = require_daemon("webhooks delete");
-    let client = daemon_client();
-    let body = daemon_json(client.delete(format!("{base}/api/triggers/{id}")).send());
-    if body.get("error").is_some() {
-        ui::error(&format!(
-            "Failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    } else {
-        ui::success(&format!("Webhook {id} deleted."));
-    }
-}
-
-fn cmd_webhooks_test(id: &str) {
-    let base = require_daemon("webhooks test");
-    let client = daemon_client();
-    let body = daemon_json(client.post(format!("{base}/api/triggers/{id}/test")).send());
-    if body["success"].as_bool().unwrap_or(false) {
-        ui::success(&format!("Webhook {id} test payload sent successfully."));
-    } else {
-        ui::error(&format!(
-            "Webhook test failed: {}",
-            body["error"].as_str().unwrap_or("?")
-        ));
-    }
-}
-
 fn cmd_message(agent: &str, text: &str, json: bool) {
     let base = require_daemon("message");
     let client = daemon_client();
@@ -6539,71 +3966,6 @@ fn cmd_message(agent: &str, text: &str, json: bool) {
             serde_json::to_string_pretty(&body).unwrap_or_default()
         );
     }
-}
-
-fn cmd_system_info(json: bool) {
-    if let Some(base) = find_daemon() {
-        let client = daemon_client();
-        let body = daemon_json(client.get(format!("{base}/api/status")).send());
-        if json {
-            let mut data = body.clone();
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert(
-                    "version".to_string(),
-                    serde_json::json!(env!("CARGO_PKG_VERSION")),
-                );
-                obj.insert("api_url".to_string(), serde_json::json!(base));
-            }
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&data).unwrap_or_default()
-            );
-            return;
-        }
-        ui::section("OpenCarrier System Info");
-        ui::blank();
-        ui::kv("Version", env!("CARGO_PKG_VERSION"));
-        ui::kv("Status", body["status"].as_str().unwrap_or("?"));
-        ui::kv(
-            "Agents",
-            &body["agent_count"].as_u64().unwrap_or(0).to_string(),
-        );
-        ui::kv("Modality", body["default_modality"].as_str().unwrap_or("?"));
-        ui::kv("Model", body["default_model"].as_str().unwrap_or("?"));
-        ui::kv("API", &base);
-        ui::kv("Data dir", body["data_dir"].as_str().unwrap_or("?"));
-        ui::kv(
-            "Uptime",
-            &format!("{}s", body["uptime_seconds"].as_u64().unwrap_or(0)),
-        );
-    } else {
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "daemon": "not_running",
-                })
-            );
-            return;
-        }
-        ui::section("OpenCarrier System Info");
-        ui::blank();
-        ui::kv("Version", env!("CARGO_PKG_VERSION"));
-        ui::kv_warn("Daemon", "NOT RUNNING");
-        ui::hint("Start with: opencarrier start");
-    }
-}
-
-fn cmd_system_version(json: bool) {
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({"version": env!("CARGO_PKG_VERSION")})
-        );
-        return;
-    }
-    println!("opencarrier {}", env!("CARGO_PKG_VERSION"));
 }
 
 fn cmd_reset(confirm: bool) {
@@ -7062,25 +4424,6 @@ fn remove_self_binary(exe_path: &std::path::Path) {
 mod tests {
 
     // --- Doctor command unit tests ---
-
-    #[test]
-    fn test_doctor_skill_registry_loads_bundled() {
-        let skills_dir = std::env::temp_dir().join("opencarrier-doctor-test-skills");
-        let mut skill_reg = opencarrier_skills::registry::SkillRegistry::new(skills_dir);
-        let count = skill_reg.load_bundled();
-        assert!(count > 0, "Should load bundled skills");
-        assert_eq!(skill_reg.count(), count);
-    }
-
-    #[test]
-    fn test_doctor_extension_registry_loads_bundled() {
-        let tmp = std::env::temp_dir().join("opencarrier-doctor-test-ext");
-        let _ = std::fs::create_dir_all(&tmp);
-        let mut ext_reg = opencarrier_extensions::registry::IntegrationRegistry::new(&tmp);
-        let count = ext_reg.load_bundled();
-        assert!(count > 0, "Should load bundled integration templates");
-        assert_eq!(ext_reg.template_count(), count);
-    }
 
     #[test]
     fn test_doctor_config_deser_default() {
