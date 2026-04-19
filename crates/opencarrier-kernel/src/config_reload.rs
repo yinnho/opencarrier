@@ -1,7 +1,7 @@
 //! Config hot-reload — diffs two `KernelConfig` instances and produces a `ReloadPlan`.
 //!
-//! **Hot-reload safe**: channels, skills, usage footer, web config, browser,
-//! approval policy, cron settings, webhook triggers, extensions.
+//! **Hot-reload safe**: skills, usage footer, web config, browser,
+//! approval policy, cron settings, webhook triggers.
 //!
 //! **No-op** (informational only): log_level, language, mode.
 //!
@@ -137,18 +137,7 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
         plan.restart_reasons.push("api_key changed".to_string());
     }
 
-    if old.network_enabled != new.network_enabled {
-        plan.restart_required = true;
-        plan.restart_reasons
-            .push("network_enabled changed".to_string());
-    }
-
-    // Network config (shared_secret, listen_addresses, etc.)
-    if field_changed(&old.network, &new.network) {
-        plan.restart_required = true;
-        plan.restart_reasons
-            .push("network config changed".to_string());
-    }
+    // Hot-reloadable fields below
 
     // Memory config (requires restarting SQLite connections)
     if field_changed(&old.memory, &new.memory) {
@@ -267,11 +256,6 @@ pub fn validate_config_for_reload(config: &KernelConfig) -> Result<(), Vec<Strin
         errors.push("max_cron_jobs exceeds reasonable limit (10000)".to_string());
     }
 
-    // Network config: if network is enabled, shared_secret must be set
-    if config.network_enabled && config.network.shared_secret.is_empty() {
-        errors.push("network_enabled is true but network.shared_secret is empty".to_string());
-    }
-
     if errors.is_empty() {
         Ok(())
     } else {
@@ -346,32 +330,6 @@ mod tests {
         let plan = build_reload_plan(&a, &b);
         assert!(plan.restart_required);
         assert!(plan.restart_reasons.iter().any(|r| r.contains("api_key")));
-    }
-
-    #[test]
-    fn test_network_requires_restart() {
-        let a = default_cfg();
-        let mut b = default_cfg();
-        b.network_enabled = true;
-        let plan = build_reload_plan(&a, &b);
-        assert!(plan.restart_required);
-        assert!(plan
-            .restart_reasons
-            .iter()
-            .any(|r| r.contains("network_enabled")));
-    }
-
-    #[test]
-    fn test_network_config_requires_restart() {
-        let a = default_cfg();
-        let mut b = default_cfg();
-        b.network.shared_secret = "new-secret".to_string();
-        let plan = build_reload_plan(&a, &b);
-        assert!(plan.restart_required);
-        assert!(plan
-            .restart_reasons
-            .iter()
-            .any(|r| r.contains("network config")));
     }
 
     #[test]
@@ -570,15 +528,6 @@ mod tests {
         config.max_cron_jobs = 100_000;
         let err = validate_config_for_reload(&config).unwrap_err();
         assert!(err.iter().any(|e| e.contains("max_cron_jobs")));
-    }
-
-    #[test]
-    fn test_validate_network_enabled_no_secret() {
-        let mut config = default_cfg();
-        config.network_enabled = true;
-        config.network.shared_secret = String::new();
-        let err = validate_config_for_reload(&config).unwrap_err();
-        assert!(err.iter().any(|e| e.contains("shared_secret")));
     }
 
     // -----------------------------------------------------------------------

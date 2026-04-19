@@ -105,9 +105,6 @@ pub struct OpenCarrierKernel {
     pub hooks: opencarrier_runtime::hooks::HookRegistry,
     /// Persistent process manager for interactive sessions (REPLs, servers).
     pub process_manager: Arc<opencarrier_runtime::process_manager::ProcessManager>,
-    // P2P disabled - wire crate removed
-    // pub peer_registry: OnceLock<opencarrier_wire::PeerRegistry>,
-    // pub peer_node: OnceLock<Arc<opencarrier_wire::PeerNode>>,
     /// Boot timestamp for uptime calculation.
     pub booted_at: std::time::Instant,
     /// Hot-reloadable default model override (set via config hot-reload, read at agent spawn).
@@ -1013,27 +1010,6 @@ fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
     Some((name, when_to_use))
 }
 
-/// Get the system hostname as a String.
-#[allow(dead_code)]
-fn gethostname() -> Option<String> {
-    #[cfg(unix)]
-    {
-        std::process::Command::new("hostname")
-            .output()
-            .ok()
-            .and_then(|out| String::from_utf8(out.stdout).ok())
-            .map(|s| s.trim().to_string())
-    }
-    #[cfg(windows)]
-    {
-        std::env::var("COMPUTERNAME").ok()
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        None
-    }
-}
-
 impl OpenCarrierKernel {
     /// Boot the kernel with configuration from the given path.
     pub fn boot(config_path: Option<&Path>) -> KernelResult<Self> {
@@ -1317,9 +1293,6 @@ impl OpenCarrierKernel {
             broadcast: initial_broadcast,
             hooks: opencarrier_runtime::hooks::HookRegistry::new(),
             process_manager: Arc::new(opencarrier_runtime::process_manager::ProcessManager::new(5)),
-            // P2P disabled - wire crate removed
-            // peer_registry: OnceLock::new(),
-            // peer_node: OnceLock::new(),
             booted_at: std::time::Instant::now(),
             default_model_override: std::sync::RwLock::new(None),
             agent_msg_locks: dashmap::DashMap::new(),
@@ -3512,9 +3485,8 @@ impl OpenCarrierKernel {
                     *guard = Some(new_config.default_model.clone());
                 }
                 _ => {
-                    // Other hot actions (channels, web, browser, extensions, etc.)
-                    // are logged but not applied here — they require subsystem-specific
-                    // reinitialization that should be added as those systems mature.
+                    // Other hot actions are logged but not applied here — they
+                    // require subsystem-specific reinitialization.
                     info!(
                         "Hot-reload: action {:?} noted but not yet auto-applied",
                         action
@@ -3524,11 +3496,7 @@ impl OpenCarrierKernel {
         }
     }
 
-    /// Publish an event to the bus and evaluate triggers.
-    ///
-    /// Any matching triggers will dispatch messages to the subscribing agents.
-    /// Publish an event to the bus.
-    /// batch-1 simplified: triggers engine removed, no trigger evaluation.
+    /// Publish an event to the event bus.
     pub async fn publish_event(&self, event: Event) -> Vec<(AgentId, String)> {
         // Publish to the event bus
         self.event_bus.publish(event).await;
@@ -3576,14 +3544,6 @@ impl OpenCarrierKernel {
 
         // Start heartbeat monitor for agent health checking
         self.start_heartbeat_monitor();
-
-        // Start OFP peer node if network is enabled
-        if self.config.network_enabled && !self.config.network.shared_secret.is_empty() {
-            let kernel = Arc::clone(self);
-            tokio::spawn(async move {
-                kernel.start_ofp_node().await;
-            });
-        }
 
         // Probe local providers for reachability and model discovery
         {
@@ -3802,11 +3762,6 @@ impl OpenCarrierKernel {
                                     }
                                 }
                             }
-                            opencarrier_types::scheduler::CronAction::WorkflowRun { .. } => {
-                                // batch-1: workflow engine removed, skip workflow cron jobs
-                                tracing::warn!(job = %job_name, "Skipping workflow cron job (workflow engine removed in batch-1)");
-                                kernel.cron_scheduler.record_failure(job_id, "workflow engine removed");
-                            }
                         }
                     }
 
@@ -3828,11 +3783,6 @@ impl OpenCarrierKernel {
             }
         }
 
-        // Log network status from config
-        if self.config.network_enabled {
-            info!("OFP network enabled — peer discovery will use shared_secret from config");
-        }
-
         // Discover configured external A2A agents
         if let Some(ref a2a_config) = self.config.a2a {
             if a2a_config.enabled && !a2a_config.external_agents.is_empty() {
@@ -3849,24 +3799,6 @@ impl OpenCarrierKernel {
         }
     }
 
-    /// Start the heartbeat monitor background task.
-    /// Start the OFP peer networking node. (DISABLED - P2P removed)
-    ///
-    /// Binds a TCP listener, registers with the peer registry, and connects
-    /// to bootstrap peers from config.
-    #[allow(dead_code)]
-    async fn start_ofp_node(self: &Arc<Self>) {
-        // P2P disabled - wire crate removed
-        info!("OFP peer networking disabled (wire crate removed)");
-    }
-
-    /// Get the kernel's strong Arc reference from the stored weak handle.
-    #[allow(dead_code)]
-    fn self_arc(self: &Arc<Self>) -> Arc<Self> {
-        Arc::clone(self)
-    }
-
-    ///
     /// Periodically checks all running agents' last_active timestamps and
     /// publishes `HealthCheckFailed` events for unresponsive agents.
     fn start_heartbeat_monitor(self: &Arc<Self>) {
@@ -4083,23 +4015,6 @@ impl OpenCarrierKernel {
     }
 
     // batch-1 removed: store_credential, remove_credential (vault removed)
-
-    #[expect(dead_code)]
-    fn lookup_provider_url(&self, provider: &str) -> Option<String> {
-        // 1. Boot-time config (from config.toml [provider_urls])
-        if let Some(url) = self.config.provider_urls.get(provider) {
-            return Some(url.clone());
-        }
-        // 2. Model catalog (updated at runtime by set_provider_url / apply_url_overrides)
-        if let Ok(catalog) = self.model_catalog.read() {
-            if let Some(p) = catalog.get_provider(provider) {
-                if !p.base_url.is_empty() {
-                    return Some(p.base_url.clone());
-                }
-            }
-        }
-        None
-    }
 
     /// Return a cloned Arc<Brain> for the API (None if not loaded).
     pub fn brain_info(&self) -> Arc<Brain> {
@@ -4791,14 +4706,6 @@ async fn cron_deliver_response(
 
     match delivery {
         CronDelivery::None => Ok(()),
-        CronDelivery::Channel { channel, to } => {
-            tracing::warn!(channel = %channel, to = %to, "Cron: channel delivery is no longer supported (channels feature removed)");
-            Err("channel delivery is no longer supported".to_string())
-        }
-        CronDelivery::LastChannel => {
-            tracing::warn!("Cron: last-channel delivery is no longer supported (channels feature removed)");
-            Err("last-channel delivery is no longer supported".to_string())
-        }
         CronDelivery::Webhook { url } => {
             tracing::debug!(url = %url, "Cron: delivering via webhook");
             let client = reqwest::Client::builder()
@@ -5471,10 +5378,6 @@ fn collect_files_recursive(
         }
     }
 }
-
-// --- OFP Wire Protocol integration (DISABLED - P2P removed) ---
-// The PeerHandle trait implementation has been removed along with the wire crate.
-// P2P networking is not needed for yingheclient's use case.
 
 #[cfg(test)]
 mod tests {

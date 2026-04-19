@@ -289,15 +289,13 @@ mod tests {
         .unwrap();
         let overlay: toml::Value = toml::from_str(
             r#"
-            log_level = "info"
-            network_enabled = true
+            log_level = "debug"
         "#,
         )
         .unwrap();
         deep_merge_toml(&mut base, &overlay);
-        assert_eq!(base["log_level"].as_str(), Some("info"));
+        assert_eq!(base["log_level"].as_str(), Some("debug"));
         assert_eq!(base["api_listen"].as_str(), Some("0.0.0.0:4200"));
-        assert_eq!(base["network_enabled"].as_bool(), Some(true));
     }
 
     #[test]

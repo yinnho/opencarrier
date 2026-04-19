@@ -690,7 +690,6 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "api_listen": state.kernel.config.api_listen,
         "home_dir": state.kernel.config.home_dir.display().to_string(),
         "log_level": state.kernel.config.log_level,
-        "network_enabled": state.kernel.config.network_enabled,
         "agents": agents,
     }))
 }
@@ -6477,8 +6476,6 @@ pub async fn auth_check(
     }
 }
 
-/// Remove a `[section]` and its contents from a TOML string.
-#[allow(dead_code)]
 fn backup_config(config_path: &std::path::Path) {
     let backup = config_path.with_extension("toml.bak");
     let _ = std::fs::copy(config_path, backup);
