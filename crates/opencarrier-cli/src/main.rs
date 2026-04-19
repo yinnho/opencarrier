@@ -114,16 +114,26 @@ enum Commands {
     },
     /// Stop the running daemon.
     Stop,
-    /// Manage agents (new, list, chat, kill, spawn) [*].
+    /// Manage agents (new, list, kill, spawn) [*].
     #[command(subcommand)]
     Agent(AgentCommands),
-    /// Show or edit configuration (show, edit, get, set, keys) [*].
+    /// Show or edit configuration (show, edit, get, set, unset, providers) [*].
     #[command(subcommand)]
     Config(ConfigCommands),
-    /// Chat with a specific agent (分身).
+    /// Chat with a specific agent (分身). Use -m for one-shot messages.
     Chat {
         /// Agent name or ID to chat with.
         agent: String,
+        /// Send a single message non-interactively, print the response, and exit.
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Read file content and prepend to message. Use "-" for stdin.
+        /// Can be specified multiple times.
+        #[arg(short, long)]
+        file: Vec<String>,
+        /// Output as JSON for scripting (when using -m).
+        #[arg(long)]
+        json: bool,
     },
     /// Show kernel status.
     Status {
@@ -153,8 +163,6 @@ enum Commands {
     /// ACP mode (auto-detected: used when stdin is a pipe, not a terminal).
     #[command(hide = true)]
     Acp,
-    /// Launch the interactive terminal dashboard.
-    Tui,
     /// Browse models, aliases, and providers [*].
     #[command(subcommand)]
     Models(ModelsCommands),
@@ -184,16 +192,6 @@ enum Commands {
     /// Search and manage agent memory (KV store) [*].
     #[command(subcommand)]
     Memory(MemoryCommands),
-    /// Send a one-shot message to an agent.
-    Message {
-        /// Agent name or ID.
-        agent: String,
-        /// Message text. Reads from stdin if omitted or "-".
-        text: Option<String>,
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
     /// Reset local config and state.
     Reset {
         /// Skip confirmation prompt.
@@ -209,8 +207,6 @@ enum Commands {
         #[arg(long)]
         keep_config: bool,
     },
-    /// Configure LLM providers (interactive API key setup).
-    Providers,
     /// Hub operations — search and install clones from openclone-hub.
     Hub {
         #[command(subcommand)]
@@ -258,6 +254,8 @@ enum ConfigCommands {
         /// Dotted key path to remove (e.g. "api.cors_origin").
         key: String,
     },
+    /// Configure LLM providers (interactive API key setup).
+    Providers,
 }
 
 #[derive(Subcommand)]
@@ -277,18 +275,6 @@ enum AgentCommands {
         /// Output as JSON for scripting.
         #[arg(long)]
         json: bool,
-    },
-    /// Interactive chat with an agent.
-    Chat {
-        /// Agent ID (UUID) or name.
-        agent_id: String,
-        /// Send a single message non-interactively, print the response, and exit.
-        #[arg(short, long)]
-        message: Option<String>,
-        /// Read file content and prepend to message. Use "-" for stdin.
-        /// Can be specified multiple times.
-        #[arg(short, long)]
-        file: Vec<String>,
     },
     /// Kill an agent.
     Kill {
@@ -500,12 +486,7 @@ fn main() {
     // TUI modes must NOT install the Ctrl+C handler (it calls process::exit
     // which bypasses ratatui::restore and leaves the terminal in raw mode).
     // TUI modes also need file-based tracing (stderr output corrupts the TUI).
-    let is_tui_mode = matches!(cli.command.as_ref(), Some(Commands::Tui))
-        || matches!(cli.command.as_ref(), Some(Commands::Chat { .. }))
-        || matches!(
-            cli.command.as_ref(),
-            Some(Commands::Agent(AgentCommands::Chat { .. }))
-        );
+    let is_tui_mode = matches!(cli.command.as_ref(), Some(Commands::Chat { .. }));
 
     if is_tui_mode {
         init_tracing_file();
@@ -528,7 +509,6 @@ fn main() {
     });
 
     match command {
-        Commands::Tui => tui::run(cli.config),
         Commands::Init { quick } => cmd_init(quick),
         Commands::Start => cmd_start(cli.config),
         Commands::Stop => cmd_stop(),
@@ -536,14 +516,6 @@ fn main() {
             AgentCommands::New { template } => cmd_agent_new(cli.config, template),
             AgentCommands::Spawn { manifest } => cmd_agent_spawn(cli.config, manifest),
             AgentCommands::List { json } => cmd_agent_list(cli.config, json),
-            AgentCommands::Chat { agent_id, message, file } => {
-                if message.is_some() || !file.is_empty() {
-                    let msg = message.unwrap_or_default();
-                    cmd_agent_chat_once(cli.config, &agent_id, &msg, &file)
-                } else {
-                    cmd_agent_chat(cli.config, &agent_id)
-                }
-            }
             AgentCommands::Kill { agent_id } => cmd_agent_kill(cli.config, &agent_id),
         },
         Commands::Config(sub) => match sub {
@@ -552,8 +524,16 @@ fn main() {
             ConfigCommands::Get { key } => cmd_config_get(&key),
             ConfigCommands::Set { key, value } => cmd_config_set(&key, &value),
             ConfigCommands::Unset { key } => cmd_config_unset(&key),
+            ConfigCommands::Providers => cmd_providers(),
         },
-        Commands::Chat { agent } => cmd_quick_chat(cli.config, agent),
+        Commands::Chat { agent, message, file, json } => {
+            if message.is_some() || !file.is_empty() {
+                let msg = message.unwrap_or_default();
+                cmd_chat_once(cli.config, &agent, &msg, &file, json)
+            } else {
+                cmd_chat_interactive(cli.config, &agent)
+            }
+        }
         Commands::Status { json } => cmd_status(cli.config, json),
         Commands::Doctor { json, repair } => cmd_doctor(json, repair),
         Commands::Dashboard => cmd_dashboard(),
@@ -591,24 +571,11 @@ fn main() {
             MemoryCommands::Set { agent, key, value } => cmd_memory_set(&agent, &key, &value),
             MemoryCommands::Delete { agent, key } => cmd_memory_delete(&agent, &key),
         },
-        Commands::Message { agent, text, json } => {
-            let msg = match text {
-                Some(t) if t != "-" => t.clone(),
-                _ => {
-                    let mut buf = String::new();
-                    use std::io::Read;
-                    std::io::stdin().read_to_string(&mut buf).unwrap_or(0);
-                    buf.trim().to_string()
-                }
-            };
-            cmd_message(&agent, &msg, json)
-        }
         Commands::Reset { confirm } => cmd_reset(confirm),
         Commands::Uninstall {
             confirm,
             keep_config,
         } => cmd_uninstall(confirm, keep_config),
-        Commands::Providers => cmd_providers(),
         Commands::Hub { sub } => {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             rt.block_on(cmd_hub(sub));
@@ -839,7 +806,7 @@ fn cmd_init_interactive(opencarrier_dir: &std::path::Path) {
                     // subcommand).  The chat TUI takes over the terminal with
                     // raw mode so stderr output is suppressed.  We can't
                     // reinitialize tracing (global subscriber is set once).
-                    cmd_quick_chat(None, "clone-creator".to_string());
+                    cmd_chat_interactive(None, "clone-creator");
                 }
             }
         }
@@ -1304,70 +1271,26 @@ fn cmd_agent_list(config: Option<PathBuf>, json: bool) {
     }
 }
 
-fn cmd_agent_chat(config: Option<PathBuf>, agent_id_str: &str) {
-    tui::chat_runner::run_chat_tui(config, Some(agent_id_str.to_string()));
+/// Interactive chat with an agent (TUI).
+fn cmd_chat_interactive(config: Option<PathBuf>, agent: &str) {
+    tui::chat_runner::run_chat_tui(config, Some(agent.to_string()));
 }
 
 /// Non-interactive chat: send one message (with optional file attachments), print response, exit.
-fn cmd_agent_chat_once(
+fn cmd_chat_once(
     config: Option<PathBuf>,
     agent_id_str: &str,
     message: &str,
     files: &[String],
+    json: bool,
 ) {
-    use opencarrier_kernel::OpenCarrierKernel;
-    use opencarrier_types::agent::AgentId;
-    use std::io::Read;
-
-    let config_path = config.or_else(|| {
-        let home = opencarrier_home();
-        let candidate = home.join("config.toml");
-        if candidate.exists() {
-            Some(candidate)
-        } else {
-            None
-        }
-    });
-
-    let kernel = match OpenCarrierKernel::boot(config_path.as_deref()) {
-        Ok(k) => std::sync::Arc::new(k),
-        Err(e) => {
-            ui::error(&format!("Failed to boot kernel: {e}"));
-            std::process::exit(1);
-        }
-    };
-
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            ui::error(&format!("Failed to create runtime: {e}"));
-            std::process::exit(1);
-        }
-    };
-
-    // Resolve agent ID (accept UUID or name)
-    let agent_id: AgentId = match agent_id_str.parse() {
-        Ok(id) => id,
-        Err(_) => match kernel.registry.find_by_name(agent_id_str) {
-            Some(entry) => {
-                ui::hint(&format!("Using agent '{}' ({})", entry.name, entry.id));
-                entry.id
-            }
-            None => {
-                ui::error(&format!("Agent not found: {}", agent_id_str));
-                std::process::exit(1);
-            }
-        },
-    };
-
     // Build the full message from -m text + -f file contents
     let mut full_message = String::new();
 
-    // Read file contents
     for (i, path) in files.iter().enumerate() {
         let content = if path == "-" {
-            // Read from stdin
             let mut buf = String::new();
+            use std::io::Read;
             match std::io::stdin().read_to_string(&mut buf) {
                 Ok(_) => buf,
                 Err(e) => {
@@ -1399,7 +1322,6 @@ fn cmd_agent_chat_once(
         full_message.push_str(&format!("--- {} ---\n{}", filename, content));
     }
 
-    // Append user message after file contents
     if !message.is_empty() {
         if !files.is_empty() {
             full_message.push_str("\n\n");
@@ -1412,14 +1334,88 @@ fn cmd_agent_chat_once(
         std::process::exit(1);
     }
 
+    // Prefer daemon if available
+    if let Some(base) = find_daemon() {
+        let client = daemon_client();
+        let body = daemon_json(
+            client
+                .post(format!("{base}/api/agents/{agent_id_str}/message"))
+                .json(&serde_json::json!({"message": full_message}))
+                .send(),
+        );
+        if json {
+            println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        } else if let Some(reply) = body["reply"].as_str() {
+            println!("{reply}");
+        } else if let Some(reply) = body["response"].as_str() {
+            println!("{reply}");
+        } else {
+            println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        }
+        return;
+    }
+
+    // Fallback: boot in-process kernel
+    use opencarrier_kernel::OpenCarrierKernel;
+    use opencarrier_types::agent::AgentId;
+
+    let config_path = config.or_else(|| {
+        let home = opencarrier_home();
+        let candidate = home.join("config.toml");
+        if candidate.exists() {
+            Some(candidate)
+        } else {
+            None
+        }
+    });
+
+    let kernel = match OpenCarrierKernel::boot(config_path.as_deref()) {
+        Ok(k) => std::sync::Arc::new(k),
+        Err(e) => {
+            ui::error(&format!("Failed to boot kernel: {e}"));
+            std::process::exit(1);
+        }
+    };
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            ui::error(&format!("Failed to create runtime: {e}"));
+            std::process::exit(1);
+        }
+    };
+
+    let agent_id: AgentId = match agent_id_str.parse() {
+        Ok(id) => id,
+        Err(_) => match kernel.registry.find_by_name(agent_id_str) {
+            Some(entry) => {
+                ui::hint(&format!("Using agent '{}' ({})", entry.name, entry.id));
+                entry.id
+            }
+            None => {
+                ui::error(&format!("Agent not found: {}", agent_id_str));
+                std::process::exit(1);
+            }
+        },
+    };
+
     ui::hint("Sending message...");
     match rt.block_on(kernel.send_message(agent_id, &full_message)) {
         Ok(result) => {
-            if !result.silent {
-                println!("{}", result.response);
-            }
-            if let Some(cost) = result.cost_usd {
-                eprintln!("[cost: ${:.4}, {} iterations]", cost, result.iterations);
+            if json {
+                let output = serde_json::json!({
+                    "response": result.response,
+                    "cost_usd": result.cost_usd,
+                    "iterations": result.iterations,
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+            } else {
+                if !result.silent {
+                    println!("{}", result.response);
+                }
+                if let Some(cost) = result.cost_usd {
+                    eprintln!("[cost: ${:.4}, {} iterations]", cost, result.iterations);
+                }
             }
         }
         Err(e) => {
@@ -3286,10 +3282,6 @@ fn cmd_config_unset(key: &str) {
 // Quick chat (OpenCarrier alias)
 // ---------------------------------------------------------------------------
 
-fn cmd_quick_chat(config: Option<PathBuf>, agent: String) {
-    tui::chat_runner::run_chat_tui(config, Some(agent));
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -3939,32 +3931,6 @@ fn cmd_memory_delete(agent: &str, key: &str) {
         ));
     } else {
         ui::success(&format!("Deleted key '{key}' for agent '{agent}'."));
-    }
-}
-
-fn cmd_message(agent: &str, text: &str, json: bool) {
-    let base = require_daemon("message");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .post(format!("{base}/api/agents/{agent}/message"))
-            .json(&serde_json::json!({"message": text}))
-            .send(),
-    );
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
-    } else if let Some(reply) = body["reply"].as_str() {
-        println!("{reply}");
-    } else if let Some(reply) = body["response"].as_str() {
-        println!("{reply}");
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_default()
-        );
     }
 }
 

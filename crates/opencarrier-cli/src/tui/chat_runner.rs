@@ -67,9 +67,6 @@ impl StandaloneChat {
             AppEvent::KernelError(err) => self.handle_kernel_error(err),
             AppEvent::AgentSpawned { id, name } => self.handle_agent_spawned(id, name),
             AppEvent::AgentSpawnError(err) => self.handle_agent_spawn_error(err),
-            // All other events (tab-specific data loads) are irrelevant in
-            // standalone chat mode — silently ignore.
-            _ => {}
         }
     }
 
