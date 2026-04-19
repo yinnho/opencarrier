@@ -12,7 +12,6 @@ document.addEventListener('alpine:init', function() {
       apiListen: '-',
       homeDir: '-',
       logLevel: '-',
-      networkEnabled: false,
       providers: [],
 
       async loadData() {
@@ -37,7 +36,6 @@ document.addEventListener('alpine:init', function() {
           this.apiListen = status.api_listen || status.listen || '-';
           this.homeDir = status.home_dir || '-';
           this.logLevel = status.log_level || '-';
-          this.networkEnabled = !!status.network_enabled;
 
           // Compute uptime from uptime_seconds
           var diff = status.uptime_seconds || 0;

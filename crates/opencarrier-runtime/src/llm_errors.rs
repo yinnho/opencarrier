@@ -551,7 +551,7 @@ fn cap_message(msg: &str, max: usize) -> String {
 /// - `retry after 500ms` (milliseconds)
 ///
 /// Returns `None` if no recognizable delay is found.
-pub fn extract_retry_delay(message: &str) -> Option<u64> {
+fn extract_retry_delay(message: &str) -> Option<u64> {
     let lower = message.to_lowercase();
 
     // Patterns to search for, each followed by a number.
@@ -581,20 +581,6 @@ pub fn extract_retry_delay(message: &str) -> Option<u64> {
 }
 
 // ---------------------------------------------------------------------------
-// Transient error detection
-// ---------------------------------------------------------------------------
-
-/// Check if an error is likely transient (network hiccup, temporary overload).
-///
-/// This is a quick heuristic that does not require full classification.
-pub fn is_transient(message: &str) -> bool {
-    let lower = message.to_lowercase();
-    matches_any(&lower, TIMEOUT_PATTERNS)
-        || matches_any(&lower, OVERLOADED_PATTERNS)
-        || matches_any(&lower, RATE_LIMIT_PATTERNS)
-}
-
-// ---------------------------------------------------------------------------
 // HTML / Cloudflare error detection
 // ---------------------------------------------------------------------------
 
@@ -603,7 +589,7 @@ pub fn is_transient(message: &str) -> bool {
 ///
 /// Checks for: `<!DOCTYPE`, `<html`, Cloudflare error codes (521-530),
 /// `cf-error-code`.
-pub fn is_html_error_page(body: &str) -> bool {
+fn is_html_error_page(body: &str) -> bool {
     let lower = body.to_lowercase();
 
     // HTML markers
@@ -919,20 +905,6 @@ mod tests {
         assert_eq!(extract_retry_delay("Something went wrong"), None);
         assert_eq!(extract_retry_delay(""), None);
         assert_eq!(extract_retry_delay("rate limit exceeded"), None);
-    }
-
-    #[test]
-    fn test_is_transient() {
-        assert!(is_transient("Connection reset by peer"));
-        assert!(is_transient("ECONNRESET"));
-        assert!(is_transient("Request timed out after 30s"));
-        assert!(is_transient("Service unavailable"));
-        assert!(is_transient("rate limit exceeded"));
-
-        // Non-transient
-        assert!(!is_transient("invalid api key"));
-        assert!(!is_transient("model not found"));
-        assert!(!is_transient("context_length_exceeded"));
     }
 
     #[test]

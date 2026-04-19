@@ -69,6 +69,7 @@
 **行号**: 4180-4236
 **风险等级**: Critical
 **CVSS 评分**: 9.8 (Critical)
+> **Note**: The `hands` feature has been removed. This endpoint no longer exists.
 
 #### 问题描述
 
@@ -140,7 +141,7 @@ fn safe_execute(cmd: &str) -> Result<Output, Error> {
 
 #### 问题描述
 
-`/api/hands/install-depend` 等敏感端点缺少速率限制，可被用于：
+`/api/hands/install-depend` 等敏感端点缺少速率限制（hands 已移除），可被用于：
 - 拒绝服务攻击 (DoS)
 - 暴力破解
 - 资源耗尽

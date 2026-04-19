@@ -192,6 +192,16 @@ enum Commands {
     /// Search and manage agent memory (KV store) [*].
     #[command(subcommand)]
     Memory(MemoryCommands),
+    /// Send a one-shot message to an agent (stdin supported).
+    Message {
+        /// Agent name or ID.
+        agent: String,
+        /// Message text. Reads from stdin if omitted or "-".
+        text: Option<String>,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
     /// Reset local config and state.
     Reset {
         /// Skip confirmation prompt.
@@ -571,6 +581,18 @@ fn main() {
             MemoryCommands::Set { agent, key, value } => cmd_memory_set(&agent, &key, &value),
             MemoryCommands::Delete { agent, key } => cmd_memory_delete(&agent, &key),
         },
+        Commands::Message { agent, text, json } => {
+            let msg = match text {
+                Some(t) if t != "-" => t.clone(),
+                _ => {
+                    let mut buf = String::new();
+                    use std::io::Read;
+                    std::io::stdin().read_to_string(&mut buf).unwrap_or(0);
+                    buf.trim().to_string()
+                }
+            };
+            cmd_chat_once(cli.config, &agent, &msg, &[], json)
+        }
         Commands::Reset { confirm } => cmd_reset(confirm),
         Commands::Uninstall {
             confirm,

@@ -31,6 +31,26 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+/// Fire a hook if a hook registry is present.
+#[allow(dead_code)]
+fn fire_hook(
+    hooks: Option<&crate::hooks::HookRegistry>,
+    agent_name: &str,
+    agent_id: &str,
+    event: opencarrier_types::agent::HookEvent,
+    data: serde_json::Value,
+) {
+    if let Some(hook_reg) = hooks {
+        let ctx = crate::hooks::HookContext {
+            agent_name,
+            agent_id,
+            event,
+            data,
+        };
+        let _ = hook_reg.fire(&ctx);
+    }
+}
+
 /// Maximum iterations in the agent loop before giving up.
 const MAX_ITERATIONS: u32 = 50;
 
