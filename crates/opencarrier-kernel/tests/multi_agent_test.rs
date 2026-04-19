@@ -11,6 +11,29 @@ fn test_config() -> KernelConfig {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
 
+    // Create minimal brain.json for tests
+    let brain_json = serde_json::json!({
+        "providers": {
+            "groq": { "api_key_env": "GROQ_API_KEY" }
+        },
+        "endpoints": {
+            "groq_chat": {
+                "provider": "groq",
+                "model": "llama-3.3-70b-versatile",
+                "base_url": "https://api.groq.com/openai/v1",
+                "format": "openai"
+            }
+        },
+        "modalities": {
+            "chat": {
+                "primary": "groq_chat",
+                "description": "Chat modality"
+            }
+        },
+        "default_modality": "chat"
+    });
+    std::fs::write(tmp.join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap()).unwrap();
+
     KernelConfig {
         home_dir: tmp.clone(),
         data_dir: tmp.join("data"),

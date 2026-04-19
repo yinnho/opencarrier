@@ -6,7 +6,7 @@
 use opencarrier_types::model_catalog::{
     AuthStatus, ModelCatalogEntry, ModelTier, ProviderInfo, AI21_BASE_URL, ANTHROPIC_BASE_URL,
     AZURE_OPENAI_BASE_URL, BEDROCK_BASE_URL, CEREBRAS_BASE_URL, CHUTES_BASE_URL, COHERE_BASE_URL,
-    DEEPSEEK_BASE_URL, FIREWORKS_BASE_URL, GEMINI_BASE_URL, GITHUB_COPILOT_BASE_URL, GROQ_BASE_URL,
+    DEEPSEEK_BASE_URL, FIREWORKS_BASE_URL, GEMINI_BASE_URL, GROQ_BASE_URL,
     HUGGINGFACE_BASE_URL, KIMI_CODING_BASE_URL, LEMONADE_BASE_URL, LMSTUDIO_BASE_URL,
     MINIMAX_BASE_URL, MISTRAL_BASE_URL, MOONSHOT_BASE_URL, NVIDIA_NIM_BASE_URL, OLLAMA_BASE_URL,
     OPENAI_BASE_URL, OPENROUTER_BASE_URL, PERPLEXITY_BASE_URL, QIANFAN_BASE_URL, QWEN_BASE_URL,
@@ -601,16 +601,6 @@ fn builtin_providers() -> Vec<ProviderInfo> {
             auth_status: AuthStatus::Missing,
             model_count: 0,
         },
-        // ── GitHub Copilot ───────────────────────────────────────────
-        ProviderInfo {
-            id: "github-copilot".into(),
-            display_name: "GitHub Copilot".into(),
-            api_key_env: "GITHUB_TOKEN".into(),
-            base_url: GITHUB_COPILOT_BASE_URL.into(),
-            key_required: true,
-            auth_status: AuthStatus::Missing,
-            model_count: 0,
-        },
         // ── Chutes.ai ───────────────────────────────────────────────
         ProviderInfo {
             id: "chutes".into(),
@@ -836,12 +826,6 @@ fn builtin_aliases() -> HashMap<String, String> {
         // Cohere aliases
         ("command-r", "command-r-plus"),
         ("command", "command-a"),
-        // GitHub Copilot aliases
-        ("copilot", "copilot/gpt-4o"),
-        ("copilot-4o", "copilot/gpt-4o"),
-        ("copilot-4", "copilot/gpt-4"),
-        ("copilot-gpt4o", "copilot/gpt-4o"),
-        ("copilot-gpt4", "copilot/gpt-4"),
         // Chinese model aliases
         ("qwen", "qwen-plus"),
         ("glm", "glm-5-20250605"),
@@ -2821,37 +2805,6 @@ fn builtin_models() -> Vec<ModelCatalogEntry> {
             aliases: vec![],
         },
         // ══════════════════════════════════════════════════════════════
-        // GitHub Copilot (2) — free for subscribers
-        // ══════════════════════════════════════════════════════════════
-        ModelCatalogEntry {
-            id: "copilot/gpt-4o".into(),
-            display_name: "GPT-4o (Copilot)".into(),
-            provider: "github-copilot".into(),
-            tier: ModelTier::Smart,
-            context_window: 128_000,
-            max_output_tokens: 4_096,
-            input_cost_per_m: 0.0,
-            output_cost_per_m: 0.0,
-            supports_tools: true,
-            supports_vision: true,
-            supports_streaming: true,
-            aliases: vec!["copilot-gpt4o".into()],
-        },
-        ModelCatalogEntry {
-            id: "copilot/gpt-4".into(),
-            display_name: "GPT-4 (Copilot)".into(),
-            provider: "github-copilot".into(),
-            tier: ModelTier::Frontier,
-            context_window: 128_000,
-            max_output_tokens: 4_096,
-            input_cost_per_m: 0.0,
-            output_cost_per_m: 0.0,
-            supports_tools: true,
-            supports_vision: false,
-            supports_streaming: true,
-            aliases: vec!["copilot-gpt4".into()],
-        },
-        // ══════════════════════════════════════════════════════════════
         // Qwen / Alibaba (6)
         // ══════════════════════════════════════════════════════════════
         ModelCatalogEntry {
@@ -3808,7 +3761,7 @@ mod tests {
     #[test]
     fn test_catalog_has_providers() {
         let catalog = ModelCatalog::new();
-        assert_eq!(catalog.list_providers().len(), 41);
+        assert_eq!(catalog.list_providers().len(), 40);
     }
 
     #[test]

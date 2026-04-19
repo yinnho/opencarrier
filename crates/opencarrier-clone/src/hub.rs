@@ -136,7 +136,7 @@ pub fn get_or_create_device_id(home_dir: &Path) -> Result<String> {
     let id = {
         use std::fmt::Write;
         let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).context("Failed to generate random device ID")?;
+        getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("Failed to generate random device ID: {e}"))?;
         let mut hex = String::with_capacity(32);
         for b in &bytes {
             write!(&mut hex, "{:02x}", b).unwrap();

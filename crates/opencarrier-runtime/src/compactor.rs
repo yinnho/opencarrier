@@ -435,11 +435,12 @@ async fn summarize_messages(
         let safe_start = if conversation_text.is_char_boundary(start) {
             start
         } else {
-            conversation_text[start..]
-                .char_indices()
-                .next()
-                .map(|(i, _)| start + i)
-                .unwrap_or(conversation_text.len())
+            // Walk backwards to the previous char boundary
+            let mut s = start;
+            while s > 0 && !conversation_text.is_char_boundary(s) {
+                s -= 1;
+            }
+            s
         };
         conversation_text = conversation_text[safe_start..].to_string();
     }

@@ -267,7 +267,7 @@ fn parse_json_chat(json: &serde_json::Value) -> Result<Vec<KnowledgeEntry>> {
     // DingTalk: { "conversationId": "...", "messages": [...] }
     if let Some(msgs) = json.get("messages").and_then(|m| m.as_array()) {
         if json.get("conversationId").is_some()
-            || msgs.first().map_or(false, |m| m.get("senderNick").is_some())
+            || msgs.first().is_some_and(|m| m.get("senderNick").is_some())
         {
             entries.extend(parse_message_array(msgs, "钉钉聊天记录")?);
             return Ok(entries);
@@ -277,7 +277,7 @@ fn parse_json_chat(json: &serde_json::Value) -> Result<Vec<KnowledgeEntry>> {
     // DingTalk: direct array with senderNick
     if json.is_array() {
         let arr = json.as_array().unwrap();
-        if arr.first().map_or(false, |m| m.get("senderNick").is_some()) {
+        if arr.first().is_some_and(|m| m.get("senderNick").is_some()) {
             entries.extend(parse_message_array(arr, "钉钉聊天记录")?);
             return Ok(entries);
         }

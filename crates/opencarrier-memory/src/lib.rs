@@ -14,7 +14,7 @@ pub mod semantic;
 pub mod session;
 pub mod structured;
 pub mod usage;
-pub mod yinghe_session;
+pub mod acp_session;
 
 mod substrate;
 pub use substrate::MemorySubstrate;

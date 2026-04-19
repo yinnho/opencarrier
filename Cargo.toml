@@ -7,13 +7,9 @@ members = [
     "crates/opencarrier-api",
     "crates/opencarrier-kernel",
     "crates/opencarrier-cli",
-    "crates/opencarrier-channels",
     "crates/opencarrier-skills",
-    "crates/opencarrier-hands",
-    "crates/opencarrier-extensions",
     "crates/opencarrier-clone",
     "crates/opencarrier-lifecycle",
-    "crates/ying-relay",
     "xtask",
 ]
 
@@ -156,14 +152,9 @@ opencarrier-runtime = { path = "crates/opencarrier-runtime" }
 opencarrier-api = { path = "crates/opencarrier-api" }
 opencarrier-kernel = { path = "crates/opencarrier-kernel" }
 opencarrier-cli = { path = "crates/opencarrier-cli" }
-opencarrier-channels = { path = "crates/opencarrier-channels" }
 opencarrier-skills = { path = "crates/opencarrier-skills" }
-opencarrier-hands = { path = "crates/opencarrier-hands" }
-opencarrier-extensions = { path = "crates/opencarrier-extensions" }
 opencarrier-clone = { path = "crates/opencarrier-clone" }
 opencarrier-lifecycle = { path = "crates/opencarrier-lifecycle" }
-ying-relay = { path = "crates/ying-relay" }
-
 [profile.release]
 lto = true
 codegen-units = 1

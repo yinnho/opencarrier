@@ -214,7 +214,7 @@ fn parse_profile(profile: &str, agx_path: &Path) -> (String, String) {
 
     // Parse YAML frontmatter
     if profile.starts_with("---") {
-        if let Some(end) = profile[3..].find("---") {
+        if let Some(end) = profile.strip_prefix("---").and_then(|rest| rest.find("---")) {
             let frontmatter = &profile[3..3 + end];
             for line in frontmatter.lines() {
                 let line = line.trim();
@@ -285,7 +285,7 @@ fn parse_skills(files: &HashMap<String, Vec<u8>>) -> Vec<SkillData> {
             .filter(|n| n.starts_with(&skill_dir) && n.ends_with(".toml"))
             .filter_map(|script_path| {
                 let toml_content = String::from_utf8_lossy(files.get(script_path)?).to_string();
-                let script_name = script_path.split('/').last()?
+                let script_name = script_path.split('/').next_back()?
                     .strip_suffix(".toml")?
                     .to_string();
                 let desc = parse_toml_description(&toml_content);

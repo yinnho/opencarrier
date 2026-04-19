@@ -381,49 +381,56 @@ impl StandaloneChat {
         let models = match &self.backend {
             Backend::Daemon { base_url } => {
                 let client = crate::daemon_client();
-                match client.get(format!("{base_url}/api/models")).send() {
+                match client.get(format!("{base_url}/api/brain")).send() {
                     Ok(resp) => match resp.json::<serde_json::Value>() {
-                        Ok(body) => body["models"]
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter(|m| m["available"].as_bool().unwrap_or(false))
-                                    .map(|m| ModelEntry {
-                                        id: m["id"].as_str().unwrap_or("").to_string(),
-                                        display_name: m["display_name"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        provider: m["provider"].as_str().unwrap_or("").to_string(),
-                                        tier: m["tier"].as_str().unwrap_or("Balanced").to_string(),
+                        Ok(body) => {
+                            let loaded = body["loaded"].as_bool().unwrap_or(false);
+                            if !loaded {
+                                Vec::new()
+                            } else {
+                                let endpoints = body.get("endpoints").and_then(|e| e.as_object());
+                                body.get("modalities")
+                                    .and_then(|m| m.as_object())
+                                    .map(|obj| {
+                                        obj.iter()
+                                            .map(|(name, m)| {
+                                                let primary = m["primary"].as_str().unwrap_or("");
+                                                let (model_name, ready) = endpoints
+                                                    .and_then(|eps| eps.get(primary))
+                                                    .map(|ep| {
+                                                        (
+                                                            ep["model"].as_str().unwrap_or("unknown"),
+                                                            ep["ready"].as_bool().unwrap_or(false),
+                                                        )
+                                                    })
+                                                    .unwrap_or(("unknown", false));
+                                                ModelEntry {
+                                                    modality: name.clone(),
+                                                    model_name: model_name.to_string(),
+                                                    endpoint: primary.to_string(),
+                                                    ready,
+                                                }
+                                            })
+                                            .collect()
                                     })
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
+                                    .unwrap_or_default()
+                            }
+                        }
                         Err(_) => Vec::new(),
                     },
                     Err(_) => Vec::new(),
                 }
             }
-            Backend::InProcess { kernel } => {
-                let catalog = kernel.model_catalog.read().unwrap();
-                catalog
-                    .available_models()
-                    .into_iter()
-                    .map(|e| ModelEntry {
-                        id: e.id.clone(),
-                        display_name: e.display_name.clone(),
-                        provider: e.provider.clone(),
-                        tier: format!("{:?}", e.tier),
-                    })
-                    .collect()
+            Backend::InProcess { .. } => {
+                // In-process mode does not expose Brain modalities via REST
+                Vec::new()
             }
             Backend::None => Vec::new(),
         };
 
         if models.is_empty() {
             self.chat
-                .push_message(Role::System, "No models available.".to_string());
+                .push_message(Role::System, "No modalities available. Check Brain config.".to_string());
             return;
         }
 
@@ -433,9 +440,9 @@ impl StandaloneChat {
         self.chat.show_model_picker = true;
     }
 
-    fn switch_model(&mut self, model_id: &str) {
-        // Skip if already on this model
-        if self.chat.model_label.ends_with(model_id) {
+    fn switch_model(&mut self, modality: &str) {
+        // Skip if already on this modality
+        if self.chat.model_label.starts_with(modality) {
             return;
         }
 
@@ -446,28 +453,23 @@ impl StandaloneChat {
                     let url = format!("{base_url}/api/agents/{agent_id}/model");
                     match client
                         .put(&url)
-                        .json(&serde_json::json!({"model": model_id}))
+                        .json(&serde_json::json!({"model": modality}))
                         .send()
                     {
                         Ok(r) if r.status().is_success() => {
-                            // Re-fetch agent to get updated modality/model
-                            if let Ok(resp) = client
-                                .get(format!("{base_url}/api/agents/{agent_id}"))
-                                .send()
-                            {
-                                if let Ok(body) = resp.json::<serde_json::Value>() {
-                                    let modality = body["modality"].as_str().unwrap_or("?");
-                                    let model = body["model_name"].as_str().unwrap_or("?");
-                                    self.chat.model_label = format!("{modality}/{model}");
-                                }
+                            // PUT response already contains modality + model name
+                            if let Ok(body) = r.json::<serde_json::Value>() {
+                                let resolved_mod = body["modality"].as_str().unwrap_or(modality);
+                                let resolved_model = body["model"].as_str().unwrap_or("?");
+                                self.chat.model_label = format!("{resolved_mod}/{resolved_model}");
                             }
                             self.chat
-                                .push_message(Role::System, format!("Switched to {model_id}"));
+                                .push_message(Role::System, format!("Switched modality to {modality}"));
                         }
                         _ => {
                             self.chat.push_message(
                                 Role::System,
-                                format!("Failed to switch to {model_id}"),
+                                format!("Failed to switch to {modality}"),
                             );
                         }
                     }
@@ -475,12 +477,12 @@ impl StandaloneChat {
             }
             Backend::InProcess { kernel } => {
                 if let Some(id) = self.agent_id_inprocess {
-                    let result = kernel.registry.update_modality(id, model_id.to_string());
+                    let result = kernel.registry.update_modality(id, modality.to_string());
                     match result {
                         Ok(()) => {
-                            self.chat.model_label = model_id.to_string();
+                            self.chat.model_label = modality.to_string();
                             self.chat
-                                .push_message(Role::System, format!("Switched modality to {model_id}"));
+                                .push_message(Role::System, format!("Switched modality to {modality}"));
                         }
                         Err(e) => {
                             self.chat
@@ -504,14 +506,31 @@ impl StandaloneChat {
         self.chat.agent_name = name;
         self.chat.mode_label = "daemon".to_string();
 
-        // Fetch model info
+        // Fetch model info — GET /api/agents/{id} returns {"model": {"modality": "chat"}}
         if let Backend::Daemon { ref base_url } = self.backend {
             let client = crate::daemon_client();
             if let Ok(resp) = client.get(format!("{base_url}/api/agents/{id}")).send() {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let modality = body["modality"].as_str().unwrap_or("?");
-                    let model = body["model_name"].as_str().unwrap_or("?");
-                    self.chat.model_label = format!("{modality}/{model}");
+                    // model.modality is nested
+                    let modality = body["model"]["modality"]
+                        .as_str()
+                        .unwrap_or_else(|| body["modality"].as_str().unwrap_or("?"));
+                    // Resolve the model name from Brain
+                    if let Ok(brain_resp) = client.get(format!("{base_url}/api/brain")).send() {
+                        if let Ok(brain) = brain_resp.json::<serde_json::Value>() {
+                            let model_name = brain
+                                .get("endpoints")
+                                .and_then(|eps| {
+                                    brain.get("modalities")
+                                        .and_then(|mods| mods.get(modality))
+                                        .and_then(|m| m["primary"].as_str())
+                                        .and_then(|ep_name| eps.get(ep_name))
+                                })
+                                .and_then(|ep| ep["model"].as_str())
+                                .unwrap_or("?");
+                            self.chat.model_label = format!("{modality}/{model_name}");
+                        }
+                    }
                 }
             }
         }

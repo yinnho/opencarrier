@@ -90,6 +90,18 @@ async fn test_full_daemon_lifecycle() {
     let tmp = tempfile::tempdir().unwrap();
     let daemon_info_path = tmp.path().join("daemon.json");
 
+    // Create minimal brain.json for tests
+    let brain_json = serde_json::json!({
+        "providers": { "ollama": { "api_key_env": "" } },
+        "endpoints": { "ollama_chat": {
+            "provider": "ollama", "model": "test",
+            "base_url": "http://localhost:11434/v1", "format": "openai"
+        }},
+        "modalities": { "chat": { "primary": "ollama_chat", "description": "Chat" } },
+        "default_modality": "chat"
+    });
+    std::fs::write(tmp.path().join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap()).unwrap();
+
     let config = KernelConfig {
         home_dir: tmp.path().to_path_buf(),
         data_dir: tmp.path().join("data"),
@@ -109,10 +121,7 @@ async fn test_full_daemon_lifecycle() {
     let state = Arc::new(AppState {
         kernel: kernel.clone(),
         started_at: Instant::now(),
-        bridge_manager: tokio::sync::Mutex::new(None),
-        channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache::new(),
     });
 
@@ -215,6 +224,19 @@ fn test_stale_daemon_info_detection() {
 #[tokio::test]
 async fn test_server_immediate_responsiveness() {
     let tmp = tempfile::tempdir().unwrap();
+
+    // Create minimal brain.json for tests
+    let brain_json = serde_json::json!({
+        "providers": { "ollama": { "api_key_env": "" } },
+        "endpoints": { "ollama_chat": {
+            "provider": "ollama", "model": "test",
+            "base_url": "http://localhost:11434/v1", "format": "openai"
+        }},
+        "modalities": { "chat": { "primary": "ollama_chat", "description": "Chat" } },
+        "default_modality": "chat"
+    });
+    std::fs::write(tmp.path().join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap()).unwrap();
+
     let config = KernelConfig {
         home_dir: tmp.path().to_path_buf(),
         data_dir: tmp.path().join("data"),
@@ -233,10 +255,7 @@ async fn test_server_immediate_responsiveness() {
     let state = Arc::new(AppState {
         kernel: kernel.clone(),
         started_at: Instant::now(),
-        bridge_manager: tokio::sync::Mutex::new(None),
-        channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache::new(),
     });
 

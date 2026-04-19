@@ -10,10 +10,6 @@ opencarrier-types = { path = "../opencarrier-types" }
 opencarrier-memory = { path = "../opencarrier-memory" }
 opencarrier-runtime = { path = "../opencarrier-runtime" }
 opencarrier-skills = { path = "../opencarrier-skills" }
-opencarrier-channels = { path = "../opencarrier-channels" }
-# Stub crates (to be removed)
-opencarrier-hands = { path = "../opencarrier-hands" }
-opencarrier-extensions = { path = "../opencarrier-extensions" }
 opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
 opencarrier-clone = { path = "../opencarrier-clone" }
 tokio = { workspace = true }

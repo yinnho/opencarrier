@@ -83,21 +83,6 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove a key from `~/.opencarrier/.env`.
-///
-/// Also removes it from the current process environment.
-pub fn remove_env_key(key: &str) -> Result<(), String> {
-    let path = env_file_path().ok_or("Could not determine home directory")?;
-
-    let mut entries = read_env_file(&path);
-    entries.remove(key);
-    write_env_file(&path, &entries)?;
-
-    std::env::remove_var(key);
-
-    Ok(())
-}
-
 /// List key names (without values) from `~/.opencarrier/.env`.
 #[allow(dead_code)]
 pub fn list_env_keys() -> Vec<String> {

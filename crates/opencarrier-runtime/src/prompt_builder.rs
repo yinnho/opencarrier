@@ -576,7 +576,11 @@ fn build_peer_agents_section(self_name: &str, peers: &[(String, String, String)]
     }
     out.push_str(
         "\nYou can communicate with them using `agent_send` (by name) and see all agents with `agent_list`. \
-         Delegate tasks to specialized agents when appropriate.",
+         Delegate tasks to specialized agents when appropriate.\n\n\
+         **Need a new skill?** If a task requires a capability you don't have, \
+         send a message to `clone-trainer` via `agent_send` describing what skill you need. \
+         Example: `agent_send({\"agent_name\": \"clone-trainer\", \"message\": \"I need a skill for video generation using Kling API\"})`. \
+         The trainer will coordinate with `clone-creator` to design and install the skill into your workspace.",
     );
     out
 }

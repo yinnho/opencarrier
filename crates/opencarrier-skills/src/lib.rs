@@ -4,14 +4,10 @@
 //! They can be:
 //! - TOML + Python scripts
 //! - TOML + WASM modules
-//! - TOML + Node.js modules (OpenClaw compatibility)
-//! - Remote skills from FangHub registry
+//! - Remote skills from Hub registry
 
-pub mod bundled;
-pub mod clawhub;
 pub mod loader;
-pub mod marketplace;
-pub mod openclaw_compat;
+
 pub mod registry;
 pub mod verify;
 
@@ -35,8 +31,6 @@ pub enum SkillError {
     Io(#[from] std::io::Error),
     #[error("Network error: {0}")]
     Network(String),
-    #[error("Rate limited by ClawHub — please wait a moment and try again: {0}")]
-    RateLimited(String),
     #[error("TOML parse error: {0}")]
     TomlParse(#[from] toml::de::Error),
     #[error("YAML parse error: {0}")]
@@ -53,7 +47,7 @@ pub enum SkillRuntime {
     Python,
     /// WASM module executed in sandbox.
     Wasm,
-    /// Node.js module (OpenClaw compatibility).
+    /// Node.js module (legacy compatibility).
     Node,
     /// Shell/Bash script executed in subprocess.
     Shell,
@@ -69,14 +63,10 @@ pub enum SkillRuntime {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum SkillSource {
-    /// Built into OpenCarrier or manually installed.
+    /// Manually installed.
     Native,
-    /// Bundled at compile time (ships with OpenCarrier binary).
-    Bundled,
-    /// Converted from OpenClaw format.
-    OpenClaw,
-    /// Downloaded from ClawHub marketplace.
-    ClawHub { slug: String, version: String },
+    /// Downloaded from Hub.
+    Hub { slug: String, version: String },
 }
 
 /// A tool provided by a skill.
@@ -98,6 +88,9 @@ pub struct SkillRequirements {
     pub tools: Vec<String>,
     /// Capabilities this skill needs from the host.
     pub capabilities: Vec<String>,
+    /// Providers whose credentials this skill needs injected at runtime.
+    /// e.g., ["kling", "openai"] → runtime injects KLING_ACCESS_KEY, etc.
+    pub providers: Vec<String>,
 }
 
 /// A skill manifest (parsed from skill.toml).
@@ -238,7 +231,7 @@ capabilities = ["NetConnect(*)"]
 
     #[test]
     fn test_skill_source_serde() {
-        let src = SkillSource::ClawHub {
+        let src = SkillSource::Hub {
             slug: "github-helper".to_string(),
             version: "1.0.0".to_string(),
         };

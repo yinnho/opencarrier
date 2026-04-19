@@ -8,10 +8,11 @@ use std::fs;
 use std::path::Path;
 
 /// Evolution mode — controls how aggressively the clone learns.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EvolutionMode {
     /// Only extract clear factual knowledge (names, policies, procedures).
+    #[default]
     Conservative,
     /// Extract facts + patterns + gaps. Good for general-purpose clones.
     Moderate,
@@ -19,12 +20,6 @@ pub enum EvolutionMode {
     Aggressive,
     /// Disable auto-evolution entirely. Manual knowledge management only.
     Disabled,
-}
-
-impl Default for EvolutionMode {
-    fn default() -> Self {
-        Self::Conservative
-    }
 }
 
 /// Per-clone evolution strategy.

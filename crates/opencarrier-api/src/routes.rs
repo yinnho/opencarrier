@@ -1,16 +1,11 @@
 //! Route handlers for the OpenCarrier API.
 
-use crate::command_security::{validate_install_command, CommandValidation};
 use crate::types::*;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use dashmap::DashMap;
-use opencarrier_kernel::triggers::{TriggerId, TriggerPattern};
-use opencarrier_kernel::workflow::{
-    ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
-};
 use opencarrier_kernel::OpenCarrierKernel;
 use opencarrier_runtime::kernel_handle::KernelHandle;
 use opencarrier_runtime::tool_runner::builtin_tool_definitions;
@@ -26,17 +21,8 @@ use std::time::Instant;
 pub struct AppState {
     pub kernel: Arc<OpenCarrierKernel>,
     pub started_at: Instant,
-    // P2P disabled - wire crate removed
-    // pub peer_registry: Option<Arc<opencarrier_wire::registry::PeerRegistry>>,
-    /// Channel bridge manager — held behind a Mutex so it can be swapped on hot-reload.
-    pub bridge_manager: tokio::sync::Mutex<Option<opencarrier_channels::bridge::BridgeManager>>,
-    /// Live channel config — updated on every hot-reload so list_channels() reflects reality.
-    pub channels_config: tokio::sync::RwLock<opencarrier_types::config::ChannelsConfig>,
     /// Notify handle to trigger graceful HTTP server shutdown from the API.
     pub shutdown_notify: Arc<tokio::sync::Notify>,
-    /// ClawHub response cache — prevents 429 rate limiting on rapid dashboard refreshes.
-    /// Maps cache key → (fetched_at, response_json) with 120s TTL.
-    pub clawhub_cache: DashMap<String, (Instant, serde_json::Value)>,
     /// Probe cache for local provider health checks (ollama/vllm/lmstudio).
     /// Avoids blocking the `/api/providers` endpoint on TCP timeouts to
     /// unreachable local services. 60-second TTL.
@@ -146,10 +132,6 @@ pub async fn spawn_agent(
     let name = manifest.name.clone();
     match state.kernel.spawn_agent(manifest) {
         Ok(id) => {
-            // Register in channel router so binding resolution finds the new agent
-            if let Some(ref mgr) = *state.bridge_manager.lock().await {
-                mgr.router().register_agent(name.clone(), id);
-            }
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!(SpawnResponse {
@@ -716,48 +698,466 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 /// GET /api/brain — Brain configuration and status.
 ///
 /// Returns the Brain's modalities, endpoints, and which ones are ready.
-/// Returns `{ "loaded": false }` when running in legacy single-driver mode.
 pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.kernel.brain_info() {
-        Some(brain) => {
-            let config = brain.config();
-            let ready = brain.ready_endpoints();
+    let brain = state.kernel.brain_info();
+    let config = brain.config();
+    let ready = brain.ready_endpoints();
 
-            let mut endpoints = serde_json::Map::new();
-            for (name, ep) in &config.endpoints {
-                endpoints.insert(name.clone(), serde_json::json!({
-                    "provider": ep.provider,
-                    "model": ep.model,
-                    "base_url": ep.base_url,
-                    "format": ep.format.to_string(),
-                    "ready": ready.contains(&name.as_str()),
-                }));
-            }
+    let mut endpoints = serde_json::Map::new();
+    for (name, ep) in &config.endpoints {
+        endpoints.insert(name.clone(), serde_json::json!({
+            "provider": ep.provider,
+            "model": ep.model,
+            "base_url": ep.base_url,
+            "format": ep.format.to_string(),
+            "ready": ready.contains(&name.as_str()),
+        }));
+    }
 
-            let mut modalities = serde_json::Map::new();
-            for (name, mc) in &config.modalities {
-                modalities.insert(name.clone(), serde_json::json!({
-                    "primary": mc.primary,
-                    "fallbacks": mc.fallbacks,
-                }));
-            }
+    let mut modalities = serde_json::Map::new();
+    for (name, mc) in &config.modalities {
+        modalities.insert(name.clone(), serde_json::json!({
+            "primary": mc.primary,
+            "fallbacks": mc.fallbacks,
+        }));
+    }
 
-            Json(serde_json::json!({
-                "loaded": true,
-                "default_modality": config.default_modality,
-                "modalities": modalities,
-                "endpoints": endpoints,
-            }))
+    Json(serde_json::json!({
+        "loaded": true,
+        "default_modality": config.default_modality,
+        "modalities": modalities,
+        "endpoints": endpoints,
+    }))
+}
+
+// ── Brain config management ────────────────────────────────────────────────
+
+/// PUT /api/brain/providers/{name} — create or update a Brain provider.
+pub async fn set_brain_provider(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let api_key_env = body["api_key_env"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let result = state.kernel.update_brain(|config| {
+        config.providers.insert(
+            name.clone(),
+            opencarrier_types::brain::ProviderConfig { api_key_env, params: std::collections::HashMap::new() },
+        );
+    });
+
+    match result {
+        Ok(()) => {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                format!("brain provider '{name}' updated"),
+                "ok",
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "provider": name})),
+            )
         }
-        None => {
-            let (provider, model) = state.kernel.resolve_model_label("chat");
-            Json(serde_json::json!({
-                "loaded": false,
-                "default_modality": "chat",
-                "fallback_provider": provider,
-                "fallback_model": model,
-            }))
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// DELETE /api/brain/providers/{name} — remove a Brain provider.
+pub async fn delete_brain_provider(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    // Check no endpoints reference this provider
+    let guard = state.kernel.brain_read();
+    {
+        let refs: Vec<String> = guard
+            .config()
+            .endpoints
+            .iter()
+            .filter(|(_, ep)| ep.provider == name)
+            .map(|(n, _)| n.clone())
+            .collect();
+        if !refs.is_empty() {
+            drop(guard);
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("Provider '{name}' is used by endpoints: {}", refs.join(", "))
+                })),
+            );
         }
+    }
+    drop(guard);
+
+    let result = state.kernel.update_brain(|config| {
+        config.providers.remove(&name);
+    });
+
+    match result {
+        Ok(()) => {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                format!("brain provider '{name}' deleted"),
+                "ok",
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "deleted": name})),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// PUT /api/brain/endpoints/{name} — create or update a Brain endpoint.
+pub async fn set_brain_endpoint(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let provider = body["provider"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let model = body["model"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let base_url = body["base_url"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let format_str = body["format"]
+        .as_str()
+        .unwrap_or("openai")
+        .trim()
+        .to_string();
+
+    // Validate required fields
+    if provider.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'provider' field"})),
+        );
+    }
+    if model.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'model' field"})),
+        );
+    }
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "base_url must start with http:// or https://"})),
+        );
+    }
+
+    let format = match format_str.as_str() {
+        "openai" => opencarrier_types::brain::ApiFormat::OpenAI,
+        "anthropic" => opencarrier_types::brain::ApiFormat::Anthropic,
+        "gemini" => opencarrier_types::brain::ApiFormat::Gemini,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "format must be 'openai', 'anthropic', or 'gemini'"})),
+            )
+        }
+    };
+
+    // Validate provider exists
+    {
+        let guard = state.kernel.brain_read();
+        if !guard.config().providers.contains_key(&provider) {
+            drop(guard);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Provider '{provider}' not found")})),
+            );
+        }
+    }
+
+    let result = state.kernel.update_brain(|config| {
+        config.endpoints.insert(
+            name.clone(),
+            opencarrier_types::brain::EndpointConfig {
+                provider,
+                model,
+                base_url,
+                format,
+            },
+        );
+    });
+
+    match result {
+        Ok(()) => {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                format!("brain endpoint '{name}' updated"),
+                "ok",
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "endpoint": name})),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// DELETE /api/brain/endpoints/{name} — remove a Brain endpoint.
+pub async fn delete_brain_endpoint(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    // Check no modalities reference this endpoint
+    let guard = state.kernel.brain_read();
+    {
+        let refs: Vec<String> = guard
+            .config()
+            .modalities
+            .iter()
+            .filter(|(_, mc)| mc.primary == name || mc.fallbacks.contains(&name))
+            .map(|(n, _)| n.clone())
+            .collect();
+        if !refs.is_empty() {
+            drop(guard);
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("Endpoint '{name}' is used by modalities: {}", refs.join(", "))
+                })),
+            );
+        }
+    }
+    drop(guard);
+
+    let result = state.kernel.update_brain(|config| {
+        config.endpoints.remove(&name);
+    });
+
+    match result {
+        Ok(()) => {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                format!("brain endpoint '{name}' deleted"),
+                "ok",
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "deleted": name})),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// PUT /api/brain/modalities/{name} — create or update a Brain modality.
+pub async fn set_brain_modality(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let primary = body["primary"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let fallbacks: Vec<String> = body["fallbacks"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if primary.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'primary' field"})),
+        );
+    }
+
+    // Validate endpoints exist
+    let guard = state.kernel.brain_read();
+    if !guard.config().endpoints.contains_key(&primary) {
+        drop(guard);
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Primary endpoint '{primary}' not found")})),
+        );
+    }
+    for fb in &fallbacks {
+        if !guard.config().endpoints.contains_key(fb) {
+            drop(guard);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Fallback endpoint '{fb}' not found")})),
+            );
+        }
+    }
+    drop(guard);
+
+    let result = state.kernel.update_brain(|config| {
+        config.modalities.insert(
+            name.clone(),
+            opencarrier_types::brain::ModalityConfig {
+                primary,
+                fallbacks,
+                description: String::new(),
+            },
+        );
+    });
+
+    match result {
+        Ok(()) => {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                format!("brain modality '{name}' updated"),
+                "ok",
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "modality": name})),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// DELETE /api/brain/modalities/{name} — remove a Brain modality.
+pub async fn delete_brain_modality(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    // Cannot delete default modality
+    let guard = state.kernel.brain_read();
+    if guard.config().default_modality == name {
+        drop(guard);
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": format!("Cannot delete default modality '{name}'")})),
+        );
+    }
+    drop(guard);
+
+    let result = state.kernel.update_brain(|config| {
+        config.modalities.remove(&name);
+    });
+
+    match result {
+        Ok(()) => {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                format!("brain modality '{name}' deleted"),
+                "ok",
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "deleted": name})),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// PUT /api/brain/default-modality — set the default modality.
+pub async fn set_brain_default_modality(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let modality = body["default_modality"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if modality.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'default_modality' field"})),
+        );
+    }
+
+    let result = state.kernel.update_brain(|config| {
+        if !config.modalities.contains_key(&modality) {
+            return;
+        }
+        config.default_modality = modality.clone();
+    });
+
+    match result {
+        Ok(()) => {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                format!("default modality set to '{modality}'"),
+                "ok",
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "default_modality": modality})),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// POST /api/brain/reload — reload Brain from disk.
+pub async fn reload_brain(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.kernel.reload_brain() {
+        Ok(()) => {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                "brain reloaded from disk",
+                "ok",
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "message": "Brain reloaded"})),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
     }
 }
 
@@ -775,469 +1175,6 @@ pub async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Signal the HTTP server to initiate graceful shutdown so the process exits.
     state.shutdown_notify.notify_one();
     Json(serde_json::json!({"status": "shutting_down"}))
-}
-
-// ---------------------------------------------------------------------------
-// Workflow routes
-// ---------------------------------------------------------------------------
-
-/// POST /api/workflows — Register a new workflow.
-pub async fn create_workflow(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let name = req["name"].as_str().unwrap_or("unnamed").to_string();
-    let description = req["description"].as_str().unwrap_or("").to_string();
-
-    let steps_json = match req["steps"].as_array() {
-        Some(s) => s,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'steps' array"})),
-            );
-        }
-    };
-
-    let mut steps = Vec::new();
-    for s in steps_json {
-        let step_name = s["name"].as_str().unwrap_or("step").to_string();
-        let agent = if let Some(id) = s["agent_id"].as_str() {
-            StepAgent::ById { id: id.to_string() }
-        } else if let Some(name) = s["agent_name"].as_str() {
-            StepAgent::ByName {
-                name: name.to_string(),
-            }
-        } else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": format!("Step '{}' needs 'agent_id' or 'agent_name'", step_name)}),
-                ),
-            );
-        };
-
-        let mode = match s["mode"].as_str().unwrap_or("sequential") {
-            "fan_out" => StepMode::FanOut,
-            "collect" => StepMode::Collect,
-            "conditional" => StepMode::Conditional {
-                condition: s["condition"].as_str().unwrap_or("").to_string(),
-            },
-            "loop" => StepMode::Loop {
-                max_iterations: s["max_iterations"].as_u64().unwrap_or(5) as u32,
-                until: s["until"].as_str().unwrap_or("").to_string(),
-            },
-            _ => StepMode::Sequential,
-        };
-
-        let error_mode = match s["error_mode"].as_str().unwrap_or("fail") {
-            "skip" => ErrorMode::Skip,
-            "retry" => ErrorMode::Retry {
-                max_retries: s["max_retries"].as_u64().unwrap_or(3) as u32,
-            },
-            _ => ErrorMode::Fail,
-        };
-
-        steps.push(WorkflowStep {
-            name: step_name,
-            agent,
-            prompt_template: s["prompt"].as_str().unwrap_or("{{input}}").to_string(),
-            mode,
-            timeout_secs: s["timeout_secs"].as_u64().unwrap_or(120),
-            error_mode,
-            output_var: s["output_var"].as_str().map(String::from),
-        });
-    }
-
-    let workflow = Workflow {
-        id: WorkflowId::new(),
-        name,
-        description,
-        steps,
-        created_at: chrono::Utc::now(),
-    };
-
-    let id = state.kernel.register_workflow(workflow).await;
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({"workflow_id": id.to_string()})),
-    )
-}
-
-/// GET /api/workflows — List all workflows.
-pub async fn list_workflows(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let workflows = state.kernel.workflows.list_workflows().await;
-    let list: Vec<serde_json::Value> = workflows
-        .iter()
-        .map(|w| {
-            serde_json::json!({
-                "id": w.id.to_string(),
-                "name": w.name,
-                "description": w.description,
-                "steps": w.steps.len(),
-                "created_at": w.created_at.to_rfc3339(),
-            })
-        })
-        .collect();
-    Json(list)
-}
-
-/// POST /api/workflows/:id/run — Execute a workflow.
-pub async fn run_workflow(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid workflow ID"})),
-            );
-        }
-    });
-
-    let input = req["input"].as_str().unwrap_or("").to_string();
-
-    match state.kernel.run_workflow(workflow_id, input).await {
-        Ok((run_id, output)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "run_id": run_id.to_string(),
-                "output": output,
-                "status": "completed",
-            })),
-        ),
-        Err(e) => {
-            tracing::warn!("Workflow run failed for {id}: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Workflow execution failed"})),
-            )
-        }
-    }
-}
-
-/// GET /api/workflows/:id/runs — List runs for a workflow.
-pub async fn list_workflow_runs(
-    State(state): State<Arc<AppState>>,
-    Path(_id): Path<String>,
-) -> impl IntoResponse {
-    let runs = state.kernel.workflows.list_runs(None).await;
-    let list: Vec<serde_json::Value> = runs
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "id": r.id.to_string(),
-                "workflow_name": r.workflow_name,
-                "state": serde_json::to_value(&r.state).unwrap_or_default(),
-                "steps_completed": r.step_results.len(),
-                "started_at": r.started_at.to_rfc3339(),
-                "completed_at": r.completed_at.map(|t| t.to_rfc3339()),
-            })
-        })
-        .collect();
-    Json(list)
-}
-
-/// GET /api/workflows/:id — Get a single workflow by ID.
-pub async fn get_workflow(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid workflow ID"})),
-            );
-        }
-    });
-
-    match state.kernel.workflows.get_workflow(workflow_id).await {
-        Some(w) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "id": w.id.to_string(),
-                "name": w.name,
-                "description": w.description,
-                "steps": w.steps,
-                "created_at": w.created_at.to_rfc3339(),
-            })),
-        ),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
-        ),
-    }
-}
-
-/// PUT /api/workflows/:id — Update a workflow definition.
-pub async fn update_workflow(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid workflow ID"})),
-            );
-        }
-    });
-
-    let name = req["name"].as_str().unwrap_or("unnamed").to_string();
-    let description = req["description"].as_str().unwrap_or("").to_string();
-
-    let steps_json = match req["steps"].as_array() {
-        Some(s) => s,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'steps' array"})),
-            );
-        }
-    };
-
-    let mut steps = Vec::new();
-    for s in steps_json {
-        let step_name = s["name"].as_str().unwrap_or("step").to_string();
-        let agent = if let Some(id) = s["agent_id"].as_str() {
-            StepAgent::ById { id: id.to_string() }
-        } else if let Some(name) = s["agent_name"].as_str() {
-            StepAgent::ByName {
-                name: name.to_string(),
-            }
-        } else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": format!("Step '{}' needs 'agent_id' or 'agent_name'", step_name)}),
-                ),
-            );
-        };
-
-        let mode = match s["mode"].as_str().unwrap_or("sequential") {
-            "fan_out" => StepMode::FanOut,
-            "collect" => StepMode::Collect,
-            "conditional" => StepMode::Conditional {
-                condition: s["condition"].as_str().unwrap_or("").to_string(),
-            },
-            "loop" => StepMode::Loop {
-                max_iterations: s["max_iterations"].as_u64().unwrap_or(5) as u32,
-                until: s["until"].as_str().unwrap_or("").to_string(),
-            },
-            _ => StepMode::Sequential,
-        };
-
-        let error_mode = match s["error_mode"].as_str().unwrap_or("fail") {
-            "skip" => ErrorMode::Skip,
-            "retry" => ErrorMode::Retry {
-                max_retries: s["max_retries"].as_u64().unwrap_or(3) as u32,
-            },
-            _ => ErrorMode::Fail,
-        };
-
-        steps.push(WorkflowStep {
-            name: step_name,
-            agent,
-            prompt_template: s["prompt"].as_str().unwrap_or("{{input}}").to_string(),
-            mode,
-            timeout_secs: s["timeout_secs"].as_u64().unwrap_or(120),
-            error_mode,
-            output_var: s["output_var"].as_str().map(String::from),
-        });
-    }
-
-    let updated = Workflow {
-        id: workflow_id,
-        name,
-        description,
-        steps,
-        created_at: chrono::Utc::now(), // preserved by engine
-    };
-
-    if state
-        .kernel
-        .workflows
-        .update_workflow(workflow_id, updated)
-        .await
-    {
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "updated", "workflow_id": id})),
-        )
-    } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
-        )
-    }
-}
-
-/// DELETE /api/workflows/:id — Delete a workflow definition.
-pub async fn delete_workflow(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid workflow ID"})),
-            );
-        }
-    });
-
-    if state.kernel.workflows.remove_workflow(workflow_id).await {
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "removed", "workflow_id": id})),
-        )
-    } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Trigger routes
-// ---------------------------------------------------------------------------
-
-/// POST /api/triggers — Register a new event trigger.
-pub async fn create_trigger(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let agent_id_str = match req["agent_id"].as_str() {
-        Some(id) => id,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'agent_id'"})),
-            );
-        }
-    };
-
-    let agent_id: AgentId = match agent_id_str.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent_id"})),
-            );
-        }
-    };
-
-    let pattern: TriggerPattern = match req.get("pattern") {
-        Some(p) => match serde_json::from_value(p.clone()) {
-            Ok(pat) => pat,
-            Err(e) => {
-                tracing::warn!("Invalid trigger pattern: {e}");
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Invalid trigger pattern"})),
-                );
-            }
-        },
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'pattern'"})),
-            );
-        }
-    };
-
-    let prompt_template = req["prompt_template"]
-        .as_str()
-        .unwrap_or("Event: {{event}}")
-        .to_string();
-    let max_fires = req["max_fires"].as_u64().unwrap_or(0);
-
-    match state
-        .kernel
-        .register_trigger(agent_id, pattern, prompt_template, max_fires)
-    {
-        Ok(trigger_id) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "trigger_id": trigger_id.to_string(),
-                "agent_id": agent_id.to_string(),
-            })),
-        ),
-        Err(e) => {
-            tracing::warn!("Trigger registration failed: {e}");
-            (
-                StatusCode::NOT_FOUND,
-                Json(
-                    serde_json::json!({"error": "Trigger registration failed (agent not found?)"}),
-                ),
-            )
-        }
-    }
-}
-
-/// GET /api/triggers — List all triggers (optionally filter by ?agent_id=...).
-pub async fn list_triggers(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let agent_filter = params
-        .get("agent_id")
-        .and_then(|id| id.parse::<AgentId>().ok());
-
-    let triggers = state.kernel.list_triggers(agent_filter);
-    let list: Vec<serde_json::Value> = triggers
-        .iter()
-        .map(|t| {
-            serde_json::json!({
-                "id": t.id.to_string(),
-                "agent_id": t.agent_id.to_string(),
-                "pattern": serde_json::to_value(&t.pattern).unwrap_or_default(),
-                "prompt_template": t.prompt_template,
-                "enabled": t.enabled,
-                "fire_count": t.fire_count,
-                "max_fires": t.max_fires,
-                "created_at": t.created_at.to_rfc3339(),
-            })
-        })
-        .collect();
-    Json(list)
-}
-
-/// DELETE /api/triggers/:id — Remove a trigger.
-pub async fn delete_trigger(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let trigger_id = TriggerId(match id.parse() {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid trigger ID"})),
-            );
-        }
-    });
-
-    if state.kernel.remove_trigger(trigger_id) {
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "removed", "trigger_id": id})),
-        )
-    } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Trigger not found"})),
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1482,1596 +1419,6 @@ pub async fn send_message_stream(
     Sse::new(sse_stream)
         .keep_alive(axum::response::sse::KeepAlive::default())
         .into_response()
-}
-
-// ---------------------------------------------------------------------------
-// Channel status endpoints — data-driven registry for all 40 adapters
-// ---------------------------------------------------------------------------
-
-/// Field type for the channel configuration form.
-#[derive(Clone, Copy, PartialEq)]
-enum FieldType {
-    Secret,
-    Text,
-    Number,
-    List,
-}
-
-impl FieldType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Secret => "secret",
-            Self::Text => "text",
-            Self::Number => "number",
-            Self::List => "list",
-        }
-    }
-}
-
-/// A single configurable field for a channel adapter.
-#[derive(Clone)]
-struct ChannelField {
-    key: &'static str,
-    label: &'static str,
-    field_type: FieldType,
-    env_var: Option<&'static str>,
-    required: bool,
-    placeholder: &'static str,
-    /// If true, this field is hidden under "Show Advanced" in the UI.
-    advanced: bool,
-}
-
-/// Metadata for one channel adapter.
-struct ChannelMeta {
-    name: &'static str,
-    display_name: &'static str,
-    icon: &'static str,
-    description: &'static str,
-    category: &'static str,
-    difficulty: &'static str,
-    setup_time: &'static str,
-    /// One-line quick setup hint shown in the simple form view.
-    quick_setup: &'static str,
-    /// Setup type: "form" (default), "qr" (QR code scan + form fallback).
-    setup_type: &'static str,
-    fields: &'static [ChannelField],
-    setup_steps: &'static [&'static str],
-    config_template: &'static str,
-}
-
-const CHANNEL_REGISTRY: &[ChannelMeta] = &[
-    // ── Messaging (12) ──────────────────────────────────────────────
-    ChannelMeta {
-        name: "telegram", display_name: "Telegram", icon: "TG",
-        description: "Telegram Bot API — long-polling adapter",
-        category: "messaging", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your bot token from @BotFather",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "bot_token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("TELEGRAM_BOT_TOKEN"), required: true, placeholder: "123456:ABC-DEF...", advanced: false },
-            ChannelField { key: "allowed_users", label: "Allowed User IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "12345, 67890", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-            ChannelField { key: "poll_interval_secs", label: "Poll Interval (sec)", field_type: FieldType::Number, env_var: None, required: false, placeholder: "1", advanced: true },
-        ],
-        setup_steps: &["Open @BotFather on Telegram", "Send /newbot and follow the prompts", "Paste the token below"],
-        config_template: "[channels.telegram]\nbot_token_env = \"TELEGRAM_BOT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "discord", display_name: "Discord", icon: "DC",
-        description: "Discord Gateway bot adapter",
-        category: "messaging", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Paste your bot token from the Discord Developer Portal",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "bot_token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("DISCORD_BOT_TOKEN"), required: true, placeholder: "MTIz...", advanced: false },
-            ChannelField { key: "allowed_guilds", label: "Allowed Guild IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "123456789, 987654321", advanced: true },
-            ChannelField { key: "allowed_users", label: "Allowed User IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "123456789, 987654321", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-            ChannelField { key: "intents", label: "Intents Bitmask", field_type: FieldType::Number, env_var: None, required: false, placeholder: "37376", advanced: true },
-        ],
-        setup_steps: &["Go to discord.com/developers/applications", "Create a bot and copy the token", "Paste it below"],
-        config_template: "[channels.discord]\nbot_token_env = \"DISCORD_BOT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "slack", display_name: "Slack", icon: "SL",
-        description: "Slack Socket Mode + Events API",
-        category: "messaging", difficulty: "Medium", setup_time: "~5 min",
-        quick_setup: "Paste your App Token and Bot Token from api.slack.com",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "app_token_env", label: "App Token (xapp-)", field_type: FieldType::Secret, env_var: Some("SLACK_APP_TOKEN"), required: true, placeholder: "xapp-1-...", advanced: false },
-            ChannelField { key: "bot_token_env", label: "Bot Token (xoxb-)", field_type: FieldType::Secret, env_var: Some("SLACK_BOT_TOKEN"), required: true, placeholder: "xoxb-...", advanced: false },
-            ChannelField { key: "allowed_channels", label: "Allowed Channel IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "C01234, C56789", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create app at api.slack.com/apps", "Enable Socket Mode and copy App Token", "Copy Bot Token from OAuth & Permissions"],
-        config_template: "[channels.slack]\napp_token_env = \"SLACK_APP_TOKEN\"\nbot_token_env = \"SLACK_BOT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "whatsapp", display_name: "WhatsApp", icon: "WA",
-        description: "Connect your personal WhatsApp via QR scan",
-        category: "messaging", difficulty: "Easy", setup_time: "~1 min",
-        quick_setup: "Scan QR code with your phone — no developer account needed",
-        setup_type: "qr",
-        fields: &[
-            // Business API fallback fields — all advanced (hidden behind "Use Business API" toggle)
-            ChannelField { key: "access_token_env", label: "Access Token", field_type: FieldType::Secret, env_var: Some("WHATSAPP_ACCESS_TOKEN"), required: false, placeholder: "EAAx...", advanced: true },
-            ChannelField { key: "phone_number_id", label: "Phone Number ID", field_type: FieldType::Text, env_var: None, required: false, placeholder: "1234567890", advanced: true },
-            ChannelField { key: "verify_token_env", label: "Verify Token", field_type: FieldType::Secret, env_var: Some("WHATSAPP_VERIFY_TOKEN"), required: false, placeholder: "my-verify-token", advanced: true },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8443", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Open WhatsApp on your phone", "Go to Linked Devices", "Tap Link a Device and scan the QR code"],
-        config_template: "[channels.whatsapp]\naccess_token_env = \"WHATSAPP_ACCESS_TOKEN\"\nphone_number_id = \"\"",
-    },
-    ChannelMeta {
-        name: "signal", display_name: "Signal", icon: "SG",
-        description: "Signal via signal-cli REST API",
-        category: "messaging", difficulty: "Medium", setup_time: "~10 min",
-        quick_setup: "Enter your signal-cli API URL",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "api_url", label: "signal-cli API URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "http://localhost:8080", advanced: false },
-            ChannelField { key: "phone_number", label: "Phone Number", field_type: FieldType::Text, env_var: None, required: true, placeholder: "+1234567890", advanced: false },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Install signal-cli-rest-api", "Enter the API URL and your phone number"],
-        config_template: "[channels.signal]\napi_url = \"http://localhost:8080\"\nphone_number = \"\"",
-    },
-    ChannelMeta {
-        name: "matrix", display_name: "Matrix", icon: "MX",
-        description: "Matrix/Element bot via homeserver",
-        category: "messaging", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Paste your access token and homeserver URL",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "access_token_env", label: "Access Token", field_type: FieldType::Secret, env_var: Some("MATRIX_ACCESS_TOKEN"), required: true, placeholder: "syt_...", advanced: false },
-            ChannelField { key: "homeserver_url", label: "Homeserver URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://matrix.org", advanced: false },
-            ChannelField { key: "user_id", label: "Bot User ID", field_type: FieldType::Text, env_var: None, required: false, placeholder: "@opencarrier:matrix.org", advanced: true },
-            ChannelField { key: "allowed_rooms", label: "Allowed Room IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "!abc:matrix.org", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot account on your homeserver", "Generate an access token", "Paste token and homeserver URL below"],
-        config_template: "[channels.matrix]\naccess_token_env = \"MATRIX_ACCESS_TOKEN\"\nhomeserver_url = \"https://matrix.org\"",
-    },
-    ChannelMeta {
-        name: "email", display_name: "Email", icon: "EM",
-        description: "IMAP/SMTP email adapter",
-        category: "messaging", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Enter your email, password, and server hosts",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "username", label: "Email Address", field_type: FieldType::Text, env_var: None, required: true, placeholder: "bot@example.com", advanced: false },
-            ChannelField { key: "password_env", label: "Password / App Password", field_type: FieldType::Secret, env_var: Some("EMAIL_PASSWORD"), required: true, placeholder: "app-password", advanced: false },
-            ChannelField { key: "imap_host", label: "IMAP Host", field_type: FieldType::Text, env_var: None, required: true, placeholder: "imap.gmail.com", advanced: false },
-            ChannelField { key: "smtp_host", label: "SMTP Host", field_type: FieldType::Text, env_var: None, required: true, placeholder: "smtp.gmail.com", advanced: false },
-            ChannelField { key: "imap_port", label: "IMAP Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "993", advanced: true },
-            ChannelField { key: "smtp_port", label: "SMTP Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "587", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Enable IMAP on your email account", "Generate an app password if using Gmail", "Fill in email, password, and hosts below"],
-        config_template: "[channels.email]\nimap_host = \"imap.gmail.com\"\nsmtp_host = \"smtp.gmail.com\"\npassword_env = \"EMAIL_PASSWORD\"",
-    },
-    ChannelMeta {
-        name: "line", display_name: "LINE", icon: "LN",
-        description: "LINE Messaging API adapter",
-        category: "messaging", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Paste your Channel Secret and Access Token",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "channel_secret_env", label: "Channel Secret", field_type: FieldType::Secret, env_var: Some("LINE_CHANNEL_SECRET"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "access_token_env", label: "Channel Access Token", field_type: FieldType::Secret, env_var: Some("LINE_CHANNEL_ACCESS_TOKEN"), required: true, placeholder: "xyz789...", advanced: false },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8450", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a Messaging API channel at LINE Developers", "Copy Channel Secret and Access Token", "Paste them below"],
-        config_template: "[channels.line]\nchannel_secret_env = \"LINE_CHANNEL_SECRET\"\naccess_token_env = \"LINE_CHANNEL_ACCESS_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "viber", display_name: "Viber", icon: "VB",
-        description: "Viber Bot API adapter",
-        category: "messaging", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your auth token from partners.viber.com",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "auth_token_env", label: "Auth Token", field_type: FieldType::Secret, env_var: Some("VIBER_AUTH_TOKEN"), required: true, placeholder: "4dc...", advanced: false },
-            ChannelField { key: "webhook_url", label: "Webhook URL", field_type: FieldType::Text, env_var: None, required: false, placeholder: "https://your-domain.com/viber", advanced: true },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8451", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot at partners.viber.com", "Copy the auth token", "Paste it below"],
-        config_template: "[channels.viber]\nauth_token_env = \"VIBER_AUTH_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "messenger", display_name: "Messenger", icon: "FB",
-        description: "Facebook Messenger Platform adapter",
-        category: "messaging", difficulty: "Medium", setup_time: "~10 min",
-        quick_setup: "Paste your Page Access Token from developers.facebook.com",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "page_token_env", label: "Page Access Token", field_type: FieldType::Secret, env_var: Some("MESSENGER_PAGE_TOKEN"), required: true, placeholder: "EAAx...", advanced: false },
-            ChannelField { key: "verify_token_env", label: "Verify Token", field_type: FieldType::Secret, env_var: Some("MESSENGER_VERIFY_TOKEN"), required: false, placeholder: "my-verify-token", advanced: true },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8452", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a Facebook App and add Messenger", "Generate a Page Access Token", "Paste it below"],
-        config_template: "[channels.messenger]\npage_token_env = \"MESSENGER_PAGE_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "threema", display_name: "Threema", icon: "3M",
-        description: "Threema Gateway adapter",
-        category: "messaging", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Paste your Gateway ID and API secret",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "secret_env", label: "API Secret", field_type: FieldType::Secret, env_var: Some("THREEMA_SECRET"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "threema_id", label: "Gateway ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "*MYID01", advanced: false },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8454", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Register at gateway.threema.ch", "Copy your ID and API secret", "Paste them below"],
-        config_template: "[channels.threema]\nthreema_id = \"\"\nsecret_env = \"THREEMA_SECRET\"",
-    },
-    ChannelMeta {
-        name: "keybase", display_name: "Keybase", icon: "KB",
-        description: "Keybase chat bot adapter",
-        category: "messaging", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Enter your username and paper key",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "username", label: "Username", field_type: FieldType::Text, env_var: None, required: true, placeholder: "opencarrier_bot", advanced: false },
-            ChannelField { key: "paperkey_env", label: "Paper Key", field_type: FieldType::Secret, env_var: Some("KEYBASE_PAPERKEY"), required: true, placeholder: "word1 word2 word3...", advanced: false },
-            ChannelField { key: "allowed_teams", label: "Allowed Teams", field_type: FieldType::List, env_var: None, required: false, placeholder: "team1, team2", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a Keybase bot account", "Generate a paper key", "Enter username and paper key below"],
-        config_template: "[channels.keybase]\nusername = \"\"\npaperkey_env = \"KEYBASE_PAPERKEY\"",
-    },
-    // ── Social (5) ──────────────────────────────────────────────────
-    ChannelMeta {
-        name: "reddit", display_name: "Reddit", icon: "RD",
-        description: "Reddit API bot adapter",
-        category: "social", difficulty: "Medium", setup_time: "~5 min",
-        quick_setup: "Paste your Client ID, Secret, and bot credentials",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "client_id", label: "Client ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "abc123def", advanced: false },
-            ChannelField { key: "client_secret_env", label: "Client Secret", field_type: FieldType::Secret, env_var: Some("REDDIT_CLIENT_SECRET"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "username", label: "Bot Username", field_type: FieldType::Text, env_var: None, required: true, placeholder: "opencarrier_bot", advanced: false },
-            ChannelField { key: "password_env", label: "Bot Password", field_type: FieldType::Secret, env_var: Some("REDDIT_PASSWORD"), required: true, placeholder: "password", advanced: false },
-            ChannelField { key: "subreddits", label: "Subreddits", field_type: FieldType::List, env_var: None, required: false, placeholder: "opencarrier, rust", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a Reddit app at reddit.com/prefs/apps (script type)", "Copy Client ID and Secret", "Enter bot credentials below"],
-        config_template: "[channels.reddit]\nclient_id = \"\"\nclient_secret_env = \"REDDIT_CLIENT_SECRET\"\nusername = \"\"\npassword_env = \"REDDIT_PASSWORD\"",
-    },
-    ChannelMeta {
-        name: "mastodon", display_name: "Mastodon", icon: "MA",
-        description: "Mastodon Streaming API adapter",
-        category: "social", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your access token from Settings > Development",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "access_token_env", label: "Access Token", field_type: FieldType::Secret, env_var: Some("MASTODON_ACCESS_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "instance_url", label: "Instance URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://mastodon.social", advanced: false },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Go to Settings > Development on your instance", "Create an app and copy the token", "Paste it below"],
-        config_template: "[channels.mastodon]\ninstance_url = \"https://mastodon.social\"\naccess_token_env = \"MASTODON_ACCESS_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "bluesky", display_name: "Bluesky", icon: "BS",
-        description: "Bluesky/AT Protocol adapter",
-        category: "social", difficulty: "Easy", setup_time: "~1 min",
-        quick_setup: "Enter your handle and app password",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "identifier", label: "Handle", field_type: FieldType::Text, env_var: None, required: true, placeholder: "user.bsky.social", advanced: false },
-            ChannelField { key: "app_password_env", label: "App Password", field_type: FieldType::Secret, env_var: Some("BLUESKY_APP_PASSWORD"), required: true, placeholder: "xxxx-xxxx-xxxx-xxxx", advanced: false },
-            ChannelField { key: "service_url", label: "PDS URL", field_type: FieldType::Text, env_var: None, required: false, placeholder: "https://bsky.social", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Go to Settings > App Passwords in Bluesky", "Create an app password", "Enter handle and password below"],
-        config_template: "[channels.bluesky]\nidentifier = \"\"\napp_password_env = \"BLUESKY_APP_PASSWORD\"",
-    },
-    ChannelMeta {
-        name: "linkedin", display_name: "LinkedIn", icon: "LI",
-        description: "LinkedIn Messaging API adapter",
-        category: "social", difficulty: "Hard", setup_time: "~15 min",
-        quick_setup: "Paste your OAuth2 access token and Organization ID",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "access_token_env", label: "Access Token", field_type: FieldType::Secret, env_var: Some("LINKEDIN_ACCESS_TOKEN"), required: true, placeholder: "AQV...", advanced: false },
-            ChannelField { key: "organization_id", label: "Organization ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "12345678", advanced: false },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a LinkedIn App at linkedin.com/developers", "Generate an OAuth2 token", "Enter token and org ID below"],
-        config_template: "[channels.linkedin]\naccess_token_env = \"LINKEDIN_ACCESS_TOKEN\"\norganization_id = \"\"",
-    },
-    ChannelMeta {
-        name: "nostr", display_name: "Nostr", icon: "NS",
-        description: "Nostr relay protocol adapter",
-        category: "social", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your private key (nsec or hex)",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "private_key_env", label: "Private Key", field_type: FieldType::Secret, env_var: Some("NOSTR_PRIVATE_KEY"), required: true, placeholder: "nsec1...", advanced: false },
-            ChannelField { key: "relays", label: "Relay URLs", field_type: FieldType::List, env_var: None, required: false, placeholder: "wss://relay.damus.io", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Generate or use an existing Nostr keypair", "Paste your private key below"],
-        config_template: "[channels.nostr]\nprivate_key_env = \"NOSTR_PRIVATE_KEY\"",
-    },
-    // ── Enterprise (10) ─────────────────────────────────────────────
-    ChannelMeta {
-        name: "teams", display_name: "Microsoft Teams", icon: "MS",
-        description: "Teams Bot Framework adapter",
-        category: "enterprise", difficulty: "Medium", setup_time: "~10 min",
-        quick_setup: "Paste your Azure Bot App ID and Password",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "app_id", label: "App ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "00000000-0000-...", advanced: false },
-            ChannelField { key: "app_password_env", label: "App Password", field_type: FieldType::Secret, env_var: Some("TEAMS_APP_PASSWORD"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "3978", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create an Azure Bot registration", "Copy App ID and generate a password", "Paste them below"],
-        config_template: "[channels.teams]\napp_id = \"\"\napp_password_env = \"TEAMS_APP_PASSWORD\"",
-    },
-    ChannelMeta {
-        name: "mattermost", display_name: "Mattermost", icon: "MM",
-        description: "Mattermost WebSocket adapter",
-        category: "enterprise", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your bot token and server URL",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "server_url", label: "Server URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://mattermost.example.com", advanced: false },
-            ChannelField { key: "token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("MATTERMOST_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "allowed_channels", label: "Allowed Channels", field_type: FieldType::List, env_var: None, required: false, placeholder: "abc123, def456", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot in System Console > Bot Accounts", "Copy the token", "Enter server URL and token below"],
-        config_template: "[channels.mattermost]\nserver_url = \"\"\ntoken_env = \"MATTERMOST_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "google_chat", display_name: "Google Chat", icon: "GC",
-        description: "Google Chat service account adapter",
-        category: "enterprise", difficulty: "Hard", setup_time: "~15 min",
-        quick_setup: "Enter path to your service account JSON key",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "service_account_env", label: "Service Account JSON", field_type: FieldType::Secret, env_var: Some("GOOGLE_CHAT_SERVICE_ACCOUNT"), required: true, placeholder: "/path/to/key.json", advanced: false },
-            ChannelField { key: "space_ids", label: "Space IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "spaces/AAAA", advanced: true },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8444", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a Google Cloud project with Chat API", "Download service account JSON key", "Enter the path below"],
-        config_template: "[channels.google_chat]\nservice_account_env = \"GOOGLE_CHAT_SERVICE_ACCOUNT\"",
-    },
-    ChannelMeta {
-        name: "webex", display_name: "Webex", icon: "WX",
-        description: "Cisco Webex bot adapter",
-        category: "enterprise", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your bot token from developer.webex.com",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "bot_token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("WEBEX_BOT_TOKEN"), required: true, placeholder: "NjI...", advanced: false },
-            ChannelField { key: "allowed_rooms", label: "Allowed Rooms", field_type: FieldType::List, env_var: None, required: false, placeholder: "Y2lz...", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot at developer.webex.com", "Copy the token", "Paste it below"],
-        config_template: "[channels.webex]\nbot_token_env = \"WEBEX_BOT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "feishu", display_name: "Feishu/Lark", icon: "FS",
-        description: "Feishu/Lark Open Platform adapter (supports China & International)",
-        category: "enterprise", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Paste your App ID and App Secret",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "app_id", label: "App ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "cli_abc123", advanced: false },
-            ChannelField { key: "app_secret_env", label: "App Secret", field_type: FieldType::Secret, env_var: Some("FEISHU_APP_SECRET"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "region", label: "Region", field_type: FieldType::Text, env_var: None, required: false, placeholder: "cn or intl", advanced: false },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8453", advanced: true },
-            ChannelField { key: "webhook_path", label: "Webhook Path", field_type: FieldType::Text, env_var: None, required: false, placeholder: "/feishu/webhook", advanced: true },
-            ChannelField { key: "verification_token", label: "Verification Token", field_type: FieldType::Text, env_var: None, required: false, placeholder: "verify-token", advanced: true },
-            ChannelField { key: "encrypt_key_env", label: "Encrypt Key", field_type: FieldType::Secret, env_var: Some("FEISHU_ENCRYPT_KEY"), required: false, placeholder: "encrypt-key", advanced: true },
-            ChannelField { key: "bot_names", label: "Bot Names", field_type: FieldType::List, env_var: None, required: false, placeholder: "MyBot, Assistant", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create an app at open.feishu.cn (CN) or open.larksuite.com (International)", "Copy App ID and Secret", "Set region: cn (Feishu) or intl (Lark)"],
-        config_template: "[channels.feishu]\napp_id = \"\"\napp_secret_env = \"FEISHU_APP_SECRET\"\nregion = \"cn\"",
-    },
-    ChannelMeta {
-        name: "dingtalk", display_name: "DingTalk", icon: "DT",
-        description: "DingTalk Robot API adapter",
-        category: "enterprise", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Paste your webhook token and signing secret",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "access_token_env", label: "Access Token", field_type: FieldType::Secret, env_var: Some("DINGTALK_ACCESS_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "secret_env", label: "Signing Secret", field_type: FieldType::Secret, env_var: Some("DINGTALK_SECRET"), required: true, placeholder: "SEC...", advanced: false },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8457", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a robot in your DingTalk group", "Copy the token and signing secret", "Paste them below"],
-        config_template: "[channels.dingtalk]\naccess_token_env = \"DINGTALK_ACCESS_TOKEN\"\nsecret_env = \"DINGTALK_SECRET\"",
-    },
-    ChannelMeta {
-        name: "dingtalk_stream", display_name: "DingTalk Stream", icon: "DS",
-        description: "DingTalk Stream Mode (WebSocket long-connection)",
-        category: "enterprise", difficulty: "Easy", setup_time: "~5 min",
-        quick_setup: "Create an Enterprise Internal App with Stream Mode enabled",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "app_key_env", label: "App Key", field_type: FieldType::Secret, env_var: Some("DINGTALK_APP_KEY"), required: true, placeholder: "ding...", advanced: false },
-            ChannelField { key: "app_secret_env", label: "App Secret", field_type: FieldType::Secret, env_var: Some("DINGTALK_APP_SECRET"), required: true, placeholder: "uAn4...", advanced: false },
-            ChannelField { key: "robot_code_env", label: "Robot Code", field_type: FieldType::Text, env_var: Some("DINGTALK_ROBOT_CODE"), required: false, placeholder: "ding... (same as App Key)", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create an Enterprise Internal App in DingTalk Open Platform", "Enable Stream Mode in the app settings", "Add robot capability and configure permissions", "Copy App Key and App Secret below"],
-        config_template: "[channels.dingtalk_stream]\napp_key_env = \"DINGTALK_APP_KEY\"\napp_secret_env = \"DINGTALK_APP_SECRET\"",
-    },
-    ChannelMeta {
-        name: "pumble", display_name: "Pumble", icon: "PB",
-        description: "Pumble bot adapter",
-        category: "enterprise", difficulty: "Easy", setup_time: "~1 min",
-        quick_setup: "Paste your bot token",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "bot_token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("PUMBLE_BOT_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8455", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot in Pumble Integrations", "Copy the token", "Paste it below"],
-        config_template: "[channels.pumble]\nbot_token_env = \"PUMBLE_BOT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "flock", display_name: "Flock", icon: "FL",
-        description: "Flock bot adapter",
-        category: "enterprise", difficulty: "Easy", setup_time: "~1 min",
-        quick_setup: "Paste your bot token",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "bot_token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("FLOCK_BOT_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8456", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Build an app in Flock App Store", "Copy the bot token", "Paste it below"],
-        config_template: "[channels.flock]\nbot_token_env = \"FLOCK_BOT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "twist", display_name: "Twist", icon: "TW",
-        description: "Twist API v3 adapter",
-        category: "enterprise", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your API token and workspace ID",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "token_env", label: "API Token", field_type: FieldType::Secret, env_var: Some("TWIST_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "workspace_id", label: "Workspace ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "12345", advanced: false },
-            ChannelField { key: "allowed_channels", label: "Channel IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "123, 456", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create an integration in Twist Settings", "Copy the API token", "Enter token and workspace ID below"],
-        config_template: "[channels.twist]\ntoken_env = \"TWIST_TOKEN\"\nworkspace_id = \"\"",
-    },
-    ChannelMeta {
-        name: "zulip", display_name: "Zulip", icon: "ZL",
-        description: "Zulip event queue adapter",
-        category: "enterprise", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your API key, server URL, and bot email",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "server_url", label: "Server URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://chat.zulip.org", advanced: false },
-            ChannelField { key: "bot_email", label: "Bot Email", field_type: FieldType::Text, env_var: None, required: true, placeholder: "bot@zulip.example.com", advanced: false },
-            ChannelField { key: "api_key_env", label: "API Key", field_type: FieldType::Secret, env_var: Some("ZULIP_API_KEY"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "streams", label: "Streams", field_type: FieldType::List, env_var: None, required: false, placeholder: "general, dev", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot in Zulip Settings > Your Bots", "Copy the API key", "Enter server URL, bot email, and key below"],
-        config_template: "[channels.zulip]\nserver_url = \"\"\nbot_email = \"\"\napi_key_env = \"ZULIP_API_KEY\"",
-    },
-    // ── Developer (9) ───────────────────────────────────────────────
-    ChannelMeta {
-        name: "irc", display_name: "IRC", icon: "IR",
-        description: "IRC raw TCP adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Enter server and nickname",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "server", label: "Server", field_type: FieldType::Text, env_var: None, required: true, placeholder: "irc.libera.chat", advanced: false },
-            ChannelField { key: "nick", label: "Nickname", field_type: FieldType::Text, env_var: None, required: true, placeholder: "opencarrier", advanced: false },
-            ChannelField { key: "channels", label: "Channels", field_type: FieldType::List, env_var: None, required: false, placeholder: "#opencarrier, #general", advanced: false },
-            ChannelField { key: "port", label: "Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "6667", advanced: true },
-            ChannelField { key: "use_tls", label: "Use TLS", field_type: FieldType::Text, env_var: None, required: false, placeholder: "false", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Choose an IRC server", "Enter server, nick, and channels below"],
-        config_template: "[channels.irc]\nserver = \"irc.libera.chat\"\nnick = \"opencarrier\"",
-    },
-    ChannelMeta {
-        name: "xmpp", display_name: "XMPP/Jabber", icon: "XM",
-        description: "XMPP/Jabber protocol adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Enter your JID and password",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "jid", label: "JID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "bot@jabber.org", advanced: false },
-            ChannelField { key: "password_env", label: "Password", field_type: FieldType::Secret, env_var: Some("XMPP_PASSWORD"), required: true, placeholder: "password", advanced: false },
-            ChannelField { key: "server", label: "Server", field_type: FieldType::Text, env_var: None, required: false, placeholder: "jabber.org", advanced: true },
-            ChannelField { key: "port", label: "Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "5222", advanced: true },
-            ChannelField { key: "rooms", label: "MUC Rooms", field_type: FieldType::List, env_var: None, required: false, placeholder: "room@conference.jabber.org", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot account on your XMPP server", "Enter JID and password below"],
-        config_template: "[channels.xmpp]\njid = \"\"\npassword_env = \"XMPP_PASSWORD\"",
-    },
-    ChannelMeta {
-        name: "gitter", display_name: "Gitter", icon: "GT",
-        description: "Gitter Streaming API adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your auth token and room ID",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "token_env", label: "Auth Token", field_type: FieldType::Secret, env_var: Some("GITTER_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "room_id", label: "Room ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "abc123def456", advanced: false },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Get a token from developer.gitter.im", "Find your room ID", "Paste both below"],
-        config_template: "[channels.gitter]\ntoken_env = \"GITTER_TOKEN\"\nroom_id = \"\"",
-    },
-    ChannelMeta {
-        name: "discourse", display_name: "Discourse", icon: "DS",
-        description: "Discourse forum API adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your API key and forum URL",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "base_url", label: "Forum URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://forum.example.com", advanced: false },
-            ChannelField { key: "api_key_env", label: "API Key", field_type: FieldType::Secret, env_var: Some("DISCOURSE_API_KEY"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "api_username", label: "API Username", field_type: FieldType::Text, env_var: None, required: false, placeholder: "system", advanced: true },
-            ChannelField { key: "categories", label: "Categories", field_type: FieldType::List, env_var: None, required: false, placeholder: "general, support", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Go to Admin > API > Keys", "Generate an API key", "Enter forum URL and key below"],
-        config_template: "[channels.discourse]\nbase_url = \"\"\napi_key_env = \"DISCOURSE_API_KEY\"",
-    },
-    ChannelMeta {
-        name: "revolt", display_name: "Revolt", icon: "RV",
-        description: "Revolt bot adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~1 min",
-        quick_setup: "Paste your bot token",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "bot_token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("REVOLT_BOT_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "api_url", label: "API URL", field_type: FieldType::Text, env_var: None, required: false, placeholder: "https://api.revolt.chat", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Go to Settings > My Bots in Revolt", "Create a bot and copy the token", "Paste it below"],
-        config_template: "[channels.revolt]\nbot_token_env = \"REVOLT_BOT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "guilded", display_name: "Guilded", icon: "GD",
-        description: "Guilded bot adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~1 min",
-        quick_setup: "Paste your bot token",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "bot_token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("GUILDED_BOT_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "server_ids", label: "Server IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "abc123", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Go to Server Settings > Bots in Guilded", "Create a bot and copy the token", "Paste it below"],
-        config_template: "[channels.guilded]\nbot_token_env = \"GUILDED_BOT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "nextcloud", display_name: "Nextcloud Talk", icon: "NC",
-        description: "Nextcloud Talk REST adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your server URL and auth token",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "server_url", label: "Server URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://cloud.example.com", advanced: false },
-            ChannelField { key: "token_env", label: "Auth Token", field_type: FieldType::Secret, env_var: Some("NEXTCLOUD_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "allowed_rooms", label: "Room Tokens", field_type: FieldType::List, env_var: None, required: false, placeholder: "abc123", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot user in Nextcloud", "Generate an app password", "Enter URL and token below"],
-        config_template: "[channels.nextcloud]\nserver_url = \"\"\ntoken_env = \"NEXTCLOUD_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "rocketchat", display_name: "Rocket.Chat", icon: "RC",
-        description: "Rocket.Chat REST adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your server URL, user ID, and token",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "server_url", label: "Server URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://rocket.example.com", advanced: false },
-            ChannelField { key: "user_id", label: "Bot User ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "abc123", advanced: false },
-            ChannelField { key: "token_env", label: "Auth Token", field_type: FieldType::Secret, env_var: Some("ROCKETCHAT_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "allowed_channels", label: "Channel IDs", field_type: FieldType::List, env_var: None, required: false, placeholder: "GENERAL", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a bot in Admin > Users", "Generate a personal access token", "Enter URL, user ID, and token below"],
-        config_template: "[channels.rocketchat]\nserver_url = \"\"\ntoken_env = \"ROCKETCHAT_TOKEN\"\nuser_id = \"\"",
-    },
-    ChannelMeta {
-        name: "twitch", display_name: "Twitch", icon: "TV",
-        description: "Twitch IRC gateway adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your OAuth token and enter channel name",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "oauth_token_env", label: "OAuth Token", field_type: FieldType::Secret, env_var: Some("TWITCH_OAUTH_TOKEN"), required: true, placeholder: "oauth:abc123...", advanced: false },
-            ChannelField { key: "nick", label: "Bot Nickname", field_type: FieldType::Text, env_var: None, required: true, placeholder: "opencarrier", advanced: false },
-            ChannelField { key: "channels", label: "Channels (no #)", field_type: FieldType::List, env_var: None, required: true, placeholder: "mychannel", advanced: false },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Generate an OAuth token at twitchapps.com/tmi", "Enter token, nick, and channel below"],
-        config_template: "[channels.twitch]\noauth_token_env = \"TWITCH_OAUTH_TOKEN\"\nnick = \"opencarrier\"",
-    },
-    // ── Notifications (4) ───────────────────────────────────────────
-    ChannelMeta {
-        name: "ntfy", display_name: "ntfy", icon: "NF",
-        description: "ntfy.sh pub/sub notification adapter",
-        category: "notifications", difficulty: "Easy", setup_time: "~1 min",
-        quick_setup: "Just enter a topic name",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "topic", label: "Topic", field_type: FieldType::Text, env_var: None, required: true, placeholder: "opencarrier-alerts", advanced: false },
-            ChannelField { key: "server_url", label: "Server URL", field_type: FieldType::Text, env_var: None, required: false, placeholder: "https://ntfy.sh", advanced: true },
-            ChannelField { key: "token_env", label: "Auth Token", field_type: FieldType::Secret, env_var: Some("NTFY_TOKEN"), required: false, placeholder: "tk_abc123...", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Pick a topic name", "Enter it below — that's it!"],
-        config_template: "[channels.ntfy]\ntopic = \"\"",
-    },
-    ChannelMeta {
-        name: "gotify", display_name: "Gotify", icon: "GF",
-        description: "Gotify WebSocket notification adapter",
-        category: "notifications", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Paste your server URL and tokens",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "server_url", label: "Server URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://gotify.example.com", advanced: false },
-            ChannelField { key: "app_token_env", label: "App Token (send)", field_type: FieldType::Secret, env_var: Some("GOTIFY_APP_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "client_token_env", label: "Client Token (receive)", field_type: FieldType::Secret, env_var: Some("GOTIFY_CLIENT_TOKEN"), required: true, placeholder: "def456...", advanced: false },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create an app and a client in Gotify", "Copy both tokens", "Enter URL and tokens below"],
-        config_template: "[channels.gotify]\nserver_url = \"\"\napp_token_env = \"GOTIFY_APP_TOKEN\"\nclient_token_env = \"GOTIFY_CLIENT_TOKEN\"",
-    },
-    ChannelMeta {
-        name: "webhook", display_name: "Webhook", icon: "WH",
-        description: "Generic HMAC-signed webhook adapter",
-        category: "notifications", difficulty: "Easy", setup_time: "~1 min",
-        quick_setup: "Optionally set an HMAC secret",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "secret_env", label: "HMAC Secret", field_type: FieldType::Secret, env_var: Some("WEBHOOK_SECRET"), required: false, placeholder: "my-secret", advanced: false },
-            ChannelField { key: "listen_port", label: "Listen Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8460", advanced: true },
-            ChannelField { key: "callback_url", label: "Callback URL", field_type: FieldType::Text, env_var: None, required: false, placeholder: "https://example.com/webhook", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Enter an HMAC secret (or leave blank)", "Click Save — that's it!"],
-        config_template: "[channels.webhook]\nsecret_env = \"WEBHOOK_SECRET\"",
-    },
-    ChannelMeta {
-        name: "mumble", display_name: "Mumble", icon: "MB",
-        description: "Mumble text chat adapter",
-        category: "notifications", difficulty: "Easy", setup_time: "~2 min",
-        quick_setup: "Enter server host and username",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "host", label: "Host", field_type: FieldType::Text, env_var: None, required: true, placeholder: "mumble.example.com", advanced: false },
-            ChannelField { key: "username", label: "Username", field_type: FieldType::Text, env_var: None, required: true, placeholder: "opencarrier", advanced: false },
-            ChannelField { key: "password_env", label: "Server Password", field_type: FieldType::Secret, env_var: Some("MUMBLE_PASSWORD"), required: false, placeholder: "password", advanced: true },
-            ChannelField { key: "port", label: "Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "64738", advanced: true },
-            ChannelField { key: "channel", label: "Channel", field_type: FieldType::Text, env_var: None, required: false, placeholder: "Root", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Enter host and username below", "Optionally add a password"],
-        config_template: "[channels.mumble]\nhost = \"\"\nusername = \"opencarrier\"",
-    },
-    ChannelMeta {
-        name: "wecom", display_name: "WeCom", icon: "WC",
-        description: "WeCom (WeChat Work) adapter",
-        category: "messaging", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Enter your Corp ID, Agent ID, and Secret",
-        setup_type: "form",
-        fields: &[
-            ChannelField { key: "corp_id", label: "Corp ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "wwxxxxx", advanced: false },
-            ChannelField { key: "agent_id", label: "Agent ID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "wwxxxxx", advanced: false },
-            ChannelField { key: "secret_env", label: "Secret", field_type: FieldType::Secret, env_var: Some("WECOM_SECRET"), required: true, placeholder: "secret", advanced: false },
-            ChannelField { key: "token", label: "Callback Token", field_type: FieldType::Text, env_var: None, required: false, placeholder: "callback_token", advanced: true },
-            ChannelField { key: "encoding_aes_key", label: "Encoding AES Key", field_type: FieldType::Text, env_var: None, required: false, placeholder: "encoding_aes_key", advanced: true },
-            ChannelField { key: "webhook_port", label: "Webhook Port", field_type: FieldType::Number, env_var: None, required: false, placeholder: "8454", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
-        ],
-        setup_steps: &["Create a WeCom application at work.weixin.qq.com", "Get Corp ID, Agent ID, and Secret", "Configure callback URL to your webhook endpoint"],
-        config_template: "[channels.wecom]\ncorp_id = \"\"\nagent_id = \"\"\nsecret_env = \"WECOM_SECRET\"",
-    },
-];
-
-/// Check if a channel is configured (has a `[channels.xxx]` section in config).
-fn is_channel_configured(config: &opencarrier_types::config::ChannelsConfig, name: &str) -> bool {
-    match name {
-        "telegram" => config.telegram.is_some(),
-        "discord" => config.discord.is_some(),
-        "slack" => config.slack.is_some(),
-        "whatsapp" => config.whatsapp.is_some(),
-        "signal" => config.signal.is_some(),
-        "matrix" => config.matrix.is_some(),
-        "email" => config.email.is_some(),
-        "line" => config.line.is_some(),
-        "viber" => config.viber.is_some(),
-        "messenger" => config.messenger.is_some(),
-        "threema" => config.threema.is_some(),
-        "keybase" => config.keybase.is_some(),
-        "reddit" => config.reddit.is_some(),
-        "mastodon" => config.mastodon.is_some(),
-        "bluesky" => config.bluesky.is_some(),
-        "linkedin" => config.linkedin.is_some(),
-        "nostr" => config.nostr.is_some(),
-        "teams" => config.teams.is_some(),
-        "mattermost" => config.mattermost.is_some(),
-        "google_chat" => config.google_chat.is_some(),
-        "webex" => config.webex.is_some(),
-        "feishu" => config.feishu.is_some(),
-        "dingtalk" => config.dingtalk.is_some(),
-        "dingtalk_stream" => config.dingtalk_stream.is_some(),
-        "pumble" => config.pumble.is_some(),
-        "flock" => config.flock.is_some(),
-        "twist" => config.twist.is_some(),
-        "zulip" => config.zulip.is_some(),
-        "irc" => config.irc.is_some(),
-        "xmpp" => config.xmpp.is_some(),
-        "gitter" => config.gitter.is_some(),
-        "discourse" => config.discourse.is_some(),
-        "revolt" => config.revolt.is_some(),
-        "guilded" => config.guilded.is_some(),
-        "nextcloud" => config.nextcloud.is_some(),
-        "rocketchat" => config.rocketchat.is_some(),
-        "twitch" => config.twitch.is_some(),
-        "ntfy" => config.ntfy.is_some(),
-        "gotify" => config.gotify.is_some(),
-        "webhook" => config.webhook.is_some(),
-        "mumble" => config.mumble.is_some(),
-        "wecom" => config.wecom.is_some(),
-        _ => false,
-    }
-}
-
-/// Build a JSON field descriptor, checking env var presence but never exposing secrets.
-/// For non-secret fields, includes the actual config value from `config_values` if available.
-fn build_field_json(
-    f: &ChannelField,
-    config_values: Option<&serde_json::Value>,
-) -> serde_json::Value {
-    let has_value = f
-        .env_var
-        .map(|ev| std::env::var(ev).map(|v| !v.is_empty()).unwrap_or(false))
-        .unwrap_or(false);
-    let mut field = serde_json::json!({
-        "key": f.key,
-        "label": f.label,
-        "type": f.field_type.as_str(),
-        "env_var": f.env_var,
-        "required": f.required,
-        "has_value": has_value,
-        "placeholder": f.placeholder,
-        "advanced": f.advanced,
-    });
-    // For non-secret fields, include the actual saved config value so the
-    // dashboard can pre-populate forms when editing existing configs.
-    if f.env_var.is_none() {
-        if let Some(obj) = config_values.and_then(|v| v.as_object()) {
-            if let Some(val) = obj.get(f.key) {
-                // Convert arrays to comma-separated string for list fields
-                let display_val = if f.field_type == FieldType::List {
-                    if let Some(arr) = val.as_array() {
-                        serde_json::Value::String(
-                            arr.iter()
-                                .filter_map(|v| {
-                                    v.as_str()
-                                        .map(|s| s.to_string())
-                                        .or_else(|| Some(v.to_string()))
-                                })
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                        )
-                    } else {
-                        val.clone()
-                    }
-                } else {
-                    val.clone()
-                };
-                field["value"] = display_val;
-                if !val.is_null() && val.as_str().map(|s| !s.is_empty()).unwrap_or(true) {
-                    field["has_value"] = serde_json::Value::Bool(true);
-                }
-            }
-        }
-    }
-    field
-}
-
-/// Find a channel definition by name.
-fn find_channel_meta(name: &str) -> Option<&'static ChannelMeta> {
-    CHANNEL_REGISTRY.iter().find(|c| c.name == name)
-}
-
-/// Serialize a channel's config to a JSON Value for pre-populating dashboard forms.
-fn channel_config_values(
-    config: &opencarrier_types::config::ChannelsConfig,
-    name: &str,
-) -> Option<serde_json::Value> {
-    match name {
-        "telegram" => config
-            .telegram
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "discord" => config
-            .discord
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "slack" => config
-            .slack
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "whatsapp" => config
-            .whatsapp
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "signal" => config
-            .signal
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "matrix" => config
-            .matrix
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "email" => config
-            .email
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "teams" => config
-            .teams
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "mattermost" => config
-            .mattermost
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "irc" => config
-            .irc
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "google_chat" => config
-            .google_chat
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "twitch" => config
-            .twitch
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "rocketchat" => config
-            .rocketchat
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "zulip" => config
-            .zulip
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "xmpp" => config
-            .xmpp
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "line" => config
-            .line
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "viber" => config
-            .viber
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "messenger" => config
-            .messenger
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "reddit" => config
-            .reddit
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "mastodon" => config
-            .mastodon
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "bluesky" => config
-            .bluesky
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "feishu" => config
-            .feishu
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "revolt" => config
-            .revolt
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "nextcloud" => config
-            .nextcloud
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "guilded" => config
-            .guilded
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "keybase" => config
-            .keybase
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "threema" => config
-            .threema
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "nostr" => config
-            .nostr
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "webex" => config
-            .webex
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "pumble" => config
-            .pumble
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "flock" => config
-            .flock
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "twist" => config
-            .twist
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "mumble" => config
-            .mumble
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "dingtalk" => config
-            .dingtalk
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "dingtalk_stream" => config
-            .dingtalk_stream
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "discourse" => config
-            .discourse
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "gitter" => config
-            .gitter
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "ntfy" => config
-            .ntfy
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "gotify" => config
-            .gotify
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "webhook" => config
-            .webhook
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "linkedin" => config
-            .linkedin
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        "wecom" => config
-            .wecom
-            .as_ref()
-            .and_then(|c| serde_json::to_value(c).ok()),
-        _ => None,
-    }
-}
-
-/// GET /api/channels — List all 40 channel adapters with status and field metadata.
-pub async fn list_channels(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Read the live channels config (updated on every hot-reload) instead of the
-    // stale boot-time kernel.config, so newly configured channels show correctly.
-    let live_channels = state.channels_config.read().await;
-    let mut channels = Vec::new();
-    let mut configured_count = 0u32;
-
-    for meta in CHANNEL_REGISTRY {
-        let configured = is_channel_configured(&live_channels, meta.name);
-        if configured {
-            configured_count += 1;
-        }
-
-        // Check if all required secret env vars are set
-        let has_token = meta
-            .fields
-            .iter()
-            .filter(|f| f.required && f.env_var.is_some())
-            .all(|f| {
-                f.env_var
-                    .map(|ev| std::env::var(ev).map(|v| !v.is_empty()).unwrap_or(false))
-                    .unwrap_or(true)
-            });
-
-        let config_vals = channel_config_values(&live_channels, meta.name);
-        let fields: Vec<serde_json::Value> = meta
-            .fields
-            .iter()
-            .map(|f| build_field_json(f, config_vals.as_ref()))
-            .collect();
-
-        channels.push(serde_json::json!({
-            "name": meta.name,
-            "display_name": meta.display_name,
-            "icon": meta.icon,
-            "description": meta.description,
-            "category": meta.category,
-            "difficulty": meta.difficulty,
-            "setup_time": meta.setup_time,
-            "quick_setup": meta.quick_setup,
-            "setup_type": meta.setup_type,
-            "configured": configured,
-            "has_token": has_token,
-            "fields": fields,
-            "setup_steps": meta.setup_steps,
-            "config_template": meta.config_template,
-        }));
-    }
-
-    Json(serde_json::json!({
-        "channels": channels,
-        "total": channels.len(),
-        "configured_count": configured_count,
-    }))
-}
-
-/// POST /api/channels/{name}/configure — Save channel secrets + config fields.
-pub async fn configure_channel(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let meta = match find_channel_meta(&name) {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Unknown channel"})),
-            )
-        }
-    };
-
-    let fields = match body.get("fields").and_then(|v| v.as_object()) {
-        Some(f) => f,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'fields' object"})),
-            )
-        }
-    };
-
-    let home = opencarrier_kernel::config::opencarrier_home();
-    let secrets_path = home.join("secrets.env");
-    let config_path = home.join("config.toml");
-    let mut config_fields: HashMap<String, (String, FieldType)> = HashMap::new();
-
-    for field_def in meta.fields {
-        let value = fields
-            .get(field_def.key)
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if value.is_empty() {
-            continue;
-        }
-
-        if let Some(env_var) = field_def.env_var {
-            // Secret field — write to secrets.env and set in process
-            if let Err(e) = write_secret_env(&secrets_path, env_var, value) {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("Failed to write secret: {e}")})),
-                );
-            }
-            // SAFETY: We are the only writer; this is a single-threaded config operation
-            unsafe {
-                std::env::set_var(env_var, value);
-            }
-            // Also write the env var NAME to config.toml so the channel section
-            // is not empty and the kernel knows which env var to read.
-            config_fields.insert(
-                field_def.key.to_string(),
-                (env_var.to_string(), FieldType::Text),
-            );
-        } else {
-            // Config field — collect for TOML write with type info
-            config_fields.insert(
-                field_def.key.to_string(),
-                (value.to_string(), field_def.field_type),
-            );
-        }
-    }
-
-    // Write config.toml section
-    if let Err(e) = upsert_channel_config(&config_path, &name, &config_fields) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write config: {e}")})),
-        );
-    }
-
-    // Hot-reload: activate the channel immediately
-    match crate::channel_bridge::reload_channels_from_disk(&state).await {
-        Ok(started) => {
-            let activated = started.iter().any(|s| s.eq_ignore_ascii_case(&name));
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "configured",
-                    "channel": name,
-                    "activated": activated,
-                    "started_channels": started,
-                    "note": if activated {
-                        format!("{} activated successfully.", name)
-                    } else {
-                        "Channel configured but could not start (check credentials).".to_string()
-                    }
-                })),
-            )
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "Channel hot-reload failed after configure");
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "configured",
-                    "channel": name,
-                    "activated": false,
-                    "note": format!("Configured, but hot-reload failed: {e}. Restart daemon to activate.")
-                })),
-            )
-        }
-    }
-}
-
-/// DELETE /api/channels/{name}/configure — Remove channel secrets + config section.
-pub async fn remove_channel(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> impl IntoResponse {
-    let meta = match find_channel_meta(&name) {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Unknown channel"})),
-            )
-        }
-    };
-
-    let home = opencarrier_kernel::config::opencarrier_home();
-    let secrets_path = home.join("secrets.env");
-    let config_path = home.join("config.toml");
-
-    // Remove all secret env vars for this channel
-    for field_def in meta.fields {
-        if let Some(env_var) = field_def.env_var {
-            let _ = remove_secret_env(&secrets_path, env_var);
-            // SAFETY: Single-threaded config operation
-            unsafe {
-                std::env::remove_var(env_var);
-            }
-        }
-    }
-
-    // Remove config section
-    if let Err(e) = remove_channel_config(&config_path, &name) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to remove config: {e}")})),
-        );
-    }
-
-    // Hot-reload: deactivate the channel immediately
-    match crate::channel_bridge::reload_channels_from_disk(&state).await {
-        Ok(started) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "removed",
-                "channel": name,
-                "remaining_channels": started,
-                "note": format!("{} deactivated.", name)
-            })),
-        ),
-        Err(e) => {
-            tracing::warn!(error = %e, "Channel hot-reload failed after remove");
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "removed",
-                    "channel": name,
-                    "note": format!("Removed, but hot-reload failed: {e}. Restart daemon to fully deactivate.")
-                })),
-            )
-        }
-    }
-}
-
-/// POST /api/channels/{name}/test — Connectivity check + optional live test message.
-///
-/// Accepts an optional JSON body with `channel_id` (for Discord/Slack) or `chat_id`
-/// (for Telegram). When provided, sends a real test message to verify the bot can
-/// post to that channel.
-pub async fn test_channel(
-    Path(name): Path<String>,
-    raw_body: axum::body::Bytes,
-) -> impl IntoResponse {
-    let meta = match find_channel_meta(&name) {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"status": "error", "message": "Unknown channel"})),
-            )
-        }
-    };
-
-    // Check all required env vars are set
-    let mut missing = Vec::new();
-    for field_def in meta.fields {
-        if field_def.required {
-            if let Some(env_var) = field_def.env_var {
-                if std::env::var(env_var).map(|v| v.is_empty()).unwrap_or(true) {
-                    missing.push(env_var);
-                }
-            }
-        }
-    }
-
-    if !missing.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "error",
-                "message": format!("Missing required env vars: {}", missing.join(", "))
-            })),
-        );
-    }
-
-    // If a target channel/chat ID is provided, send a real test message
-    let body: serde_json::Value = if raw_body.is_empty() {
-        serde_json::Value::Null
-    } else {
-        serde_json::from_slice(&raw_body).unwrap_or(serde_json::Value::Null)
-    };
-    let target = body
-        .get("channel_id")
-        .or_else(|| body.get("chat_id"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    if let Some(target_id) = target {
-        match send_channel_test_message(&name, &target_id).await {
-            Ok(()) => {
-                return (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "status": "ok",
-                        "message": format!("Test message sent to {} channel {}.", meta.display_name, target_id)
-                    })),
-                );
-            }
-            Err(e) => {
-                return (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "status": "error",
-                        "message": format!("Credentials valid but failed to send test message: {e}")
-                    })),
-                );
-            }
-        }
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "status": "ok",
-            "message": format!("All required credentials for {} are set. Provide channel_id or chat_id to send a test message.", meta.display_name)
-        })),
-    )
-}
-
-/// Send a real test message to a specific channel/chat on the given platform.
-async fn send_channel_test_message(channel_name: &str, target_id: &str) -> Result<(), String> {
-    let client = reqwest::Client::new();
-    let test_msg = "OpenCarrier test message — your channel is connected!";
-
-    match channel_name {
-        "discord" => {
-            let token = std::env::var("DISCORD_BOT_TOKEN")
-                .map_err(|_| "DISCORD_BOT_TOKEN not set".to_string())?;
-            let url = format!("https://discord.com/api/v10/channels/{target_id}/messages");
-            let resp = client
-                .post(&url)
-                .header("Authorization", format!("Bot {token}"))
-                .json(&serde_json::json!({ "content": test_msg }))
-                .send()
-                .await
-                .map_err(|e| format!("HTTP request failed: {e}"))?;
-            if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(format!("Discord API error: {body}"));
-            }
-        }
-        "telegram" => {
-            let token = std::env::var("TELEGRAM_BOT_TOKEN")
-                .map_err(|_| "TELEGRAM_BOT_TOKEN not set".to_string())?;
-            let url = format!("https://api.telegram.org/bot{token}/sendMessage");
-            let resp = client
-                .post(&url)
-                .json(&serde_json::json!({ "chat_id": target_id, "text": test_msg }))
-                .send()
-                .await
-                .map_err(|e| format!("HTTP request failed: {e}"))?;
-            if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(format!("Telegram API error: {body}"));
-            }
-        }
-        "slack" => {
-            let token = std::env::var("SLACK_BOT_TOKEN")
-                .map_err(|_| "SLACK_BOT_TOKEN not set".to_string())?;
-            let url = "https://slack.com/api/chat.postMessage";
-            let resp = client
-                .post(url)
-                .header("Authorization", format!("Bearer {token}"))
-                .json(&serde_json::json!({ "channel": target_id, "text": test_msg }))
-                .send()
-                .await
-                .map_err(|e| format!("HTTP request failed: {e}"))?;
-            if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(format!("Slack API error: {body}"));
-            }
-        }
-        _ => {
-            return Err(format!(
-                "Live test messaging not supported for {channel_name}. Credentials are valid."
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// POST /api/channels/reload — Manually trigger a channel hot-reload from disk config.
-pub async fn reload_channels(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match crate::channel_bridge::reload_channels_from_disk(&state).await {
-        Ok(started) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "ok",
-                "started": started,
-            })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "status": "error",
-                "error": e,
-            })),
-        ),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// WhatsApp QR login flow (OpenClaw-style)
-// ---------------------------------------------------------------------------
-
-/// POST /api/channels/whatsapp/qr/start — Start a WhatsApp Web QR login session.
-///
-/// If a WhatsApp Web gateway is available (e.g. a Baileys-based bridge process),
-/// this proxies the request and returns a base64 QR code data URL. If no gateway
-/// is running, it returns instructions to set one up.
-pub async fn whatsapp_qr_start() -> impl IntoResponse {
-    // Check for WhatsApp Web gateway URL in config or env
-    let gateway_url = std::env::var("WHATSAPP_WEB_GATEWAY_URL").unwrap_or_default();
-
-    if gateway_url.is_empty() {
-        return Json(serde_json::json!({
-            "available": false,
-            "message": "WhatsApp Web gateway not running. Start the gateway or use Business API mode.",
-            "help": "The WhatsApp Web gateway auto-starts with the daemon when configured. Ensure Node.js >= 18 is installed and WhatsApp is configured in config.toml. Set WHATSAPP_WEB_GATEWAY_URL to use an external gateway."
-        }));
-    }
-
-    // Try to reach the gateway and start a QR session.
-    // Uses a raw HTTP request via tokio TcpStream to avoid adding reqwest as a runtime dep.
-    let start_url = format!("{}/login/start", gateway_url.trim_end_matches('/'));
-    match gateway_http_post(&start_url).await {
-        Ok(body) => {
-            let qr_url = body
-                .get("qr_data_url")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let sid = body
-                .get("session_id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let msg = body
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Scan this QR code with WhatsApp → Linked Devices");
-            let connected = body
-                .get("connected")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            Json(serde_json::json!({
-                "available": true,
-                "qr_data_url": qr_url,
-                "session_id": sid,
-                "message": msg,
-                "connected": connected,
-            }))
-        }
-        Err(e) => Json(serde_json::json!({
-            "available": false,
-            "message": format!("Could not reach WhatsApp Web gateway: {e}"),
-            "help": "Make sure the gateway is running at the configured URL"
-        })),
-    }
-}
-
-/// GET /api/channels/whatsapp/qr/status — Poll for QR scan completion.
-///
-/// After calling `/qr/start`, the frontend polls this to check if the user
-/// has scanned the QR code and the WhatsApp Web session is connected.
-pub async fn whatsapp_qr_status(
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> impl IntoResponse {
-    let gateway_url = std::env::var("WHATSAPP_WEB_GATEWAY_URL").unwrap_or_default();
-
-    if gateway_url.is_empty() {
-        return Json(serde_json::json!({
-            "connected": false,
-            "message": "Gateway not available"
-        }));
-    }
-
-    let session_id = params.get("session_id").cloned().unwrap_or_default();
-    let status_url = format!(
-        "{}/login/status?session_id={}",
-        gateway_url.trim_end_matches('/'),
-        session_id
-    );
-
-    match gateway_http_get(&status_url).await {
-        Ok(body) => {
-            let connected = body
-                .get("connected")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            let msg = body
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Waiting for scan...");
-            let expired = body
-                .get("expired")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            Json(serde_json::json!({
-                "connected": connected,
-                "message": msg,
-                "expired": expired,
-            }))
-        }
-        Err(_) => Json(serde_json::json!({ "connected": false, "message": "Gateway unreachable" })),
-    }
-}
-
-/// Lightweight HTTP POST to a gateway URL. Returns parsed JSON body.
-async fn gateway_http_post(url_with_path: &str) -> Result<serde_json::Value, String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    // Split into base URL + path from the full URL like "http://127.0.0.1:3009/login/start"
-    let without_scheme = url_with_path
-        .strip_prefix("http://")
-        .or_else(|| url_with_path.strip_prefix("https://"))
-        .unwrap_or(url_with_path);
-    let (host_port, path) = if let Some(idx) = without_scheme.find('/') {
-        (&without_scheme[..idx], &without_scheme[idx..])
-    } else {
-        (without_scheme, "/")
-    };
-    let (host, port) = if let Some((h, p)) = host_port.rsplit_once(':') {
-        (h, p.parse().unwrap_or(3009u16))
-    } else {
-        (host_port, 3009u16)
-    };
-
-    let mut stream = tokio::net::TcpStream::connect(format!("{host}:{port}"))
-        .await
-        .map_err(|e| format!("Connect failed: {e}"))?;
-
-    let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
-    );
-    stream
-        .write_all(req.as_bytes())
-        .await
-        .map_err(|e| format!("Write failed: {e}"))?;
-
-    let mut buf = Vec::new();
-    stream
-        .read_to_end(&mut buf)
-        .await
-        .map_err(|e| format!("Read failed: {e}"))?;
-    let response = String::from_utf8_lossy(&buf);
-
-    // Find the JSON body after the blank line separating headers from body
-    if let Some(idx) = response.find("\r\n\r\n") {
-        let body_str = &response[idx + 4..];
-        serde_json::from_str(body_str.trim()).map_err(|e| format!("Parse failed: {e}"))
-    } else {
-        Err("No HTTP body in response".to_string())
-    }
-}
-
-/// Lightweight HTTP GET to a gateway URL. Returns parsed JSON body.
-async fn gateway_http_get(url_with_path: &str) -> Result<serde_json::Value, String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let without_scheme = url_with_path
-        .strip_prefix("http://")
-        .or_else(|| url_with_path.strip_prefix("https://"))
-        .unwrap_or(url_with_path);
-    let (host_port, path_and_query) = if let Some(idx) = without_scheme.find('/') {
-        (&without_scheme[..idx], &without_scheme[idx..])
-    } else {
-        (without_scheme, "/")
-    };
-    let (host, port) = if let Some((h, p)) = host_port.rsplit_once(':') {
-        (h, p.parse().unwrap_or(3009u16))
-    } else {
-        (host_port, 3009u16)
-    };
-
-    let mut stream = tokio::net::TcpStream::connect(format!("{host}:{port}"))
-        .await
-        .map_err(|e| format!("Connect failed: {e}"))?;
-
-    let req = format!(
-        "GET {path_and_query} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
-    );
-    stream
-        .write_all(req.as_bytes())
-        .await
-        .map_err(|e| format!("Write failed: {e}"))?;
-
-    let mut buf = Vec::new();
-    stream
-        .read_to_end(&mut buf)
-        .await
-        .map_err(|e| format!("Read failed: {e}"))?;
-    let response = String::from_utf8_lossy(&buf);
-
-    if let Some(idx) = response.find("\r\n\r\n") {
-        let body_str = &response[idx + 4..];
-        serde_json::from_str(body_str.trim()).map_err(|e| format!("Parse failed: {e}"))
-    } else {
-        Err("No HTTP body in response".to_string())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3433,14 +1780,8 @@ pub async fn list_skills(State(state): State<Arc<AppState>>) -> impl IntoRespons
         .iter()
         .map(|s| {
             let source = match &s.manifest.source {
-                Some(opencarrier_skills::SkillSource::ClawHub { slug, version }) => {
-                    serde_json::json!({"type": "clawhub", "slug": slug, "version": version})
-                }
-                Some(opencarrier_skills::SkillSource::OpenClaw) => {
-                    serde_json::json!({"type": "openclaw"})
-                }
-                Some(opencarrier_skills::SkillSource::Bundled) => {
-                    serde_json::json!({"type": "bundled"})
+                Some(opencarrier_skills::SkillSource::Hub { slug, version }) => {
+                    serde_json::json!({"type": "hub", "slug": slug, "version": version})
                 }
                 Some(opencarrier_skills::SkillSource::Native) | None => {
                     serde_json::json!({"type": "local"})
@@ -3462,1363 +1803,6 @@ pub async fn list_skills(State(state): State<Arc<AppState>>) -> impl IntoRespons
         .collect();
 
     Json(serde_json::json!({ "skills": skills, "total": skills.len() }))
-}
-
-/// POST /api/skills/install — Install a skill from FangHub (GitHub).
-pub async fn install_skill(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SkillInstallRequest>,
-) -> impl IntoResponse {
-    let skills_dir = state.kernel.config.home_dir.join("skills");
-    let config = opencarrier_skills::marketplace::MarketplaceConfig::default();
-    let client = opencarrier_skills::marketplace::MarketplaceClient::new(config);
-
-    match client.install(&req.name, &skills_dir).await {
-        Ok(version) => {
-            // Hot-reload so agents see the new skill immediately
-            state.kernel.reload_skills();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "installed",
-                    "name": req.name,
-                    "version": version,
-                })),
-            )
-        }
-        Err(e) => {
-            tracing::warn!("Skill install failed: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Install failed: {e}")})),
-            )
-        }
-    }
-}
-
-/// POST /api/skills/uninstall — Uninstall a skill.
-pub async fn uninstall_skill(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SkillUninstallRequest>,
-) -> impl IntoResponse {
-    let skills_dir = state.kernel.config.home_dir.join("skills");
-    let mut registry = opencarrier_skills::registry::SkillRegistry::new(skills_dir);
-    let _ = registry.load_all();
-
-    match registry.remove(&req.name) {
-        Ok(()) => {
-            // Hot-reload so agents stop seeing the removed skill
-            state.kernel.reload_skills();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "uninstalled", "name": req.name})),
-            )
-        }
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        ),
-    }
-}
-
-/// GET /api/marketplace/search — Search the FangHub marketplace.
-pub async fn marketplace_search(
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let query = params.get("q").cloned().unwrap_or_default();
-    if query.is_empty() {
-        return Json(serde_json::json!({"results": [], "total": 0}));
-    }
-
-    let config = opencarrier_skills::marketplace::MarketplaceConfig::default();
-    let client = opencarrier_skills::marketplace::MarketplaceClient::new(config);
-
-    match client.search(&query).await {
-        Ok(results) => {
-            let items: Vec<serde_json::Value> = results
-                .iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "name": r.name,
-                        "description": r.description,
-                        "stars": r.stars,
-                        "url": r.url,
-                    })
-                })
-                .collect();
-            Json(serde_json::json!({"results": items, "total": items.len()}))
-        }
-        Err(e) => {
-            tracing::warn!("Marketplace search failed: {e}");
-            Json(serde_json::json!({"results": [], "total": 0, "error": format!("{e}")}))
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ClawHub (OpenClaw ecosystem) endpoints
-// ---------------------------------------------------------------------------
-
-/// GET /api/clawhub/search — Search ClawHub skills using vector/semantic search.
-///
-/// Query parameters:
-/// - `q` — search query (required)
-/// - `limit` — max results (default: 20, max: 50)
-pub async fn clawhub_search(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let query = params.get("q").cloned().unwrap_or_default();
-    if query.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({"items": [], "next_cursor": null})),
-        );
-    }
-
-    let limit: u32 = params
-        .get("limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(20);
-
-    // Check cache (120s TTL)
-    let cache_key = format!("search:{}:{}", query, limit);
-    if let Some(entry) = state.clawhub_cache.get(&cache_key) {
-        if entry.0.elapsed().as_secs() < 120 {
-            return (StatusCode::OK, Json(entry.1.clone()));
-        }
-    }
-
-    let cache_dir = state.kernel.config.home_dir.join(".cache").join("clawhub");
-    let client = opencarrier_skills::clawhub::ClawHubClient::new(cache_dir);
-
-    let skills_dir = state.kernel.config.home_dir.join("skills");
-    match client.search(&query, limit).await {
-        Ok(results) => {
-            let items: Vec<serde_json::Value> = results
-                .results
-                .iter()
-                .map(|e| {
-                    let installed = skills_dir.join(&e.slug).exists();
-                    serde_json::json!({
-                        "slug": e.slug,
-                        "name": e.display_name,
-                        "description": e.summary,
-                        "version": e.version,
-                        "score": e.score,
-                        "updated_at": e.updated_at,
-                        "installed": installed,
-                    })
-                })
-                .collect();
-            let resp = serde_json::json!({
-                "items": items,
-                "next_cursor": null,
-            });
-            state
-                .clawhub_cache
-                .insert(cache_key, (Instant::now(), resp.clone()));
-            (StatusCode::OK, Json(resp))
-        }
-        Err(e) => {
-            let msg = format!("{e}");
-            tracing::warn!("ClawHub search failed: {msg}");
-            let status = if is_clawhub_rate_limit(&e) {
-                StatusCode::TOO_MANY_REQUESTS
-            } else {
-                StatusCode::OK
-            };
-            (
-                status,
-                Json(serde_json::json!({"items": [], "next_cursor": null, "error": msg})),
-            )
-        }
-    }
-}
-
-/// GET /api/clawhub/browse — Browse ClawHub skills by sort order.
-///
-/// Query parameters:
-/// - `sort` — sort order: "trending", "downloads", "stars", "updated", "rating" (default: "trending")
-/// - `limit` — max results (default: 20, max: 50)
-/// - `cursor` — pagination cursor from previous response
-pub async fn clawhub_browse(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
-    let sort = match params.get("sort").map(|s| s.as_str()) {
-        Some("downloads") => opencarrier_skills::clawhub::ClawHubSort::Downloads,
-        Some("stars") => opencarrier_skills::clawhub::ClawHubSort::Stars,
-        Some("updated") => opencarrier_skills::clawhub::ClawHubSort::Updated,
-        Some("rating") => opencarrier_skills::clawhub::ClawHubSort::Rating,
-        _ => opencarrier_skills::clawhub::ClawHubSort::Trending,
-    };
-
-    let limit: u32 = params
-        .get("limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(20);
-
-    let cursor = params.get("cursor").map(|s| s.as_str());
-
-    // Check cache (120s TTL)
-    let cache_key = format!("browse:{:?}:{}:{}", sort, limit, cursor.unwrap_or(""));
-    if let Some(entry) = state.clawhub_cache.get(&cache_key) {
-        if entry.0.elapsed().as_secs() < 120 {
-            return (StatusCode::OK, Json(entry.1.clone()));
-        }
-    }
-
-    let cache_dir = state.kernel.config.home_dir.join(".cache").join("clawhub");
-    let client = opencarrier_skills::clawhub::ClawHubClient::new(cache_dir);
-
-    let skills_dir = state.kernel.config.home_dir.join("skills");
-    match client.browse(sort, limit, cursor).await {
-        Ok(results) => {
-            let items: Vec<serde_json::Value> = results
-                .items
-                .iter()
-                .map(|entry| {
-                    let mut json = clawhub_browse_entry_to_json(entry);
-                    let installed = skills_dir.join(&entry.slug).exists();
-                    json["installed"] = serde_json::json!(installed);
-                    json
-                })
-                .collect();
-            let resp = serde_json::json!({
-                "items": items,
-                "next_cursor": results.next_cursor,
-            });
-            state
-                .clawhub_cache
-                .insert(cache_key, (Instant::now(), resp.clone()));
-            (StatusCode::OK, Json(resp))
-        }
-        Err(e) => {
-            let msg = format!("{e}");
-            tracing::warn!("ClawHub browse failed: {msg}");
-            let status = if is_clawhub_rate_limit(&e) {
-                StatusCode::TOO_MANY_REQUESTS
-            } else {
-                StatusCode::OK
-            };
-            (
-                status,
-                Json(serde_json::json!({"items": [], "next_cursor": null, "error": msg})),
-            )
-        }
-    }
-}
-
-/// GET /api/clawhub/skill/{slug} — Get detailed info about a ClawHub skill.
-pub async fn clawhub_skill_detail(
-    State(state): State<Arc<AppState>>,
-    Path(slug): Path<String>,
-) -> impl IntoResponse {
-    let cache_dir = state.kernel.config.home_dir.join(".cache").join("clawhub");
-    let client = opencarrier_skills::clawhub::ClawHubClient::new(cache_dir);
-
-    let skills_dir = state.kernel.config.home_dir.join("skills");
-    let is_installed = client.is_installed(&slug, &skills_dir);
-
-    match client.get_skill(&slug).await {
-        Ok(detail) => {
-            let version = detail
-                .latest_version
-                .as_ref()
-                .map(|v| v.version.as_str())
-                .unwrap_or("");
-            let author = detail
-                .owner
-                .as_ref()
-                .map(|o| o.handle.as_str())
-                .unwrap_or("");
-            let author_name = detail
-                .owner
-                .as_ref()
-                .map(|o| o.display_name.as_str())
-                .unwrap_or("");
-            let author_image = detail
-                .owner
-                .as_ref()
-                .map(|o| o.image.as_str())
-                .unwrap_or("");
-
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "slug": detail.skill.slug,
-                    "name": detail.skill.display_name,
-                    "description": detail.skill.summary,
-                    "version": version,
-                    "downloads": detail.skill.stats.downloads,
-                    "stars": detail.skill.stats.stars,
-                    "author": author,
-                    "author_name": author_name,
-                    "author_image": author_image,
-                    "tags": detail.skill.tags,
-                    "updated_at": detail.skill.updated_at,
-                    "created_at": detail.skill.created_at,
-                    "installed": is_installed,
-                })),
-            )
-        }
-        Err(e) => {
-            let status = if is_clawhub_rate_limit(&e) {
-                StatusCode::TOO_MANY_REQUESTS
-            } else {
-                StatusCode::NOT_FOUND
-            };
-            (status, Json(serde_json::json!({"error": format!("{e}")})))
-        }
-    }
-}
-
-/// GET /api/clawhub/skill/{slug}/code — Fetch the source code (SKILL.md) of a ClawHub skill.
-pub async fn clawhub_skill_code(
-    State(state): State<Arc<AppState>>,
-    Path(slug): Path<String>,
-) -> impl IntoResponse {
-    let cache_dir = state.kernel.config.home_dir.join(".cache").join("clawhub");
-    let client = opencarrier_skills::clawhub::ClawHubClient::new(cache_dir);
-
-    // Try to fetch SKILL.md first, then fallback to package.json
-    let mut code = String::new();
-    let mut filename = String::new();
-
-    if let Ok(content) = client.get_file(&slug, "SKILL.md").await {
-        code = content;
-        filename = "SKILL.md".to_string();
-    } else if let Ok(content) = client.get_file(&slug, "package.json").await {
-        code = content;
-        filename = "package.json".to_string();
-    } else if let Ok(content) = client.get_file(&slug, "skill.toml").await {
-        code = content;
-        filename = "skill.toml".to_string();
-    }
-
-    if code.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "No source code found for this skill"})),
-        );
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "slug": slug,
-            "filename": filename,
-            "code": code,
-        })),
-    )
-}
-
-/// POST /api/clawhub/install — Install a skill from ClawHub.
-///
-/// Runs the full security pipeline: SHA256 verification, format detection,
-/// manifest security scan, prompt injection scan, and binary dependency check.
-pub async fn clawhub_install(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<crate::types::ClawHubInstallRequest>,
-) -> impl IntoResponse {
-    let skills_dir = state.kernel.config.home_dir.join("skills");
-    let cache_dir = state.kernel.config.home_dir.join(".cache").join("clawhub");
-    let client = opencarrier_skills::clawhub::ClawHubClient::new(cache_dir);
-
-    // Check if already installed
-    if client.is_installed(&req.slug, &skills_dir) {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("Skill '{}' is already installed", req.slug),
-                "status": "already_installed",
-            })),
-        );
-    }
-
-    match client.install(&req.slug, &skills_dir).await {
-        Ok(result) => {
-            let warnings: Vec<serde_json::Value> = result
-                .warnings
-                .iter()
-                .map(|w| {
-                    serde_json::json!({
-                        "severity": format!("{:?}", w.severity),
-                        "message": w.message,
-                    })
-                })
-                .collect();
-
-            let translations: Vec<serde_json::Value> = result
-                .tool_translations
-                .iter()
-                .map(|(from, to)| serde_json::json!({"from": from, "to": to}))
-                .collect();
-
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "installed",
-                    "name": result.skill_name,
-                    "version": result.version,
-                    "slug": result.slug,
-                    "is_prompt_only": result.is_prompt_only,
-                    "warnings": warnings,
-                    "tool_translations": translations,
-                })),
-            )
-        }
-        Err(e) => {
-            let msg = format!("{e}");
-            let status = if matches!(e, opencarrier_skills::SkillError::SecurityBlocked(_)) {
-                StatusCode::FORBIDDEN
-            } else if is_clawhub_rate_limit(&e) {
-                StatusCode::TOO_MANY_REQUESTS
-            } else if matches!(e, opencarrier_skills::SkillError::Network(_)) {
-                StatusCode::BAD_GATEWAY
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            tracing::warn!("ClawHub install failed: {msg}");
-            (status, Json(serde_json::json!({"error": msg})))
-        }
-    }
-}
-
-/// Check whether a SkillError represents a ClawHub rate-limit (429).
-fn is_clawhub_rate_limit(err: &opencarrier_skills::SkillError) -> bool {
-    matches!(err, opencarrier_skills::SkillError::RateLimited(_))
-}
-
-/// Convert a browse entry (nested stats/tags) to a flat JSON object for the frontend.
-fn clawhub_browse_entry_to_json(
-    entry: &opencarrier_skills::clawhub::ClawHubBrowseEntry,
-) -> serde_json::Value {
-    let version = opencarrier_skills::clawhub::ClawHubClient::entry_version(entry);
-    serde_json::json!({
-        "slug": entry.slug,
-        "name": entry.display_name,
-        "description": entry.summary,
-        "version": version,
-        "downloads": entry.stats.downloads,
-        "stars": entry.stats.stars,
-        "updated_at": entry.updated_at,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Hands endpoints
-// ---------------------------------------------------------------------------
-
-/// Detect the server platform for install command selection.
-fn server_platform() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(target_os = "windows") {
-        "windows"
-    } else {
-        "linux"
-    }
-}
-
-/// GET /api/hands — List all hand definitions (marketplace).
-pub async fn list_hands(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let defs = state.kernel.hand_registry.list_definitions();
-    let hands: Vec<serde_json::Value> = defs
-        .iter()
-        .map(|d| {
-            let reqs = state
-                .kernel
-                .hand_registry
-                .check_requirements(&d.id)
-                .unwrap_or_default();
-            let readiness = state.kernel.hand_registry.readiness(&d.id);
-            let requirements_met = readiness
-                .as_ref()
-                .map(|r| r.requirements_met)
-                .unwrap_or(false);
-            let active = readiness.as_ref().map(|r| r.active).unwrap_or(false);
-            let degraded = readiness.as_ref().map(|r| r.degraded).unwrap_or(false);
-            serde_json::json!({
-                "id": d.id,
-                "name": d.name,
-                "description": d.description,
-                "category": d.category,
-                "icon": d.icon,
-                "tools": d.tools,
-                "requirements_met": requirements_met,
-                "active": active,
-                "degraded": degraded,
-                "requirements": reqs.iter().map(|(r, ok)| serde_json::json!({
-                    "key": r.key,
-                    "label": r.label,
-                    "satisfied": ok,
-                    "optional": r.optional,
-                })).collect::<Vec<_>>(),
-                "dashboard_metrics": d.dashboard.metrics.len(),
-                "has_settings": !d.settings.is_empty(),
-                "settings_count": d.settings.len(),
-            })
-        })
-        .collect();
-
-    Json(serde_json::json!({ "hands": hands, "total": hands.len() }))
-}
-
-/// GET /api/hands/active — List active hand instances.
-pub async fn list_active_hands(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let instances = state.kernel.hand_registry.list_instances();
-    let items: Vec<serde_json::Value> = instances
-        .iter()
-        .map(|i| {
-            serde_json::json!({
-                "instance_id": i.instance_id,
-                "hand_id": i.hand_id,
-                "status": format!("{}", i.status),
-                "agent_id": i.agent_id.map(|a| a.to_string()),
-                "agent_name": i.agent_name,
-                "activated_at": i.activated_at.to_rfc3339(),
-                "updated_at": i.updated_at.to_rfc3339(),
-            })
-        })
-        .collect();
-
-    Json(serde_json::json!({ "instances": items, "total": items.len() }))
-}
-
-/// GET /api/hands/{hand_id} — Get a single hand definition with requirements check.
-pub async fn get_hand(
-    State(state): State<Arc<AppState>>,
-    Path(hand_id): Path<String>,
-) -> impl IntoResponse {
-    match state.kernel.hand_registry.get_definition(&hand_id) {
-        Some(def) => {
-            let reqs = state
-                .kernel
-                .hand_registry
-                .check_requirements(&hand_id)
-                .unwrap_or_default();
-            let readiness = state.kernel.hand_registry.readiness(&hand_id);
-            let requirements_met = readiness
-                .as_ref()
-                .map(|r| r.requirements_met)
-                .unwrap_or(false);
-            let active = readiness.as_ref().map(|r| r.active).unwrap_or(false);
-            let degraded = readiness.as_ref().map(|r| r.degraded).unwrap_or(false);
-            let settings_status = state
-                .kernel
-                .hand_registry
-                .check_settings_availability(&hand_id)
-                .unwrap_or_default();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "id": def.id,
-                    "name": def.name,
-                    "description": def.description,
-                    "category": def.category,
-                    "icon": def.icon,
-                    "tools": def.tools,
-                    "requirements_met": requirements_met,
-                    "active": active,
-                    "degraded": degraded,
-                    "requirements": reqs.iter().map(|(r, ok)| {
-                        let mut req_json = serde_json::json!({
-                            "key": r.key,
-                            "label": r.label,
-                            "type": format!("{:?}", r.requirement_type),
-                            "check_value": r.check_value,
-                            "satisfied": ok,
-                            "optional": r.optional,
-                        });
-                        if let Some(ref desc) = r.description {
-                            req_json["description"] = serde_json::json!(desc);
-                        }
-                        if let Some(ref install) = r.install {
-                            req_json["install"] = serde_json::to_value(install).unwrap_or_default();
-                        }
-                        req_json
-                    }).collect::<Vec<_>>(),
-                    "server_platform": server_platform(),
-                    "agent": {
-                        "name": def.agent.name,
-                        "description": def.agent.description,
-                        "provider": if def.agent.provider == "default" {
-                            &state.kernel.config.default_model.provider
-                        } else { &def.agent.provider },
-                        "model": if def.agent.model == "default" {
-                            &state.kernel.config.default_model.model
-                        } else { &def.agent.model },
-                    },
-                    "dashboard": def.dashboard.metrics.iter().map(|m| serde_json::json!({
-                        "label": m.label,
-                        "memory_key": m.memory_key,
-                        "format": m.format,
-                    })).collect::<Vec<_>>(),
-                    "settings": settings_status,
-                })),
-            )
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Hand not found: {hand_id}")})),
-        ),
-    }
-}
-
-/// POST /api/hands/{hand_id}/check-deps — Re-check dependency status for a hand.
-pub async fn check_hand_deps(
-    State(state): State<Arc<AppState>>,
-    Path(hand_id): Path<String>,
-) -> impl IntoResponse {
-    match state.kernel.hand_registry.get_definition(&hand_id) {
-        Some(def) => {
-            let reqs = state
-                .kernel
-                .hand_registry
-                .check_requirements(&hand_id)
-                .unwrap_or_default();
-            let readiness = state.kernel.hand_registry.readiness(&hand_id);
-            let requirements_met = readiness
-                .as_ref()
-                .map(|r| r.requirements_met)
-                .unwrap_or(false);
-            let active = readiness.as_ref().map(|r| r.active).unwrap_or(false);
-            let degraded = readiness.as_ref().map(|r| r.degraded).unwrap_or(false);
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "hand_id": def.id,
-                    "requirements_met": requirements_met,
-                    "active": active,
-                    "degraded": degraded,
-                    "server_platform": server_platform(),
-                    "requirements": reqs.iter().map(|(r, ok)| {
-                        let mut req_json = serde_json::json!({
-                            "key": r.key,
-                            "label": r.label,
-                            "type": format!("{:?}", r.requirement_type),
-                            "check_value": r.check_value,
-                            "satisfied": ok,
-                            "optional": r.optional,
-                        });
-                        if let Some(ref desc) = r.description {
-                            req_json["description"] = serde_json::json!(desc);
-                        }
-                        if let Some(ref install) = r.install {
-                            req_json["install"] = serde_json::to_value(install).unwrap_or_default();
-                        }
-                        req_json
-                    }).collect::<Vec<_>>(),
-                })),
-            )
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Hand not found: {hand_id}")})),
-        ),
-    }
-}
-
-/// POST /api/hands/{hand_id}/install-deps — Auto-install missing dependencies for a hand.
-pub async fn install_hand_deps(
-    State(state): State<Arc<AppState>>,
-    Path(hand_id): Path<String>,
-) -> impl IntoResponse {
-    let def = match state.kernel.hand_registry.get_definition(&hand_id) {
-        Some(d) => d.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Hand not found: {hand_id}")})),
-            );
-        }
-    };
-
-    let reqs = state
-        .kernel
-        .hand_registry
-        .check_requirements(&hand_id)
-        .unwrap_or_default();
-
-    let platform = server_platform();
-    let mut results = Vec::new();
-
-    for (req, already_satisfied) in &reqs {
-        if *already_satisfied {
-            results.push(serde_json::json!({
-                "key": req.key,
-                "status": "already_installed",
-                "message": format!("{} is already available", req.label),
-            }));
-            continue;
-        }
-
-        let install = match &req.install {
-            Some(i) => i,
-            None => {
-                results.push(serde_json::json!({
-                    "key": req.key,
-                    "status": "skipped",
-                    "message": "No install instructions available",
-                }));
-                continue;
-            }
-        };
-
-        // Pick the best install command for this platform
-        let cmd = match platform {
-            "windows" => install.windows.as_deref().or(install.pip.as_deref()),
-            "macos" => install.macos.as_deref().or(install.pip.as_deref()),
-            _ => install
-                .linux_apt
-                .as_deref()
-                .or(install.linux_dnf.as_deref())
-                .or(install.linux_pacman.as_deref())
-                .or(install.pip.as_deref()),
-        };
-
-        let cmd = match cmd {
-            Some(c) => c,
-            None => {
-                results.push(serde_json::json!({
-                    "key": req.key,
-                    "status": "no_command",
-                    "message": format!("No install command for platform: {platform}"),
-                }));
-                continue;
-            }
-        };
-
-        // Execute the install command
-        let (shell, flag) = if cfg!(windows) {
-            ("cmd", "/C")
-        } else {
-            ("sh", "-c")
-        };
-
-        // For winget on Windows, add --accept flags to avoid interactive prompts
-        let final_cmd = if cfg!(windows) && cmd.starts_with("winget ") {
-            format!("{cmd} --accept-source-agreements --accept-package-agreements")
-        } else {
-            cmd.to_string()
-        };
-
-        // SECURITY: Validate command against whitelist to prevent command injection
-        match validate_install_command(&final_cmd) {
-            CommandValidation::Blocked { reason } => {
-                tracing::warn!(
-                    hand = %hand_id,
-                    dep = %req.key,
-                    cmd = %final_cmd,
-                    reason = %reason,
-                    "Blocked potentially dangerous install command"
-                );
-                results.push(serde_json::json!({
-                    "key": req.key,
-                    "status": "blocked",
-                    "command": final_cmd,
-                    "message": format!("Security: {}", reason),
-                }));
-                continue;
-            }
-            CommandValidation::Allowed { base_command, .. } => {
-                tracing::debug!(
-                    hand = %hand_id,
-                    dep = %req.key,
-                    base_command = %base_command,
-                    "Install command validated"
-                );
-            }
-        }
-
-        tracing::info!(hand = %hand_id, dep = %req.key, cmd = %final_cmd, "Auto-installing dependency");
-
-        let output = match tokio::time::timeout(
-            std::time::Duration::from_secs(300),
-            tokio::process::Command::new(shell)
-                .arg(flag)
-                .arg(&final_cmd)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .stdin(std::process::Stdio::null())
-                .output(),
-        )
-        .await
-        {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
-                results.push(serde_json::json!({
-                    "key": req.key,
-                    "status": "error",
-                    "command": final_cmd,
-                    "message": format!("Failed to execute: {e}"),
-                }));
-                continue;
-            }
-            Err(_) => {
-                results.push(serde_json::json!({
-                    "key": req.key,
-                    "status": "timeout",
-                    "command": final_cmd,
-                    "message": "Installation timed out after 5 minutes",
-                }));
-                continue;
-            }
-        };
-
-        let exit_code = output.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        if exit_code == 0 {
-            results.push(serde_json::json!({
-                "key": req.key,
-                "status": "installed",
-                "command": final_cmd,
-                "message": format!("{} installed successfully", req.label),
-            }));
-        } else {
-            // On Windows, winget may return non-zero even on success (e.g., already installed)
-            let combined = format!("{stdout}{stderr}");
-            let likely_ok = combined.contains("already installed")
-                || combined.contains("No applicable update")
-                || combined.contains("No available upgrade")
-                || combined.contains("already an App at")
-                || combined.contains("is already installed");
-            results.push(serde_json::json!({
-                "key": req.key,
-                "status": if likely_ok { "installed" } else { "error" },
-                "command": final_cmd,
-                "exit_code": exit_code,
-                "message": if likely_ok {
-                    format!("{} is already installed", req.label)
-                } else {
-                    let msg = stderr.chars().take(500).collect::<String>();
-                    format!("Install failed (exit {}): {}", exit_code, msg.trim())
-                },
-            }));
-        }
-    }
-
-    // On Windows, refresh PATH to pick up newly installed binaries from winget/pip
-    #[cfg(windows)]
-    {
-        let home = std::env::var("USERPROFILE").unwrap_or_default();
-        if !home.is_empty() {
-            let winget_pkgs =
-                std::path::Path::new(&home).join("AppData\\Local\\Microsoft\\WinGet\\Packages");
-            if winget_pkgs.is_dir() {
-                let mut extra_paths = Vec::new();
-                if let Ok(entries) = std::fs::read_dir(&winget_pkgs) {
-                    for entry in entries.flatten() {
-                        let pkg_dir = entry.path();
-                        // Look for bin/ subdirectory (ffmpeg style)
-                        if let Ok(sub_entries) = std::fs::read_dir(&pkg_dir) {
-                            for sub in sub_entries.flatten() {
-                                let bin_dir = sub.path().join("bin");
-                                if bin_dir.is_dir() {
-                                    extra_paths.push(bin_dir.to_string_lossy().to_string());
-                                }
-                            }
-                        }
-                        // Direct exe in package dir (yt-dlp style)
-                        if std::fs::read_dir(&pkg_dir)
-                            .map(|rd| {
-                                rd.flatten().any(|e| {
-                                    e.path().extension().map(|x| x == "exe").unwrap_or(false)
-                                })
-                            })
-                            .unwrap_or(false)
-                        {
-                            extra_paths.push(pkg_dir.to_string_lossy().to_string());
-                        }
-                    }
-                }
-                // Also add pip Scripts dir
-                let pip_scripts =
-                    std::path::Path::new(&home).join("AppData\\Local\\Programs\\Python");
-                if pip_scripts.is_dir() {
-                    if let Ok(entries) = std::fs::read_dir(&pip_scripts) {
-                        for entry in entries.flatten() {
-                            let scripts = entry.path().join("Scripts");
-                            if scripts.is_dir() {
-                                extra_paths.push(scripts.to_string_lossy().to_string());
-                            }
-                        }
-                    }
-                }
-                if !extra_paths.is_empty() {
-                    let current_path = std::env::var("PATH").unwrap_or_default();
-                    let new_path = format!("{};{}", extra_paths.join(";"), current_path);
-                    std::env::set_var("PATH", &new_path);
-                    tracing::info!(
-                        added = extra_paths.len(),
-                        "Refreshed PATH with winget/pip directories"
-                    );
-                }
-            }
-        }
-    }
-
-    // Re-check requirements after installation
-    let reqs_after = state
-        .kernel
-        .hand_registry
-        .check_requirements(&hand_id)
-        .unwrap_or_default();
-    let all_satisfied = reqs_after.iter().all(|(_, ok)| *ok);
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "hand_id": def.id,
-            "results": results,
-            "requirements_met": all_satisfied,
-            "requirements": reqs_after.iter().map(|(r, ok)| {
-                serde_json::json!({
-                    "key": r.key,
-                    "label": r.label,
-                    "satisfied": ok,
-                })
-            }).collect::<Vec<_>>(),
-        })),
-    )
-}
-
-/// POST /api/hands/install — Install a hand from TOML content.
-pub async fn install_hand(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let toml_content = body["toml_content"].as_str().unwrap_or("");
-    let skill_content = body["skill_content"].as_str().unwrap_or("");
-
-    if toml_content.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing toml_content field"})),
-        );
-    }
-
-    match state
-        .kernel
-        .hand_registry
-        .install_from_content(toml_content, skill_content)
-    {
-        Ok(def) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "id": def.id,
-                "name": def.name,
-                "description": def.description,
-                "category": format!("{:?}", def.category),
-            })),
-        ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        ),
-    }
-}
-
-/// POST /api/hands/upsert — Install or update a hand definition.
-///
-/// Like `install_hand` but overwrites an existing definition with the same ID.
-/// Active instances are NOT automatically restarted — deactivate + reactivate
-/// to pick up the new definition.
-pub async fn upsert_hand(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let toml_content = body["toml_content"].as_str().unwrap_or("");
-    let skill_content = body["skill_content"].as_str().unwrap_or("");
-
-    if toml_content.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing toml_content field"})),
-        );
-    }
-
-    match state
-        .kernel
-        .hand_registry
-        .upsert_from_content(toml_content, skill_content)
-    {
-        Ok(def) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "id": def.id,
-                "name": def.name,
-                "description": def.description,
-                "category": format!("{:?}", def.category),
-            })),
-        ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        ),
-    }
-}
-
-/// POST /api/hands/{hand_id}/activate — Activate a hand (spawns agent).
-pub async fn activate_hand(
-    State(state): State<Arc<AppState>>,
-    Path(hand_id): Path<String>,
-    body: Option<Json<opencarrier_hands::ActivateHandRequest>>,
-) -> impl IntoResponse {
-    let config = body.map(|b| b.0.config).unwrap_or_default();
-
-    match state.kernel.activate_hand(&hand_id, config) {
-        Ok(instance) => {
-            // If the hand agent has a non-reactive schedule (autonomous hands),
-            // start its background loop so it begins running immediately.
-            if let Some(agent_id) = instance.agent_id {
-                let entry = state
-                    .kernel
-                    .registry
-                    .list()
-                    .into_iter()
-                    .find(|e| e.id == agent_id);
-                if let Some(entry) = entry {
-                    if !matches!(
-                        entry.manifest.schedule,
-                        opencarrier_types::agent::ScheduleMode::Reactive
-                    ) {
-                        state.kernel.start_background_for_agent(
-                            agent_id,
-                            &entry.name,
-                            &entry.manifest.schedule,
-                        );
-                    }
-                }
-            }
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "instance_id": instance.instance_id,
-                    "hand_id": instance.hand_id,
-                    "status": format!("{}", instance.status),
-                    "agent_id": instance.agent_id.map(|a| a.to_string()),
-                    "agent_name": instance.agent_name,
-                    "activated_at": instance.activated_at.to_rfc3339(),
-                })),
-            )
-        }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        ),
-    }
-}
-
-/// POST /api/hands/instances/{id}/pause — Pause a hand instance.
-pub async fn pause_hand(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    match state.kernel.pause_hand(id) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "paused", "instance_id": id})),
-        ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        ),
-    }
-}
-
-/// POST /api/hands/instances/{id}/resume — Resume a paused hand instance.
-pub async fn resume_hand(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    match state.kernel.resume_hand(id) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "resumed", "instance_id": id})),
-        ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        ),
-    }
-}
-
-/// DELETE /api/hands/instances/{id} — Deactivate a hand (kills agent).
-pub async fn deactivate_hand(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    match state.kernel.deactivate_hand(id) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "deactivated", "instance_id": id})),
-        ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
-        ),
-    }
-}
-
-/// GET /api/hands/{hand_id}/settings — Get settings schema and current values for a hand.
-pub async fn get_hand_settings(
-    State(state): State<Arc<AppState>>,
-    Path(hand_id): Path<String>,
-) -> impl IntoResponse {
-    let settings_status = match state
-        .kernel
-        .hand_registry
-        .check_settings_availability(&hand_id)
-    {
-        Ok(s) => s,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Hand not found: {hand_id}")})),
-            );
-        }
-    };
-
-    // Find active instance config values (if any)
-    let instance_config: std::collections::HashMap<String, serde_json::Value> = state
-        .kernel
-        .hand_registry
-        .list_instances()
-        .iter()
-        .find(|i| i.hand_id == hand_id)
-        .map(|i| i.config.clone())
-        .unwrap_or_default();
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "hand_id": hand_id,
-            "settings": settings_status,
-            "current_values": instance_config,
-        })),
-    )
-}
-
-/// PUT /api/hands/{hand_id}/settings — Update settings for a hand instance.
-pub async fn update_hand_settings(
-    State(state): State<Arc<AppState>>,
-    Path(hand_id): Path<String>,
-    Json(config): Json<std::collections::HashMap<String, serde_json::Value>>,
-) -> impl IntoResponse {
-    // Find active instance for this hand
-    let instance_id = state
-        .kernel
-        .hand_registry
-        .list_instances()
-        .iter()
-        .find(|i| i.hand_id == hand_id)
-        .map(|i| i.instance_id);
-
-    match instance_id {
-        Some(id) => match state.kernel.hand_registry.update_config(id, config.clone()) {
-            Ok(()) => (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "ok",
-                    "hand_id": hand_id,
-                    "instance_id": id,
-                    "config": config,
-                })),
-            ),
-            Err(e) => (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("{e}")})),
-            ),
-        },
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({"error": format!("No active instance for hand: {hand_id}. Activate the hand first.")}),
-            ),
-        ),
-    }
-}
-
-/// GET /api/hands/instances/{id}/stats — Get dashboard stats for a hand instance.
-pub async fn hand_stats(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    let instance = match state.kernel.hand_registry.get_instance(id) {
-        Some(i) => i,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Instance not found"})),
-            );
-        }
-    };
-
-    let def = match state.kernel.hand_registry.get_definition(&instance.hand_id) {
-        Some(d) => d,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Hand definition not found"})),
-            );
-        }
-    };
-
-    let agent_id = match instance.agent_id {
-        Some(aid) => aid,
-        None => {
-            return (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "instance_id": id,
-                    "hand_id": instance.hand_id,
-                    "metrics": {},
-                })),
-            );
-        }
-    };
-
-    // Read dashboard metrics from shared structured memory (memory_store uses shared namespace)
-    let shared_id = opencarrier_kernel::kernel::shared_memory_agent_id();
-    let mut metrics = serde_json::Map::new();
-    for metric in &def.dashboard.metrics {
-        // Try shared memory first (where memory_store tool writes), fall back to agent-specific
-        let value = state
-            .kernel
-            .memory
-            .structured_get(shared_id, &metric.memory_key)
-            .ok()
-            .flatten()
-            .or_else(|| {
-                state
-                    .kernel
-                    .memory
-                    .structured_get(agent_id, &metric.memory_key)
-                    .ok()
-                    .flatten()
-            })
-            .unwrap_or(serde_json::Value::Null);
-        metrics.insert(
-            metric.label.clone(),
-            serde_json::json!({
-                "value": value,
-                "format": metric.format,
-            }),
-        );
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "instance_id": id,
-            "hand_id": instance.hand_id,
-            "status": format!("{}", instance.status),
-            "agent_id": agent_id.to_string(),
-            "metrics": metrics,
-        })),
-    )
-}
-
-/// GET /api/hands/instances/{id}/browser — Get live browser state for a hand instance.
-pub async fn hand_instance_browser(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    // 1. Look up instance
-    let instance = match state.kernel.hand_registry.get_instance(id) {
-        Some(i) => i,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Instance not found"})),
-            );
-        }
-    };
-
-    // 2. Get agent_id
-    let agent_id = match instance.agent_id {
-        Some(aid) => aid,
-        None => {
-            return (StatusCode::OK, Json(serde_json::json!({"active": false})));
-        }
-    };
-
-    let agent_id_str = agent_id.to_string();
-
-    // 3. Check if a browser session exists (without creating one)
-    if !state.kernel.browser_ctx.has_session(&agent_id_str) {
-        return (StatusCode::OK, Json(serde_json::json!({"active": false})));
-    }
-
-    // 4. Send ReadPage command to get page info
-    let mut url = String::new();
-    let mut title = String::new();
-    let mut content = String::new();
-
-    match state
-        .kernel
-        .browser_ctx
-        .send_command(
-            &agent_id_str,
-            opencarrier_runtime::browser::BrowserCommand::ReadPage,
-        )
-        .await
-    {
-        Ok(resp) if resp.success => {
-            if let Some(data) = &resp.data {
-                url = data["url"].as_str().unwrap_or("").to_string();
-                title = data["title"].as_str().unwrap_or("").to_string();
-                content = data["content"].as_str().unwrap_or("").to_string();
-                // Truncate content to avoid huge payloads (UTF-8 safe)
-                if content.len() > 2000 {
-                    content = format!(
-                        "{}... (truncated)",
-                        opencarrier_types::truncate_str(&content, 2000)
-                    );
-                }
-            }
-        }
-        Ok(_) => {}  // Non-success: leave defaults
-        Err(_) => {} // Error: leave defaults
-    }
-
-    // 5. Send Screenshot command to get visual state
-    let mut screenshot_base64 = String::new();
-
-    match state
-        .kernel
-        .browser_ctx
-        .send_command(
-            &agent_id_str,
-            opencarrier_runtime::browser::BrowserCommand::Screenshot,
-        )
-        .await
-    {
-        Ok(resp) if resp.success => {
-            if let Some(data) = &resp.data {
-                screenshot_base64 = data["image_base64"].as_str().unwrap_or("").to_string();
-            }
-        }
-        Ok(_) => {}
-        Err(_) => {}
-    }
-
-    // 6. Return combined state
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "active": true,
-            "url": url,
-            "title": title,
-            "content": content,
-            "screenshot_base64": screenshot_base64,
-        })),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -5066,33 +2050,6 @@ fn classify_audit_level(action: &str) -> &'static str {
     } else {
         "info"
     }
-}
-
-// ---------------------------------------------------------------------------
-// Peer endpoints
-// ---------------------------------------------------------------------------
-
-/// GET /api/peers — List known OFP peers.
-/// P2P disabled - wire crate removed.
-pub async fn list_peers(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(serde_json::json!({
-        "peers": [],
-        "total": 0,
-        "message": "P2P networking disabled (wire crate removed)"
-    }))
-}
-
-/// GET /api/network/status — OFP network status summary.
-pub async fn network_status(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
-    // P2P disabled - wire crate removed
-    Json(serde_json::json!({
-        "enabled": false,
-        "node_id": "",
-        "listen_address": "",
-        "connected_peers": 0,
-        "total_peers": 0,
-        "message": "P2P networking disabled (wire crate removed)",
-    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -5569,48 +2526,6 @@ pub async fn find_session_by_label(
 }
 
 // ---------------------------------------------------------------------------
-// Trigger update endpoint
-// ---------------------------------------------------------------------------
-
-/// PUT /api/triggers/:id — Update a trigger (enable/disable toggle).
-pub async fn update_trigger(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let trigger_id = TriggerId(match id.parse() {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid trigger ID"})),
-            );
-        }
-    });
-
-    if let Some(enabled) = req.get("enabled").and_then(|v| v.as_bool()) {
-        if state.kernel.set_trigger_enabled(trigger_id, enabled) {
-            (
-                StatusCode::OK,
-                Json(
-                    serde_json::json!({"status": "updated", "trigger_id": id, "enabled": enabled}),
-                ),
-            )
-        } else {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Trigger not found"})),
-            )
-        }
-    } else {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing 'enabled' field"})),
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Agent update endpoint
 // ---------------------------------------------------------------------------
 
@@ -5749,10 +2664,6 @@ pub async fn patch_agent(
 }
 
 // ---------------------------------------------------------------------------
-// Migration endpoint
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Security dashboard endpoint
 // ---------------------------------------------------------------------------
 
@@ -5824,36 +2735,6 @@ pub async fn security_status(State(state): State<Arc<AppState>>) -> impl IntoRes
         "secret_zeroization": true,
         "total_features": 15
     }))
-}
-
-/// GET /api/migrate/detect — Auto-detect OpenClaw installation.
-/// Migrate crate removed - returns disabled status.
-pub async fn migrate_detect() -> impl IntoResponse {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(serde_json::json!({
-            "error": "Migration feature disabled (migrate crate removed)",
-            "detected": false,
-        })),
-    )
-}
-
-/// POST /api/migrate/scan — Scan a specific directory for OpenClaw workspace.
-/// Migrate crate removed - returns disabled status.
-pub async fn migrate_scan(_req: Json<MigrateScanRequest>) -> impl IntoResponse {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(serde_json::json!({"error": "Migration feature disabled (migrate crate removed)"})),
-    )
-}
-
-/// POST /api/migrate — Run migration from another agent framework.
-/// Migrate crate removed - returns disabled status.
-pub async fn run_migrate(_req: Json<MigrateRequest>) -> impl IntoResponse {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(serde_json::json!({"error": "Migration feature disabled (migrate crate removed)"})),
-    )
 }
 
 // ── Model Catalog Endpoints ─────────────────────────────────────────
@@ -6227,330 +3108,6 @@ pub async fn remove_custom_model(
         StatusCode::OK,
         Json(serde_json::json!({"status": "removed"})),
     )
-}
-
-// ── A2A (Agent-to-Agent) Protocol Endpoints ─────────────────────────
-
-/// GET /.well-known/agent.json — A2A Agent Card for the default agent.
-pub async fn a2a_agent_card(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agents = state.kernel.registry.list();
-    let base_url = format!("http://{}", state.kernel.config.api_listen);
-
-    if let Some(first) = agents.first() {
-        let card = opencarrier_runtime::a2a::build_agent_card(&first.manifest, &base_url);
-        (
-            StatusCode::OK,
-            Json(serde_json::to_value(&card).unwrap_or_default()),
-        )
-    } else {
-        let card = serde_json::json!({
-            "name": "opencarrier",
-            "description": "OpenCarrier Agent OS — no agents spawned yet",
-            "url": format!("{base_url}/a2a"),
-            "version": "0.1.0",
-            "capabilities": { "streaming": true },
-            "skills": [],
-            "defaultInputModes": ["text"],
-            "defaultOutputModes": ["text"],
-        });
-        (StatusCode::OK, Json(card))
-    }
-}
-
-/// GET /a2a/agents — List all A2A agent cards.
-pub async fn a2a_list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agents = state.kernel.registry.list();
-    let base_url = format!("http://{}", state.kernel.config.api_listen);
-
-    let cards: Vec<serde_json::Value> = agents
-        .iter()
-        .map(|entry| {
-            let card = opencarrier_runtime::a2a::build_agent_card(&entry.manifest, &base_url);
-            serde_json::to_value(&card).unwrap_or_default()
-        })
-        .collect();
-
-    let total = cards.len();
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "agents": cards,
-            "total": total,
-        })),
-    )
-}
-
-/// POST /a2a/tasks/send — Submit a task to an agent via A2A.
-pub async fn a2a_send_task(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    // Extract message text from A2A format
-    let message_text = request["params"]["message"]["parts"]
-        .as_array()
-        .and_then(|parts| {
-            parts.iter().find_map(|p| {
-                if p["type"].as_str() == Some("text") {
-                    p["text"].as_str().map(String::from)
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap_or_else(|| "No message provided".to_string());
-
-    // Find target agent (use first available or specified)
-    let agents = state.kernel.registry.list();
-    if agents.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "No agents available"})),
-        );
-    }
-
-    let agent = &agents[0];
-    let task_id = uuid::Uuid::new_v4().to_string();
-    let session_id = request["params"]["sessionId"].as_str().map(String::from);
-
-    // Create the task in the store as Working
-    let task = opencarrier_runtime::a2a::A2aTask {
-        id: task_id.clone(),
-        session_id: session_id.clone(),
-        status: opencarrier_runtime::a2a::A2aTaskStatus::Working.into(),
-        messages: vec![opencarrier_runtime::a2a::A2aMessage {
-            role: "user".to_string(),
-            parts: vec![opencarrier_runtime::a2a::A2aPart::Text {
-                text: message_text.clone(),
-            }],
-        }],
-        artifacts: vec![],
-    };
-    state.kernel.a2a_task_store.insert(task);
-
-    // Send message to agent
-    match state.kernel.send_message(agent.id, &message_text).await {
-        Ok(result) => {
-            let response_msg = opencarrier_runtime::a2a::A2aMessage {
-                role: "agent".to_string(),
-                parts: vec![opencarrier_runtime::a2a::A2aPart::Text {
-                    text: result.response,
-                }],
-            };
-            state
-                .kernel
-                .a2a_task_store
-                .complete(&task_id, response_msg, vec![]);
-            match state.kernel.a2a_task_store.get(&task_id) {
-                Some(completed_task) => (
-                    StatusCode::OK,
-                    Json(serde_json::to_value(&completed_task).unwrap_or_default()),
-                ),
-                None => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Task disappeared after completion"})),
-                ),
-            }
-        }
-        Err(e) => {
-            let error_msg = opencarrier_runtime::a2a::A2aMessage {
-                role: "agent".to_string(),
-                parts: vec![opencarrier_runtime::a2a::A2aPart::Text {
-                    text: format!("Error: {e}"),
-                }],
-            };
-            state.kernel.a2a_task_store.fail(&task_id, error_msg);
-            match state.kernel.a2a_task_store.get(&task_id) {
-                Some(failed_task) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::to_value(&failed_task).unwrap_or_default()),
-                ),
-                None => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("Agent error: {e}")})),
-                ),
-            }
-        }
-    }
-}
-
-/// GET /a2a/tasks/{id} — Get task status from the task store.
-pub async fn a2a_get_task(
-    State(state): State<Arc<AppState>>,
-    Path(task_id): Path<String>,
-) -> impl IntoResponse {
-    match state.kernel.a2a_task_store.get(&task_id) {
-        Some(task) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&task).unwrap_or_default()),
-        ),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Task '{}' not found", task_id)})),
-        ),
-    }
-}
-
-/// POST /a2a/tasks/{id}/cancel — Cancel a tracked task.
-pub async fn a2a_cancel_task(
-    State(state): State<Arc<AppState>>,
-    Path(task_id): Path<String>,
-) -> impl IntoResponse {
-    if state.kernel.a2a_task_store.cancel(&task_id) {
-        match state.kernel.a2a_task_store.get(&task_id) {
-            Some(task) => (
-                StatusCode::OK,
-                Json(serde_json::to_value(&task).unwrap_or_default()),
-            ),
-            None => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Task disappeared after cancellation"})),
-            ),
-        }
-    } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Task '{}' not found", task_id)})),
-        )
-    }
-}
-
-// ── A2A Management Endpoints (outbound) ─────────────────────────────────
-
-/// GET /api/a2a/agents — List discovered external A2A agents.
-pub async fn a2a_list_external_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agents = state
-        .kernel
-        .a2a_external_agents
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let items: Vec<serde_json::Value> = agents
-        .iter()
-        .map(|(_, card)| {
-            serde_json::json!({
-                "name": card.name,
-                "url": card.url,
-                "description": card.description,
-                "skills": card.skills,
-                "version": card.version,
-            })
-        })
-        .collect();
-    Json(serde_json::json!({"agents": items, "total": items.len()}))
-}
-
-/// POST /api/a2a/discover — Discover a new external A2A agent by URL.
-pub async fn a2a_discover_external(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let url = match body["url"].as_str() {
-        Some(u) => u.to_string(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'url' field"})),
-            )
-        }
-    };
-
-    let client = opencarrier_runtime::a2a::A2aClient::new();
-    match client.discover(&url).await {
-        Ok(card) => {
-            let card_json = serde_json::to_value(&card).unwrap_or_default();
-            // Store in kernel's external agents list
-            {
-                let mut agents = state
-                    .kernel
-                    .a2a_external_agents
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                // Update or add
-                if let Some(existing) = agents.iter_mut().find(|(u, _)| u == &url) {
-                    existing.1 = card;
-                } else {
-                    agents.push((url.clone(), card));
-                }
-            }
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "url": url,
-                    "agent": card_json,
-                })),
-            )
-        }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
-
-/// POST /api/a2a/send — Send a task to an external A2A agent.
-pub async fn a2a_send_external(
-    State(_state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let url = match body["url"].as_str() {
-        Some(u) => u.to_string(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'url' field"})),
-            )
-        }
-    };
-    let message = match body["message"].as_str() {
-        Some(m) => m.to_string(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'message' field"})),
-            )
-        }
-    };
-    let session_id = body["session_id"].as_str();
-
-    let client = opencarrier_runtime::a2a::A2aClient::new();
-    match client.send_task(&url, &message, session_id).await {
-        Ok(task) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&task).unwrap_or_default()),
-        ),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
-
-/// GET /api/a2a/tasks/{id}/status — Get task status from an external A2A agent.
-pub async fn a2a_external_task_status(
-    State(_state): State<Arc<AppState>>,
-    Path(task_id): Path<String>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> impl IntoResponse {
-    let url = match params.get("url") {
-        Some(u) => u.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'url' query parameter"})),
-            )
-        }
-    };
-
-    let client = opencarrier_runtime::a2a::A2aClient::new();
-    match client.get_task(&url, &task_id).await {
-        Ok(task) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&task).unwrap_or_default()),
-        ),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
 }
 
 // ── MCP HTTP Endpoint ───────────────────────────────────────────────────
@@ -7167,6 +3724,51 @@ pub async fn set_agent_mcp_servers(
 
 // ── Provider Key Management Endpoints ──────────────────────────────────
 
+/// Write a key=value line to a secrets.env file.
+/// Creates the file if it doesn't exist; updates the value if the key already exists.
+fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<(), String> {
+    let existing = if path.exists() {
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read secrets.env: {e}"))?
+    } else {
+        String::new()
+    };
+    let mut lines: Vec<String> = existing.lines().map(|l| l.to_string()).collect();
+    let pattern = format!("{key}=");
+    let mut found = false;
+    for line in &mut lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with(&pattern) && !trimmed.starts_with('#') {
+            *line = format!("{key}={value}");
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        lines.push(format!("{key}={value}"));
+    }
+    let content = lines.join("\n");
+    std::fs::write(path, content).map_err(|e| format!("Failed to write secrets.env: {e}"))
+}
+
+/// Remove a key=value line from a secrets.env file.
+fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let existing = std::fs::read_to_string(path).map_err(|e| format!("Failed to read secrets.env: {e}"))?;
+    let pattern = format!("{key}=");
+    let lines: Vec<String> = existing
+        .lines()
+        .filter(|l| {
+            let trimmed = l.trim();
+            !trimmed.starts_with(&pattern) || trimmed.starts_with('#')
+        })
+        .map(|l| l.to_string())
+        .collect();
+    let content = lines.join("\n");
+    std::fs::write(path, content).map_err(|e| format!("Failed to write secrets.env: {e}"))
+}
+
 /// POST /api/providers/{name}/key — Save an API key for a provider.
 ///
 /// SECURITY: Writes to `~/.opencarrier/secrets.env`, sets env var in process,
@@ -7202,10 +3804,7 @@ pub async fn set_provider_key(
             })
     };
 
-    // Store in vault (best-effort — no-op if vault not initialized)
-    state.kernel.store_credential(&env_var, &key);
-
-    // Write to secrets.env file (dual-write for backward compat / vault corruption recovery)
+    // Write to secrets.env file
     let secrets_path = state.kernel.config.home_dir.join("secrets.env");
     if let Err(e) = write_secret_env(&secrets_path, &env_var, &key) {
         return (
@@ -7372,9 +3971,6 @@ pub async fn delete_provider_key(
             Json(serde_json::json!({"error": "Provider does not require an API key"})),
         );
     }
-
-    // Remove from vault (best-effort)
-    state.kernel.remove_credential(&env_var);
 
     // Remove from secrets.env
     let secrets_path = state.kernel.config.home_dir.join("secrets.env");
@@ -7694,778 +4290,6 @@ pub async fn create_skill(
     )
 }
 
-// ── Helper functions for secrets.env management ────────────────────────
-
-/// Write or update a key in the secrets.env file.
-/// File format: one `KEY=value` per line. Existing keys are overwritten.
-fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<(), std::io::Error> {
-    let mut lines: Vec<String> = if path.exists() {
-        std::fs::read_to_string(path)?
-            .lines()
-            .map(|l| l.to_string())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    // Remove existing line for this key
-    lines.retain(|l| !l.starts_with(&format!("{key}=")));
-
-    // Add new line
-    lines.push(format!("{key}={value}"));
-
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(path, lines.join("\n") + "\n")?;
-
-    // SECURITY: Restrict file permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-
-    Ok(())
-}
-
-/// Remove a key from the secrets.env file.
-fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(), std::io::Error> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let lines: Vec<String> = std::fs::read_to_string(path)?
-        .lines()
-        .filter(|l| !l.starts_with(&format!("{key}=")))
-        .map(|l| l.to_string())
-        .collect();
-
-    std::fs::write(path, lines.join("\n") + "\n")?;
-
-    Ok(())
-}
-
-// ── Config.toml channel management helpers ──────────────────────────
-
-/// Upsert a `[channels.<name>]` section in config.toml with the given non-secret fields.
-fn upsert_channel_config(
-    config_path: &std::path::Path,
-    channel_name: &str,
-    fields: &HashMap<String, (String, FieldType)>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let content = if config_path.exists() {
-        std::fs::read_to_string(config_path)?
-    } else {
-        String::new()
-    };
-
-    let mut doc: toml::Value = if content.trim().is_empty() {
-        toml::Value::Table(toml::map::Map::new())
-    } else {
-        toml::from_str(&content)?
-    };
-
-    let root = doc.as_table_mut().ok_or("Config is not a TOML table")?;
-
-    // Ensure [channels] table exists
-    if !root.contains_key("channels") {
-        root.insert(
-            "channels".to_string(),
-            toml::Value::Table(toml::map::Map::new()),
-        );
-    }
-    let channels_table = root
-        .get_mut("channels")
-        .and_then(|v| v.as_table_mut())
-        .ok_or("channels is not a table")?;
-
-    // Build channel sub-table with correct TOML types
-    let mut ch_table = toml::map::Map::new();
-    for (k, (v, ft)) in fields {
-        let toml_val = match ft {
-            FieldType::Number => {
-                if let Ok(n) = v.parse::<i64>() {
-                    toml::Value::Integer(n)
-                } else {
-                    toml::Value::String(v.clone())
-                }
-            }
-            FieldType::List => {
-                // Always store list items as strings so that numeric IDs
-                // (e.g. Discord guild snowflakes, Telegram user IDs) are
-                // deserialized correctly into Vec<String> config fields.
-                let items: Vec<toml::Value> = v
-                    .split(',')
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| toml::Value::String(s.to_string()))
-                    .collect();
-                toml::Value::Array(items)
-            }
-            _ => toml::Value::String(v.clone()),
-        };
-        ch_table.insert(k.clone(), toml_val);
-    }
-    channels_table.insert(channel_name.to_string(), toml::Value::Table(ch_table));
-
-    // Ensure parent directory exists
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
-    Ok(())
-}
-
-/// Remove a `[channels.<name>]` section from config.toml.
-fn remove_channel_config(
-    config_path: &std::path::Path,
-    channel_name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !config_path.exists() {
-        return Ok(());
-    }
-
-    let content = std::fs::read_to_string(config_path)?;
-    if content.trim().is_empty() {
-        return Ok(());
-    }
-
-    let mut doc: toml::Value = toml::from_str(&content)?;
-
-    if let Some(channels) = doc
-        .as_table_mut()
-        .and_then(|r| r.get_mut("channels"))
-        .and_then(|c| c.as_table_mut())
-    {
-        channels.remove(channel_name);
-    }
-
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Integration management endpoints
-// ---------------------------------------------------------------------------
-
-/// GET /api/integrations — List installed integrations with status.
-pub async fn list_integrations(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let registry = state
-        .kernel
-        .extension_registry
-        .read()
-        .unwrap_or_else(|e| e.into_inner());
-    let health = &state.kernel.extension_health;
-
-    let mut entries = Vec::new();
-    for info in registry.list_all_info() {
-        let h = health.get_health(&info.template.id);
-        let status = match &info.installed {
-            Some(inst) if !inst.enabled => "disabled",
-            Some(_) => match h.as_ref().map(|h| &h.status) {
-                Some(opencarrier_extensions::IntegrationStatus::Ready) => "ready",
-                Some(opencarrier_extensions::IntegrationStatus::Error(_)) => "error",
-                _ => "installed",
-            },
-            None => continue, // Only show installed
-        };
-        entries.push(serde_json::json!({
-            "id": info.template.id,
-            "name": info.template.name,
-            "icon": info.template.icon,
-            "category": info.template.category.to_string(),
-            "status": status,
-            "tool_count": h.as_ref().map(|h| h.tool_count).unwrap_or(0),
-            "installed_at": info.installed.as_ref().map(|i| i.installed_at.to_rfc3339()),
-        }));
-    }
-
-    Json(serde_json::json!({
-        "installed": entries,
-        "count": entries.len(),
-    }))
-}
-
-/// GET /api/integrations/available — List all available templates.
-pub async fn list_available_integrations(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let registry = state
-        .kernel
-        .extension_registry
-        .read()
-        .unwrap_or_else(|e| e.into_inner());
-    let templates: Vec<serde_json::Value> = registry
-        .list_templates()
-        .iter()
-        .map(|t| {
-            let installed = registry.is_installed(&t.id);
-            serde_json::json!({
-                "id": t.id,
-                "name": t.name,
-                "description": t.description,
-                "icon": t.icon,
-                "category": t.category.to_string(),
-                "installed": installed,
-                "tags": t.tags,
-                "required_env": t.required_env.iter().map(|e| serde_json::json!({
-                    "name": e.name,
-                    "label": e.label,
-                    "help": e.help,
-                    "is_secret": e.is_secret,
-                    "get_url": e.get_url,
-                })).collect::<Vec<_>>(),
-                "has_oauth": t.oauth.is_some(),
-                "setup_instructions": t.setup_instructions,
-            })
-        })
-        .collect();
-
-    Json(serde_json::json!({
-        "integrations": templates,
-        "count": templates.len(),
-    }))
-}
-
-/// POST /api/integrations/add — Install an integration.
-pub async fn add_integration(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let id = match req.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'id' field"})),
-            );
-        }
-    };
-
-    // Scope the write lock so it's dropped before any .await
-    let install_err = {
-        let mut registry = state
-            .kernel
-            .extension_registry
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-
-        if registry.is_installed(&id) {
-            Some((
-                StatusCode::CONFLICT,
-                format!("Integration '{}' already installed", id),
-            ))
-        } else if registry.get_template(&id).is_none() {
-            Some((
-                StatusCode::NOT_FOUND,
-                format!("Unknown integration: '{}'", id),
-            ))
-        } else {
-            let entry = opencarrier_extensions::InstalledIntegration {
-                id: id.clone(),
-                installed_at: chrono::Utc::now(),
-                enabled: true,
-                oauth_provider: None,
-                config: std::collections::HashMap::new(),
-            };
-            match registry.install(entry) {
-                Ok(_) => None,
-                Err(e) => Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-            }
-        }
-    }; // write lock dropped here
-
-    if let Some((status, error)) = install_err {
-        return (status, Json(serde_json::json!({"error": error})));
-    }
-
-    state.kernel.extension_health.register(&id);
-
-    // Hot-connect the new MCP server
-    let connected = state.kernel.reload_extension_mcps().await.unwrap_or(0);
-
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "id": id,
-            "status": "installed",
-            "connected": connected > 0,
-            "message": format!("Integration '{}' installed", id),
-        })),
-    )
-}
-
-/// DELETE /api/integrations/:id — Remove an integration.
-pub async fn remove_integration(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    // Scope the write lock
-    let uninstall_err = {
-        let mut registry = state
-            .kernel
-            .extension_registry
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        registry.uninstall(&id).err()
-    };
-
-    if let Some(e) = uninstall_err {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": e.to_string()})),
-        );
-    }
-
-    state.kernel.extension_health.unregister(&id);
-
-    // Hot-disconnect the removed MCP server
-    let _ = state.kernel.reload_extension_mcps().await;
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "id": id,
-            "status": "removed",
-        })),
-    )
-}
-
-/// POST /api/integrations/:id/reconnect — Reconnect an MCP server.
-pub async fn reconnect_integration(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let is_installed = {
-        let registry = state
-            .kernel
-            .extension_registry
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        registry.is_installed(&id)
-    };
-
-    if !is_installed {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Integration '{}' not installed", id)})),
-        );
-    }
-
-    match state.kernel.reconnect_extension_mcp(&id).await {
-        Ok(tool_count) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "id": id,
-                "status": "connected",
-                "tool_count": tool_count,
-            })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "id": id,
-                "status": "error",
-                "error": e,
-            })),
-        ),
-    }
-}
-
-/// GET /api/integrations/health — Health status for all integrations.
-pub async fn integrations_health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let health_entries = state.kernel.extension_health.all_health();
-    let entries: Vec<serde_json::Value> = health_entries
-        .iter()
-        .map(|h| {
-            serde_json::json!({
-                "id": h.id,
-                "status": h.status.to_string(),
-                "tool_count": h.tool_count,
-                "last_ok": h.last_ok.map(|t| t.to_rfc3339()),
-                "last_error": h.last_error,
-                "consecutive_failures": h.consecutive_failures,
-                "reconnecting": h.reconnecting,
-                "reconnect_attempts": h.reconnect_attempts,
-                "connected_since": h.connected_since.map(|t| t.to_rfc3339()),
-            })
-        })
-        .collect();
-
-    Json(serde_json::json!({
-        "health": entries,
-        "count": entries.len(),
-    }))
-}
-
-/// POST /api/integrations/reload — Hot-reload integration configs and reconnect MCP.
-pub async fn reload_integrations(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.kernel.reload_extension_mcps().await {
-        Ok(connected) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "reloaded",
-                "new_connections": connected,
-            })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Scheduled Jobs (cron) endpoints
-// ---------------------------------------------------------------------------
-
-/// The well-known shared-memory agent ID used for cross-agent KV storage.
-/// Must match the value in `opencarrier-kernel/src/kernel.rs::shared_memory_agent_id()`.
-fn schedule_shared_agent_id() -> AgentId {
-    AgentId(uuid::Uuid::from_bytes([
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x01,
-    ]))
-}
-
-const SCHEDULES_KEY: &str = "__opencarrier_schedules";
-
-/// GET /api/schedules — List all cron-based scheduled jobs.
-pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agent_id = schedule_shared_agent_id();
-    match state.kernel.memory.structured_get(agent_id, SCHEDULES_KEY) {
-        Ok(Some(serde_json::Value::Array(arr))) => {
-            let total = arr.len();
-            Json(serde_json::json!({"schedules": arr, "total": total}))
-        }
-        Ok(_) => Json(serde_json::json!({"schedules": [], "total": 0})),
-        Err(e) => {
-            tracing::warn!("Failed to load schedules: {e}");
-            Json(serde_json::json!({"schedules": [], "total": 0, "error": format!("{e}")}))
-        }
-    }
-}
-
-/// POST /api/schedules — Create a new cron-based scheduled job.
-pub async fn create_schedule(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let name = match req["name"].as_str() {
-        Some(n) if !n.is_empty() => n.to_string(),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'name' field"})),
-            );
-        }
-    };
-
-    let cron = match req["cron"].as_str() {
-        Some(c) if !c.is_empty() => c.to_string(),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'cron' field"})),
-            );
-        }
-    };
-
-    // Validate cron expression: must be 5 space-separated fields
-    let cron_parts: Vec<&str> = cron.split_whitespace().collect();
-    if cron_parts.len() != 5 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Invalid cron expression: must have 5 fields (min hour dom mon dow)"}),
-            ),
-        );
-    }
-
-    let agent_id_str = req["agent_id"].as_str().unwrap_or("").to_string();
-    if agent_id_str.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing required field: agent_id"})),
-        );
-    }
-    // Validate agent exists (UUID or name lookup)
-    let agent_exists = if let Ok(aid) = agent_id_str.parse::<AgentId>() {
-        state.kernel.registry.get(aid).is_some()
-    } else {
-        state
-            .kernel
-            .registry
-            .list()
-            .iter()
-            .any(|a| a.name == agent_id_str)
-    };
-    if !agent_exists {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Agent not found: {agent_id_str}")})),
-        );
-    }
-    let message = req["message"].as_str().unwrap_or("").to_string();
-    let enabled = req.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-
-    let schedule_id = uuid::Uuid::new_v4().to_string();
-    let entry = serde_json::json!({
-        "id": schedule_id,
-        "name": name,
-        "cron": cron,
-        "agent_id": agent_id_str,
-        "message": message,
-        "enabled": enabled,
-        "created_at": chrono::Utc::now().to_rfc3339(),
-        "last_run": null,
-        "run_count": 0,
-    });
-
-    let shared_id = schedule_shared_agent_id();
-    let mut schedules: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-
-    schedules.push(entry.clone());
-    if let Err(e) = state.kernel.memory.structured_set(
-        shared_id,
-        SCHEDULES_KEY,
-        serde_json::Value::Array(schedules),
-    ) {
-        tracing::warn!("Failed to save schedule: {e}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to save schedule: {e}")})),
-        );
-    }
-
-    (StatusCode::CREATED, Json(entry))
-}
-
-/// PUT /api/schedules/:id — Update a scheduled job (toggle enabled, edit fields).
-pub async fn update_schedule(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let shared_id = schedule_shared_agent_id();
-    let mut schedules: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-
-    let mut found = false;
-    for s in schedules.iter_mut() {
-        if s["id"].as_str() == Some(&id) {
-            found = true;
-            if let Some(enabled) = req.get("enabled").and_then(|v| v.as_bool()) {
-                s["enabled"] = serde_json::Value::Bool(enabled);
-            }
-            if let Some(name) = req.get("name").and_then(|v| v.as_str()) {
-                s["name"] = serde_json::Value::String(name.to_string());
-            }
-            if let Some(cron) = req.get("cron").and_then(|v| v.as_str()) {
-                let cron_parts: Vec<&str> = cron.split_whitespace().collect();
-                if cron_parts.len() != 5 {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({"error": "Invalid cron expression"})),
-                    );
-                }
-                s["cron"] = serde_json::Value::String(cron.to_string());
-            }
-            if let Some(agent_id) = req.get("agent_id").and_then(|v| v.as_str()) {
-                s["agent_id"] = serde_json::Value::String(agent_id.to_string());
-            }
-            if let Some(message) = req.get("message").and_then(|v| v.as_str()) {
-                s["message"] = serde_json::Value::String(message.to_string());
-            }
-            break;
-        }
-    }
-
-    if !found {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Schedule not found"})),
-        );
-    }
-
-    if let Err(e) = state.kernel.memory.structured_set(
-        shared_id,
-        SCHEDULES_KEY,
-        serde_json::Value::Array(schedules),
-    ) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to update schedule: {e}")})),
-        );
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "updated", "schedule_id": id})),
-    )
-}
-
-/// DELETE /api/schedules/:id — Remove a scheduled job.
-pub async fn delete_schedule(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let shared_id = schedule_shared_agent_id();
-    let mut schedules: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-
-    let before = schedules.len();
-    schedules.retain(|s| s["id"].as_str() != Some(&id));
-
-    if schedules.len() == before {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Schedule not found"})),
-        );
-    }
-
-    if let Err(e) = state.kernel.memory.structured_set(
-        shared_id,
-        SCHEDULES_KEY,
-        serde_json::Value::Array(schedules),
-    ) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to delete schedule: {e}")})),
-        );
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "removed", "schedule_id": id})),
-    )
-}
-
-/// POST /api/schedules/:id/run — Manually run a scheduled job now.
-pub async fn run_schedule(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let shared_id = schedule_shared_agent_id();
-    let schedules: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-
-    let schedule = match schedules.iter().find(|s| s["id"].as_str() == Some(&id)) {
-        Some(s) => s.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Schedule not found"})),
-            );
-        }
-    };
-
-    let agent_id_str = schedule["agent_id"].as_str().unwrap_or("");
-    let message = schedule["message"]
-        .as_str()
-        .unwrap_or("Scheduled task triggered manually.");
-    let name = schedule["name"].as_str().unwrap_or("(unnamed)");
-
-    // Find the target agent — require explicit agent_id, no silent fallback
-    let target_agent = if !agent_id_str.is_empty() {
-        if let Ok(aid) = agent_id_str.parse::<AgentId>() {
-            if state.kernel.registry.get(aid).is_some() {
-                Some(aid)
-            } else {
-                None
-            }
-        } else {
-            state
-                .kernel
-                .registry
-                .list()
-                .iter()
-                .find(|a| a.name == agent_id_str)
-                .map(|a| a.id)
-        }
-    } else {
-        None
-    };
-
-    let target_agent = match target_agent {
-        Some(a) => a,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(
-                    serde_json::json!({"error": "No target agent found. Specify an agent_id or start an agent first."}),
-                ),
-            );
-        }
-    };
-
-    let run_message = if message.is_empty() {
-        format!("[Scheduled task '{}' triggered manually]", name)
-    } else {
-        message.to_string()
-    };
-
-    // Update last_run and run_count
-    let mut schedules_updated: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-    for s in schedules_updated.iter_mut() {
-        if s["id"].as_str() == Some(&id) {
-            s["last_run"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
-            let count = s["run_count"].as_u64().unwrap_or(0);
-            s["run_count"] = serde_json::json!(count + 1);
-            break;
-        }
-    }
-    let _ = state.kernel.memory.structured_set(
-        shared_id,
-        SCHEDULES_KEY,
-        serde_json::Value::Array(schedules_updated),
-    );
-
-    let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
-    match state
-        .kernel
-        .send_message_with_handle(target_agent, &run_message, Some(kernel_handle), None, None)
-        .await
-    {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "completed",
-                "schedule_id": id,
-                "agent_id": target_agent.to_string(),
-                "response": result.response,
-            })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "status": "failed",
-                "schedule_id": id,
-                "error": format!("{e}"),
-            })),
-        ),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Agent Identity endpoint
 // ---------------------------------------------------------------------------
@@ -8732,18 +4556,17 @@ pub async fn patch_agent_config(
 
     // Update modality (Brain resolves the actual provider/model at inference time)
     if let Some(ref new_model) = req.model {
-        if !new_model.is_empty() {
-            if state
+        if !new_model.is_empty()
+            && state
                 .kernel
                 .registry
                 .update_modality(agent_id, new_model.clone())
                 .is_err()
-            {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "Agent not found"})),
-                );
-            }
+        {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            );
         }
     }
 
@@ -8848,11 +4671,6 @@ pub async fn clone_agent(
         .kernel
         .registry
         .update_identity(new_id, source.identity.clone());
-
-    // Register in channel router so binding resolution finds the cloned agent
-    if let Some(ref mgr) = *state.bridge_manager.lock().await {
-        mgr.router().register_agent(req.new_name.clone(), new_id);
-    }
 
     (
         StatusCode::CREATED,
@@ -9403,159 +5221,6 @@ pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
 // Execution Approval System — backed by kernel.approval_manager
 // ---------------------------------------------------------------------------
 
-/// GET /api/approvals — List pending approval requests.
-///
-/// Transforms field names to match the dashboard template expectations:
-/// `action_summary` → `action`, `agent_id` → `agent_name`, `requested_at` → `created_at`.
-pub async fn list_approvals(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let pending = state.kernel.approval_manager.list_pending();
-    let total = pending.len();
-
-    // Resolve agent names for display
-    let registry_agents = state.kernel.registry.list();
-
-    let approvals: Vec<serde_json::Value> = pending
-        .into_iter()
-        .map(|a| {
-            let agent_name = registry_agents
-                .iter()
-                .find(|ag| ag.id.to_string() == a.agent_id || ag.name == a.agent_id)
-                .map(|ag| ag.name.as_str())
-                .unwrap_or(&a.agent_id);
-            serde_json::json!({
-                "id": a.id,
-                "agent_id": a.agent_id,
-                "agent_name": agent_name,
-                "tool_name": a.tool_name,
-                "description": a.description,
-                "action_summary": a.action_summary,
-                "action": a.action_summary,
-                "risk_level": a.risk_level,
-                "requested_at": a.requested_at,
-                "created_at": a.requested_at,
-                "timeout_secs": a.timeout_secs,
-                "status": "pending"
-            })
-        })
-        .collect();
-
-    Json(serde_json::json!({"approvals": approvals, "total": total}))
-}
-
-/// POST /api/approvals — Create a manual approval request (for external systems).
-///
-/// Note: Most approval requests are created automatically by the tool_runner
-/// when an agent invokes a tool that requires approval. This endpoint exists
-/// for external integrations that need to inject approval gates.
-#[derive(serde::Deserialize)]
-pub struct CreateApprovalRequest {
-    pub agent_id: String,
-    pub tool_name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub action_summary: String,
-}
-
-pub async fn create_approval(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateApprovalRequest>,
-) -> impl IntoResponse {
-    use opencarrier_types::approval::{ApprovalRequest, RiskLevel};
-
-    let policy = state.kernel.approval_manager.policy();
-    let id = uuid::Uuid::new_v4();
-    let approval_req = ApprovalRequest {
-        id,
-        agent_id: req.agent_id,
-        tool_name: req.tool_name.clone(),
-        description: if req.description.is_empty() {
-            format!("Manual approval request for {}", req.tool_name)
-        } else {
-            req.description
-        },
-        action_summary: if req.action_summary.is_empty() {
-            req.tool_name.clone()
-        } else {
-            req.action_summary
-        },
-        risk_level: RiskLevel::High,
-        requested_at: chrono::Utc::now(),
-        timeout_secs: policy.timeout_secs,
-    };
-
-    // Spawn the request in the background (it will block until resolved or timed out)
-    let kernel = Arc::clone(&state.kernel);
-    tokio::spawn(async move {
-        kernel.approval_manager.request_approval(approval_req).await;
-    });
-
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({"id": id.to_string(), "status": "pending"})),
-    )
-}
-
-/// POST /api/approvals/{id}/approve — Approve a pending request.
-pub async fn approve_request(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let uuid = match uuid::Uuid::parse_str(&id) {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid approval ID"})),
-            );
-        }
-    };
-
-    match state.kernel.approval_manager.resolve(
-        uuid,
-        opencarrier_types::approval::ApprovalDecision::Approved,
-        Some("api".to_string()),
-    ) {
-        Ok(resp) => (
-            StatusCode::OK,
-            Json(
-                serde_json::json!({"id": id, "status": "approved", "decided_at": resp.decided_at.to_rfc3339()}),
-            ),
-        ),
-        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))),
-    }
-}
-
-/// POST /api/approvals/{id}/reject — Reject a pending request.
-pub async fn reject_request(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let uuid = match uuid::Uuid::parse_str(&id) {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid approval ID"})),
-            );
-        }
-    };
-
-    match state.kernel.approval_manager.resolve(
-        uuid,
-        opencarrier_types::approval::ApprovalDecision::Denied,
-        Some("api".to_string()),
-    ) {
-        Ok(resp) => (
-            StatusCode::OK,
-            Json(
-                serde_json::json!({"id": id, "status": "rejected", "decided_at": resp.decided_at.to_rfc3339()}),
-            ),
-        ),
-        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Config Reload endpoint
 // ---------------------------------------------------------------------------
@@ -9611,8 +5276,11 @@ pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoRespo
     let modalities: Vec<String> = state
         .kernel
         .brain_info()
-        .map(|b| b.config().modalities.keys().cloned().collect())
-        .unwrap_or_else(|| vec!["chat".to_string()]);
+        .config()
+        .modalities
+        .keys()
+        .cloned()
+        .collect();
 
     Json(serde_json::json!({
         "sections": {
@@ -9656,33 +5324,6 @@ pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoRespo
                     "enabled": "boolean",
                     "listen_addr": "string",
                     "shared_secret": "string"
-                }
-            },
-            "extensions": {
-                "fields": {
-                    "auto_connect": "boolean",
-                    "health_check_interval_secs": "number"
-                }
-            },
-            "vault": {
-                "fields": {
-                    "path": "string"
-                }
-            },
-            "a2a": {
-                "fields": {
-                    "enabled": "boolean",
-                    "name": "string",
-                    "description": "string",
-                    "url": "string"
-                }
-            },
-            "channels": {
-                "fields": {
-                    "telegram": "object",
-                    "discord": "object",
-                    "slack": "object",
-                    "whatsapp": "object"
                 }
             }
         }
@@ -10220,158 +5861,6 @@ pub async fn remove_binding(
     }
 }
 
-// ─── Device Pairing endpoints ───────────────────────────────────────────
-
-/// POST /api/pairing/request — Create a new pairing request (returns token + QR URI).
-pub async fn pairing_request(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    if !state.kernel.config.pairing.enabled {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
-        )
-            .into_response();
-    }
-    match state.kernel.pairing.create_pairing_request() {
-        Ok(req) => {
-            let qr_uri = format!("opencarrier://pair?token={}", req.token);
-            Json(serde_json::json!({
-                "token": req.token,
-                "qr_uri": qr_uri,
-                "expires_at": req.expires_at.to_rfc3339(),
-            }))
-            .into_response()
-        }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
-        )
-            .into_response(),
-    }
-}
-
-/// POST /api/pairing/complete — Complete pairing with token + device info.
-pub async fn pairing_complete(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    if !state.kernel.config.pairing.enabled {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
-        )
-            .into_response();
-    }
-    let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
-    let display_name = body
-        .get("display_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let platform = body
-        .get("platform")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let push_token = body
-        .get("push_token")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let device_info = opencarrier_kernel::pairing::PairedDevice {
-        device_id: uuid::Uuid::new_v4().to_string(),
-        display_name: display_name.to_string(),
-        platform: platform.to_string(),
-        paired_at: chrono::Utc::now(),
-        last_seen: chrono::Utc::now(),
-        push_token,
-    };
-    match state.kernel.pairing.complete_pairing(token, device_info) {
-        Ok(device) => Json(serde_json::json!({
-            "device_id": device.device_id,
-            "display_name": device.display_name,
-            "platform": device.platform,
-            "paired_at": device.paired_at.to_rfc3339(),
-        }))
-        .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
-        )
-            .into_response(),
-    }
-}
-
-/// GET /api/pairing/devices — List paired devices.
-pub async fn pairing_devices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    if !state.kernel.config.pairing.enabled {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
-        )
-            .into_response();
-    }
-    let devices: Vec<_> = state
-        .kernel
-        .pairing
-        .list_devices()
-        .into_iter()
-        .map(|d| {
-            serde_json::json!({
-                "device_id": d.device_id,
-                "display_name": d.display_name,
-                "platform": d.platform,
-                "paired_at": d.paired_at.to_rfc3339(),
-                "last_seen": d.last_seen.to_rfc3339(),
-            })
-        })
-        .collect();
-    Json(serde_json::json!({"devices": devices})).into_response()
-}
-
-/// DELETE /api/pairing/devices/{id} — Remove a paired device.
-pub async fn pairing_remove_device(
-    State(state): State<Arc<AppState>>,
-    Path(device_id): Path<String>,
-) -> impl IntoResponse {
-    if !state.kernel.config.pairing.enabled {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
-        )
-            .into_response();
-    }
-    match state.kernel.pairing.remove_device(&device_id) {
-        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))).into_response(),
-    }
-}
-
-/// POST /api/pairing/notify — Push a notification to all paired devices.
-pub async fn pairing_notify(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    if !state.kernel.config.pairing.enabled {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
-        )
-            .into_response();
-    }
-    let title = body
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("OpenCarrier");
-    let message = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
-    if message.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "message is required"})),
-        )
-            .into_response();
-    }
-    state.kernel.pairing.notify_devices(title, message).await;
-    Json(serde_json::json!({"ok": true, "notified": state.kernel.pairing.list_devices().len()}))
-        .into_response()
-}
-
 /// GET /api/commands — List available chat commands (for dynamic slash menu).
 pub async fn list_commands(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let mut commands = vec![
@@ -10425,160 +5914,6 @@ fn validate_webhook_token(headers: &axum::http::HeaderMap, token_env: &str) -> b
         return false;
     }
     provided.as_bytes().ct_eq(expected.as_bytes()).into()
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// GitHub Copilot OAuth Device Flow
-// ══════════════════════════════════════════════════════════════════════
-
-/// State for an in-progress device flow.
-struct CopilotFlowState {
-    device_code: String,
-    interval: u64,
-    expires_at: Instant,
-}
-
-/// Active device flows, keyed by poll_id. Auto-expire after the flow's TTL.
-static COPILOT_FLOWS: LazyLock<DashMap<String, CopilotFlowState>> = LazyLock::new(DashMap::new);
-
-/// POST /api/providers/github-copilot/oauth/start
-///
-/// Initiates a GitHub device flow for Copilot authentication.
-/// Returns a user code and verification URI that the user visits in their browser.
-pub async fn copilot_oauth_start() -> impl IntoResponse {
-    // Clean up expired flows first
-    COPILOT_FLOWS.retain(|_, state| state.expires_at > Instant::now());
-
-    match opencarrier_runtime::copilot_oauth::start_device_flow().await {
-        Ok(resp) => {
-            let poll_id = uuid::Uuid::new_v4().to_string();
-
-            COPILOT_FLOWS.insert(
-                poll_id.clone(),
-                CopilotFlowState {
-                    device_code: resp.device_code,
-                    interval: resp.interval,
-                    expires_at: Instant::now() + std::time::Duration::from_secs(resp.expires_in),
-                },
-            );
-
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "user_code": resp.user_code,
-                    "verification_uri": resp.verification_uri,
-                    "poll_id": poll_id,
-                    "expires_in": resp.expires_in,
-                    "interval": resp.interval,
-                })),
-            )
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        ),
-    }
-}
-
-/// GET /api/providers/github-copilot/oauth/poll/{poll_id}
-///
-/// Poll the status of a GitHub device flow.
-/// Returns `pending`, `complete`, `expired`, `denied`, or `error`.
-/// On `complete`, saves the token to secrets.env and sets GITHUB_TOKEN.
-pub async fn copilot_oauth_poll(
-    State(state): State<Arc<AppState>>,
-    Path(poll_id): Path<String>,
-) -> impl IntoResponse {
-    let flow = match COPILOT_FLOWS.get(&poll_id) {
-        Some(f) => f,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"status": "not_found", "error": "Unknown poll_id"})),
-            )
-        }
-    };
-
-    if flow.expires_at <= Instant::now() {
-        drop(flow);
-        COPILOT_FLOWS.remove(&poll_id);
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "expired"})),
-        );
-    }
-
-    let device_code = flow.device_code.clone();
-    drop(flow);
-
-    match opencarrier_runtime::copilot_oauth::poll_device_flow(&device_code).await {
-        opencarrier_runtime::copilot_oauth::DeviceFlowStatus::Pending => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "pending"})),
-        ),
-        opencarrier_runtime::copilot_oauth::DeviceFlowStatus::Complete { access_token } => {
-            // Store in vault (best-effort)
-            state.kernel.store_credential("GITHUB_TOKEN", &access_token);
-
-            // Save to secrets.env (dual-write)
-            let secrets_path = state.kernel.config.home_dir.join("secrets.env");
-            if let Err(e) = write_secret_env(&secrets_path, "GITHUB_TOKEN", &access_token) {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(
-                        serde_json::json!({"status": "error", "error": format!("Failed to save token: {e}")}),
-                    ),
-                );
-            }
-
-            // Set in current process
-            std::env::set_var("GITHUB_TOKEN", access_token.as_str());
-
-            // Refresh auth detection
-            state
-                .kernel
-                .model_catalog
-                .write()
-                .unwrap_or_else(|e| e.into_inner())
-                .detect_auth();
-
-            // Clean up flow state
-            COPILOT_FLOWS.remove(&poll_id);
-
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "complete"})),
-            )
-        }
-        opencarrier_runtime::copilot_oauth::DeviceFlowStatus::SlowDown { new_interval } => {
-            // Update interval
-            if let Some(mut f) = COPILOT_FLOWS.get_mut(&poll_id) {
-                f.interval = new_interval;
-            }
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "pending", "interval": new_interval})),
-            )
-        }
-        opencarrier_runtime::copilot_oauth::DeviceFlowStatus::Expired => {
-            COPILOT_FLOWS.remove(&poll_id);
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "expired"})),
-            )
-        }
-        opencarrier_runtime::copilot_oauth::DeviceFlowStatus::AccessDenied => {
-            COPILOT_FLOWS.remove(&poll_id);
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "denied"})),
-            )
-        }
-        opencarrier_runtime::copilot_oauth::DeviceFlowStatus::Error(e) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "error", "error": e})),
-        ),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -11252,10 +6587,6 @@ pub async fn install_clone(
 
     match state.kernel.spawn_agent(manifest) {
         Ok(id) => {
-            // Register in channel router
-            if let Some(ref mgr) = *state.bridge_manager.lock().await {
-                mgr.router().register_agent(name.clone(), id);
-            }
             tracing::info!("Clone '{}' installed and spawned: {}", name, id);
             (
                 StatusCode::CREATED,
@@ -11890,52 +7221,3 @@ pub async fn clone_verify(
 }
 
 
-#[cfg(test)]
-mod channel_config_tests {
-    use super::*;
-
-    #[test]
-    fn test_is_channel_configured_wecom_none() {
-        let config = opencarrier_types::config::ChannelsConfig::default();
-        assert!(!is_channel_configured(&config, "wecom"));
-    }
-
-    #[test]
-    fn test_is_channel_configured_wecom_some() {
-        let mut config = opencarrier_types::config::ChannelsConfig::default();
-        config.wecom = Some(opencarrier_types::config::WeComConfig {
-            corp_id: "test_corp".to_string(),
-            agent_id: "test_agent".to_string(),
-            secret_env: "WECOM_SECRET".to_string(),
-            webhook_port: 8454,
-            token: Some("token".to_string()),
-            encoding_aes_key: Some("aes_key".to_string()),
-            default_agent: Some("assistant".to_string()),
-            overrides: opencarrier_types::config::ChannelOverrides::default(),
-        });
-        assert!(is_channel_configured(&config, "wecom"));
-    }
-
-    #[test]
-    fn test_wecom_in_channel_registry() {
-        let wecom_meta = CHANNEL_REGISTRY.iter().find(|c| c.name == "wecom");
-        assert!(wecom_meta.is_some());
-        let meta = wecom_meta.unwrap();
-        assert_eq!(meta.display_name, "WeCom");
-        assert_eq!(meta.category, "messaging");
-        assert!(
-            meta.fields
-                .iter()
-                .find(|f| f.key == "corp_id")
-                .unwrap()
-                .required
-        );
-        assert!(
-            meta.fields
-                .iter()
-                .find(|f| f.key == "secret_env")
-                .unwrap()
-                .required
-        );
-    }
-}

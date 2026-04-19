@@ -90,7 +90,6 @@ pub async fn auth(
         || path == "/logo.png"
         || path == "/favicon.ico"
         || (path == "/.well-known/agent.json" && is_get)
-        || (path.starts_with("/a2a/") && is_get)
         || path == "/api/health"
         || path == "/api/health/detail"
         || path == "/api/status"
@@ -109,22 +108,10 @@ pub async fn auth(
         || (path == "/api/budget/agents" && is_get)
         || (path.starts_with("/api/budget/agents/") && is_get)
         || (path == "/api/network/status" && is_get)
-        || (path == "/api/a2a/agents" && is_get)
-        || (path == "/api/approvals" && is_get)
-        || (path.starts_with("/api/approvals/") && is_get)
-        || (path == "/api/channels" && is_get)
-        || (path == "/api/hands" && is_get)
-        || (path == "/api/hands/active" && is_get)
-        || (path.starts_with("/api/hands/") && is_get)
         || (path == "/api/skills" && is_get)
         || (path == "/api/sessions" && is_get)
-        || (path == "/api/integrations" && is_get)
-        || (path == "/api/integrations/available" && is_get)
-        || (path == "/api/integrations/health" && is_get)
-        || (path == "/api/workflows" && is_get)
         || path == "/api/logs/stream"  // SSE stream, read-only
         || (path.starts_with("/api/cron/") && is_get)
-        || path.starts_with("/api/providers/github-copilot/oauth/")
         || path == "/api/auth/login"
         || path == "/api/auth/logout"
         || (path == "/api/auth/check" && is_get);

@@ -724,6 +724,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[expect(dead_code)]
     fn write_knowledge_file(dir: &Path, name: &str, content: &str) {
         fs::create_dir_all(dir.join("data/knowledge")).unwrap();
         fs::write(dir.join("data/knowledge").join(name), content).unwrap();

@@ -53,6 +53,30 @@ async fn start_test_server_with_provider(
 ) -> TestServer {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
 
+    // Create minimal brain.json for tests
+    let brain_json = serde_json::json!({
+        "providers": {
+            "test": { "api_key_env": "" }
+        },
+        "endpoints": {
+            "test_ep": {
+                "provider": "test",
+                "model": model,
+                "base_url": format!("http://localhost:{}", 11434),
+                "format": "openai"
+            }
+        },
+        "modalities": {
+            "chat": {
+                "primary": "test_ep",
+                "description": "Test modality"
+            }
+        },
+        "default_modality": "chat"
+    });
+    std::fs::write(tmp.path().join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap())
+        .expect("Failed to write brain.json");
+
     let config = KernelConfig {
         home_dir: tmp.path().to_path_buf(),
         data_dir: tmp.path().join("data"),
@@ -72,10 +96,7 @@ async fn start_test_server_with_provider(
     let state = Arc::new(AppState {
         kernel,
         started_at: Instant::now(),
-        bridge_manager: tokio::sync::Mutex::new(None),
-        channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache::new(),
     });
 
@@ -98,26 +119,6 @@ async fn start_test_server_with_provider(
         .route(
             "/api/agents/{id}",
             axum::routing::delete(routes::kill_agent),
-        )
-        .route(
-            "/api/triggers",
-            axum::routing::get(routes::list_triggers).post(routes::create_trigger),
-        )
-        .route(
-            "/api/triggers/{id}",
-            axum::routing::delete(routes::delete_trigger),
-        )
-        .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/runs",
-            axum::routing::get(routes::list_workflow_runs),
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn(middleware::request_logging))
@@ -366,135 +367,6 @@ async fn test_send_message_with_llm() {
 }
 
 #[tokio::test]
-async fn test_workflow_crud() {
-    let server = start_test_server().await;
-    let client = reqwest::Client::new();
-
-    // Spawn agent for workflow
-    let resp = client
-        .post(format!("{}/api/agents", server.base_url))
-        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
-        .send()
-        .await
-        .unwrap();
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let agent_name = body["name"].as_str().unwrap().to_string();
-
-    // Create workflow
-    let resp = client
-        .post(format!("{}/api/workflows", server.base_url))
-        .json(&serde_json::json!({
-            "name": "test-workflow",
-            "description": "Integration test workflow",
-            "steps": [
-                {
-                    "name": "step1",
-                    "agent_name": agent_name,
-                    "prompt": "Echo: {{input}}",
-                    "mode": "sequential",
-                    "timeout_secs": 30
-                }
-            ]
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 201);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let workflow_id = body["workflow_id"].as_str().unwrap().to_string();
-    assert!(!workflow_id.is_empty());
-
-    // List workflows
-    let resp = client
-        .get(format!("{}/api/workflows", server.base_url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let workflows: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert_eq!(workflows.len(), 1);
-    assert_eq!(workflows[0]["name"], "test-workflow");
-    assert_eq!(workflows[0]["steps"], 1);
-}
-
-#[tokio::test]
-async fn test_trigger_crud() {
-    let server = start_test_server().await;
-    let client = reqwest::Client::new();
-
-    // Spawn agent for trigger
-    let resp = client
-        .post(format!("{}/api/agents", server.base_url))
-        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
-        .send()
-        .await
-        .unwrap();
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let agent_id = body["agent_id"].as_str().unwrap().to_string();
-
-    // Create trigger (Lifecycle pattern — simplest variant)
-    let resp = client
-        .post(format!("{}/api/triggers", server.base_url))
-        .json(&serde_json::json!({
-            "agent_id": agent_id,
-            "pattern": "lifecycle",
-            "prompt_template": "Handle: {{event}}",
-            "max_fires": 5
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 201);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let trigger_id = body["trigger_id"].as_str().unwrap().to_string();
-    assert_eq!(body["agent_id"], agent_id);
-
-    // List triggers (unfiltered)
-    let resp = client
-        .get(format!("{}/api/triggers", server.base_url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let triggers: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert_eq!(triggers.len(), 1);
-    assert_eq!(triggers[0]["agent_id"], agent_id);
-    assert_eq!(triggers[0]["enabled"], true);
-    assert_eq!(triggers[0]["max_fires"], 5);
-
-    // List triggers (filtered by agent_id)
-    let resp = client
-        .get(format!(
-            "{}/api/triggers?agent_id={}",
-            server.base_url, agent_id
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let triggers: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert_eq!(triggers.len(), 1);
-
-    // Delete trigger
-    let resp = client
-        .delete(format!("{}/api/triggers/{}", server.base_url, trigger_id))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-
-    // List triggers (should be empty)
-    let resp = client
-        .get(format!("{}/api/triggers", server.base_url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let triggers: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert_eq!(triggers.len(), 0);
-}
-
-#[tokio::test]
 async fn test_invalid_agent_id_returns_400() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
@@ -680,6 +552,19 @@ memory_write = ["self.*"]
 async fn start_test_server_with_auth(api_key: &str) -> TestServer {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
 
+    // Create minimal brain.json for tests
+    let brain_json = serde_json::json!({
+        "providers": { "test": { "api_key_env": "" } },
+        "endpoints": { "test_ep": {
+            "provider": "test", "model": "test-model",
+            "base_url": "http://localhost:11434/v1", "format": "openai"
+        }},
+        "modalities": { "chat": { "primary": "test_ep", "description": "Chat" } },
+        "default_modality": "chat"
+    });
+    std::fs::write(tmp.path().join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap())
+        .expect("Failed to write brain.json");
+
     let config = KernelConfig {
         home_dir: tmp.path().to_path_buf(),
         data_dir: tmp.path().join("data"),
@@ -700,10 +585,7 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
     let state = Arc::new(AppState {
         kernel,
         started_at: Instant::now(),
-        bridge_manager: tokio::sync::Mutex::new(None),
-        channels_config: tokio::sync::RwLock::new(Default::default()),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache::new(),
     });
 
@@ -739,26 +621,6 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         .route(
             "/api/agents/{id}",
             axum::routing::delete(routes::kill_agent),
-        )
-        .route(
-            "/api/triggers",
-            axum::routing::get(routes::list_triggers).post(routes::create_trigger),
-        )
-        .route(
-            "/api/triggers/{id}",
-            axum::routing::delete(routes::delete_trigger),
-        )
-        .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/runs",
-            axum::routing::get(routes::list_workflow_runs),
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn_with_state(

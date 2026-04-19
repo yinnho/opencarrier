@@ -35,6 +35,12 @@ pub struct ProviderConfig {
     /// If empty/missing, this provider doesn't require authentication (e.g., Ollama).
     #[serde(default)]
     pub api_key_env: String,
+    /// Additional parameters (env var names) for multi-credential providers.
+    /// Maps a logical name → environment variable name to read at runtime.
+    /// Example: Kling needs access_key + secret_key:
+    ///   { "access_key_env": "KLING_ACCESS_KEY", "secret_key_env": "KLING_SECRET_KEY" }
+    #[serde(default)]
+    pub params: HashMap<String, String>,
 }
 
 /// Endpoint = format + base_url + model (complete callable unit).
@@ -92,6 +98,96 @@ pub struct ModalityConfig {
     /// Fallback endpoint names, tried in order on failure.
     #[serde(default)]
     pub fallbacks: Vec<String>,
+    /// Human-readable description of this modality.
+    #[serde(default)]
+    pub description: String,
+}
+
+// ---------------------------------------------------------------------------
+// Brain query types — returned by the Brain trait methods
+// ---------------------------------------------------------------------------
+
+/// A resolved endpoint returned by `Brain::endpoints_for()`.
+///
+/// Contains everything the runtime needs to call this endpoint,
+/// without the driver itself (driver is fetched separately via
+/// `Brain::driver_for_endpoint()`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedEndpoint {
+    /// Endpoint name (the key from brain.json endpoints).
+    pub id: String,
+    /// Model name to set in CompletionRequest.model.
+    pub model: String,
+    /// Provider name (for logging / health tracking).
+    pub provider: String,
+}
+
+/// Information about a modality, returned by `Brain::list_modalities()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModalityInfo {
+    /// Modality name (e.g., "chat", "fast", "vision").
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Primary endpoint name.
+    pub primary_endpoint: String,
+    /// Number of fallback endpoints.
+    pub fallback_count: usize,
+}
+
+/// Feedback from the runtime to Brain after an endpoint call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndpointReport {
+    /// Which endpoint was attempted.
+    pub endpoint_id: String,
+    /// Whether the call succeeded.
+    pub success: bool,
+    /// Call latency in milliseconds.
+    pub latency_ms: u64,
+    /// Error message if the call failed.
+    pub error: Option<String>,
+}
+
+/// Health status of a single endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndpointHealth {
+    /// Endpoint name.
+    pub endpoint: String,
+    /// Provider name.
+    pub provider: String,
+    /// Model name.
+    pub model: String,
+    /// Whether the driver was successfully created at boot.
+    pub driver_ready: bool,
+    /// Total successful calls (from report()).
+    pub success_count: u64,
+    /// Total failed calls (from report()).
+    pub failure_count: u64,
+    /// Average latency in ms (0 if no data).
+    pub avg_latency_ms: u64,
+    /// Consecutive failures (reset to 0 on success).
+    pub consecutive_failures: u32,
+}
+
+/// Overall Brain status snapshot, returned by `Brain::status()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrainStatus {
+    /// All modalities.
+    pub modalities: Vec<ModalityInfo>,
+    /// Health of all endpoints.
+    pub endpoints: Vec<EndpointHealth>,
+    /// Number of drivers that initialized successfully.
+    pub drivers_ready: usize,
+}
+
+/// Resolved credentials for a provider, ready for injection into skill subprocess.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderCredentials {
+    /// Provider name.
+    pub provider_name: String,
+    /// Environment variable name → resolved value pairs.
+    /// e.g., {"KLING_ACCESS_KEY": "xxx", "KLING_SECRET_KEY": "yyy"}
+    pub env_vars: HashMap<String, String>,
 }
 
 #[cfg(test)]

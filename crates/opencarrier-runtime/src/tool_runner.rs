@@ -10,7 +10,7 @@ use opencarrier_skills::registry::SkillRegistry;
 use opencarrier_types::taint::{TaintLabel, TaintSink, TaintedValue};
 use opencarrier_types::tool::{ToolDefinition, ToolResult};
 use opencarrier_types::tool_compat::normalize_tool_name;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -131,43 +131,6 @@ pub async fn execute_tool(
                 ),
                 is_error: true,
             };
-        }
-    }
-
-    // Approval gate: check if this tool requires human approval before execution
-    if let Some(kh) = kernel {
-        if kh.requires_approval(tool_name) {
-            let agent_id_str = caller_agent_id.unwrap_or("unknown");
-            let input_str = input.to_string();
-            let summary = format!(
-                "{}: {}",
-                tool_name,
-                opencarrier_types::truncate_str(&input_str, 200)
-            );
-            match kh.request_approval(agent_id_str, tool_name, &summary).await {
-                Ok(true) => {
-                    debug!(tool_name, "Approval granted — proceeding with execution");
-                }
-                Ok(false) => {
-                    warn!(tool_name, "Approval denied — blocking tool execution");
-                    return ToolResult {
-                        tool_use_id: tool_use_id.to_string(),
-                        content: format!(
-                            "Execution denied: '{}' requires human approval and was denied or timed out. The operation was not performed.",
-                            tool_name
-                        ),
-                        is_error: true,
-                    };
-                }
-                Err(e) => {
-                    warn!(tool_name, error = %e, "Approval system error");
-                    return ToolResult {
-                        tool_use_id: tool_use_id.to_string(),
-                        content: format!("Approval system error: {e}"),
-                        is_error: true,
-                    };
-                }
-            }
         }
     }
 
@@ -354,21 +317,12 @@ pub async fn execute_tool(
         "cron_list" => tool_cron_list(kernel, caller_agent_id).await,
         "cron_cancel" => tool_cron_cancel(input, kernel).await,
 
-        // Channel send tool (proactive outbound messaging)
-        "channel_send" => tool_channel_send(input, kernel, workspace_root).await,
-
         // Persistent process tools
         "process_start" => tool_process_start(input, process_manager, caller_agent_id).await,
         "process_poll" => tool_process_poll(input, process_manager).await,
         "process_write" => tool_process_write(input, process_manager).await,
         "process_kill" => tool_process_kill(input, process_manager).await,
         "process_list" => tool_process_list(process_manager, caller_agent_id).await,
-
-        // Hand tools (curated autonomous capability packages)
-        "hand_list" => tool_hand_list(kernel).await,
-        "hand_activate" => tool_hand_activate(input, kernel).await,
-        "hand_status" => tool_hand_status(input, kernel).await,
-        "hand_deactivate" => tool_hand_deactivate(input, kernel).await,
 
         // A2A outbound tools (cross-instance agent communication)
         "a2a_discover" => tool_a2a_discover(input).await,
@@ -519,6 +473,7 @@ pub async fn execute_tool(
                         &skill.path,
                         other,
                         input,
+                        &[], // TODO: credential injection via KernelHandle
                     )
                     .await
                     {
@@ -1270,69 +1225,6 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "job_id": { "type": "string", "description": "The UUID of the cron job to cancel" }
                 },
                 "required": ["job_id"]
-            }),
-        },
-        // --- Channel send tool (proactive outbound messaging) ---
-        ToolDefinition {
-            name: "channel_send".to_string(),
-            description: "Send a message or media to a user on a configured channel (email, telegram, slack, etc). For email: recipient is the email address; optionally set subject. For media: set image_url, file_url, or file_path to send an image or file instead of (or alongside) text. Use thread_id to reply in a specific thread/topic.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "channel": { "type": "string", "description": "Channel adapter name (e.g., 'email', 'telegram', 'slack', 'discord')" },
-                    "recipient": { "type": "string", "description": "Platform-specific recipient identifier (email address, user ID, etc.)" },
-                    "subject": { "type": "string", "description": "Optional subject line (used for email; ignored for other channels)" },
-                    "message": { "type": "string", "description": "The message body to send (required for text, optional caption for media)" },
-                    "image_url": { "type": "string", "description": "URL of an image to send (supported on Telegram, Discord, Slack)" },
-                    "file_url": { "type": "string", "description": "URL of a file to send as attachment" },
-                    "file_path": { "type": "string", "description": "Local file path to send as attachment (reads from disk; use instead of file_url for local files)" },
-                    "filename": { "type": "string", "description": "Filename for file attachments (defaults to the basename of file_path, or 'file')" },
-                    "thread_id": { "type": "string", "description": "Thread/topic ID to reply in (e.g., Telegram message_thread_id, Slack thread_ts)" }
-                },
-                "required": ["channel", "recipient"]
-            }),
-        },
-        // --- Hand tools (curated autonomous capability packages) ---
-        ToolDefinition {
-            name: "hand_list".to_string(),
-            description: "List available Hands (curated autonomous packages) and their activation status.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
-        ToolDefinition {
-            name: "hand_activate".to_string(),
-            description: "Activate a Hand — spawns a specialized autonomous agent with curated tools and skills.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "hand_id": { "type": "string", "description": "The ID of the hand to activate (e.g. 'researcher', 'clip', 'browser')" },
-                    "config": { "type": "object", "description": "Optional configuration overrides for the hand's settings" }
-                },
-                "required": ["hand_id"]
-            }),
-        },
-        ToolDefinition {
-            name: "hand_status".to_string(),
-            description: "Check the status and metrics of an active Hand.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "hand_id": { "type": "string", "description": "The ID of the hand to check status for" }
-                },
-                "required": ["hand_id"]
-            }),
-        },
-        ToolDefinition {
-            name: "hand_deactivate".to_string(),
-            description: "Deactivate a running Hand and stop its agent.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "instance_id": { "type": "string", "description": "The UUID of the hand instance to deactivate" }
-                },
-                "required": ["instance_id"]
             }),
         },
         // --- A2A outbound tools ---
@@ -3268,258 +3160,6 @@ async fn tool_cron_cancel(
 }
 
 // ---------------------------------------------------------------------------
-// Channel send tool (proactive outbound messaging via configured adapters)
-// ---------------------------------------------------------------------------
-
-async fn tool_channel_send(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-
-    let channel = input["channel"]
-        .as_str()
-        .ok_or("Missing 'channel' parameter")?
-        .trim()
-        .to_lowercase();
-    let recipient_input = input["recipient"]
-        .as_str()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-
-    // If recipient is empty, resolve from channel's default_chat_id config.
-    let recipient = if recipient_input.is_empty() {
-        let default_id = kh.get_channel_default_recipient(&channel).await;
-        match default_id {
-            Some(id) => id,
-            None => {
-                return Err(format!(
-                "Missing 'recipient' parameter. Set default_chat_id in [channels.{channel}] config \
-                 or pass recipient explicitly."
-            ))
-            }
-        }
-    } else {
-        recipient_input
-    };
-    let recipient = recipient.as_str();
-
-    let thread_id = input["thread_id"].as_str().filter(|s| !s.is_empty());
-
-    // Check for media content (image_url, file_url, or file_path)
-    let image_url = input["image_url"].as_str().filter(|s| !s.is_empty());
-    let file_url = input["file_url"].as_str().filter(|s| !s.is_empty());
-    let file_path = input["file_path"].as_str().filter(|s| !s.is_empty());
-
-    if let Some(url) = image_url {
-        let caption = input["message"].as_str().filter(|s| !s.is_empty());
-        return kh
-            .send_channel_media(&channel, recipient, "image", url, caption, None, thread_id)
-            .await;
-    }
-
-    if let Some(url) = file_url {
-        let caption = input["message"].as_str().filter(|s| !s.is_empty());
-        let filename = input["filename"].as_str();
-        return kh
-            .send_channel_media(
-                &channel, recipient, "file", url, caption, filename, thread_id,
-            )
-            .await;
-    }
-
-    // Local file attachment: read from disk and send as FileData
-    if let Some(raw_path) = file_path {
-        let resolved = resolve_file_path(raw_path, workspace_root)?;
-        let data = tokio::fs::read(&resolved)
-            .await
-            .map_err(|e| format!("Failed to read file '{}': {e}", resolved.display()))?;
-
-        // Derive filename from the path if not explicitly provided
-        let filename = input["filename"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                resolved
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("file")
-                    .to_string()
-            });
-
-        // Determine MIME type from extension
-        let ext = resolved
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let mime_type = match ext.as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "svg" => "image/svg+xml",
-            "pdf" => "application/pdf",
-            "txt" => "text/plain",
-            "csv" => "text/csv",
-            "json" => "application/json",
-            "xml" => "application/xml",
-            "zip" => "application/zip",
-            "gz" | "gzip" => "application/gzip",
-            "tar" => "application/x-tar",
-            "mp3" => "audio/mpeg",
-            "wav" => "audio/wav",
-            "mp4" => "video/mp4",
-            "doc" => "application/msword",
-            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "xls" => "application/vnd.ms-excel",
-            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            _ => "application/octet-stream",
-        };
-
-        return kh
-            .send_channel_file_data(&channel, recipient, data, &filename, mime_type, thread_id)
-            .await;
-    }
-
-    // Text-only message
-    let message = input["message"]
-        .as_str()
-        .ok_or("Missing 'message' parameter (required for text messages)")?;
-
-    if message.is_empty() {
-        return Err("Message cannot be empty".to_string());
-    }
-
-    // For email channels, validate email format and prepend subject
-    let final_message = if channel == "email" {
-        if !recipient.contains('@') || !recipient.contains('.') {
-            return Err(format!("Invalid email address: '{recipient}'"));
-        }
-        if let Some(subject) = input["subject"].as_str() {
-            if !subject.is_empty() {
-                format!("Subject: {subject}\n\n{message}")
-            } else {
-                message.to_string()
-            }
-        } else {
-            message.to_string()
-        }
-    } else {
-        message.to_string()
-    };
-
-    kh.send_channel_message(&channel, recipient, &final_message, thread_id)
-        .await
-}
-
-// ---------------------------------------------------------------------------
-// Hand tools (delegated to kernel via KernelHandle trait)
-// ---------------------------------------------------------------------------
-
-async fn tool_hand_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let hands = kh.hand_list().await?;
-
-    if hands.is_empty() {
-        return Ok(
-            "No Hands available. Install hands to enable curated autonomous packages.".to_string(),
-        );
-    }
-
-    let mut lines = vec!["Available Hands:".to_string(), String::new()];
-    for h in &hands {
-        let icon = h["icon"].as_str().unwrap_or("");
-        let name = h["name"].as_str().unwrap_or("?");
-        let id = h["id"].as_str().unwrap_or("?");
-        let status = h["status"].as_str().unwrap_or("unknown");
-        let desc = h["description"].as_str().unwrap_or("");
-
-        let status_marker = match status {
-            "Active" => "[ACTIVE]",
-            "Paused" => "[PAUSED]",
-            _ => "[available]",
-        };
-
-        lines.push(format!("{} {} ({}) {}", icon, name, id, status_marker));
-        if !desc.is_empty() {
-            lines.push(format!("  {}", desc));
-        }
-        if let Some(iid) = h["instance_id"].as_str() {
-            lines.push(format!("  Instance: {}", iid));
-        }
-        lines.push(String::new());
-    }
-
-    Ok(lines.join("\n"))
-}
-
-async fn tool_hand_activate(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let hand_id = input["hand_id"]
-        .as_str()
-        .ok_or("Missing 'hand_id' parameter")?;
-    let config: std::collections::HashMap<String, serde_json::Value> =
-        if let Some(obj) = input["config"].as_object() {
-            obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-        } else {
-            std::collections::HashMap::new()
-        };
-
-    let result = kh.hand_activate(hand_id, config).await?;
-
-    let instance_id = result["instance_id"].as_str().unwrap_or("?");
-    let agent_name = result["agent_name"].as_str().unwrap_or("?");
-    let status = result["status"].as_str().unwrap_or("?");
-
-    Ok(format!(
-        "Hand '{}' activated!\n  Instance: {}\n  Agent: {} ({})",
-        hand_id, instance_id, agent_name, status
-    ))
-}
-
-async fn tool_hand_status(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let hand_id = input["hand_id"]
-        .as_str()
-        .ok_or("Missing 'hand_id' parameter")?;
-
-    let result = kh.hand_status(hand_id).await?;
-
-    let icon = result["icon"].as_str().unwrap_or("");
-    let name = result["name"].as_str().unwrap_or(hand_id);
-    let status = result["status"].as_str().unwrap_or("unknown");
-    let instance_id = result["instance_id"].as_str().unwrap_or("?");
-    let agent_name = result["agent_name"].as_str().unwrap_or("?");
-    let activated = result["activated_at"].as_str().unwrap_or("?");
-
-    Ok(format!(
-        "{} {} — {}\n  Instance: {}\n  Agent: {}\n  Activated: {}",
-        icon, name, status, instance_id, agent_name, activated
-    ))
-}
-
-async fn tool_hand_deactivate(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let instance_id = input["instance_id"]
-        .as_str()
-        .ok_or("Missing 'instance_id' parameter")?;
-    kh.hand_deactivate(instance_id).await?;
-    Ok(format!("Hand instance '{}' deactivated.", instance_id))
-}
-
-// ---------------------------------------------------------------------------
 // A2A outbound tools (cross-instance agent communication)
 // ---------------------------------------------------------------------------
 
@@ -4402,13 +4042,6 @@ mod tests {
         assert!(names.contains(&"cron_create"));
         assert!(names.contains(&"cron_list"));
         assert!(names.contains(&"cron_cancel"));
-        // 1 channel send tool
-        assert!(names.contains(&"channel_send"));
-        // 4 hand tools
-        assert!(names.contains(&"hand_list"));
-        assert!(names.contains(&"hand_activate"));
-        assert!(names.contains(&"hand_status"));
-        assert!(names.contains(&"hand_deactivate"));
         // 3 voice/docker tools
         assert!(names.contains(&"text_to_speech"));
         assert!(names.contains(&"speech_to_text"));

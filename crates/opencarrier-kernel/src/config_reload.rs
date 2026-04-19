@@ -17,8 +17,6 @@ use tracing::{info, warn};
 /// An individual action that can be applied at runtime (hot-reload).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HotAction {
-    /// Channel configuration changed — reload channel bridges.
-    ReloadChannels,
     /// Skill configuration changed — reload skill registry.
     ReloadSkills,
     /// Usage footer mode changed.
@@ -27,14 +25,10 @@ pub enum HotAction {
     ReloadWebConfig,
     /// Browser config changed.
     ReloadBrowserConfig,
-    /// Approval policy changed.
-    UpdateApprovalPolicy,
     /// Cron max jobs changed.
     UpdateCronConfig,
     /// Webhook trigger config changed.
     UpdateWebhookConfig,
-    /// Extension config changed.
-    ReloadExtensions,
     /// MCP server list changed — reconnect MCP clients.
     ReloadMcpServers,
     /// A2A config changed.
@@ -193,10 +187,6 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
 
     // ----- Hot-reloadable fields -----
 
-    if field_changed(&old.channels, &new.channels) {
-        plan.hot_actions.push(HotAction::ReloadChannels);
-    }
-
     if old.usage_footer != new.usage_footer {
         plan.hot_actions.push(HotAction::UpdateUsageFooter);
     }
@@ -209,20 +199,12 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
         plan.hot_actions.push(HotAction::ReloadBrowserConfig);
     }
 
-    if field_changed(&old.approval, &new.approval) {
-        plan.hot_actions.push(HotAction::UpdateApprovalPolicy);
-    }
-
     if old.max_cron_jobs != new.max_cron_jobs {
         plan.hot_actions.push(HotAction::UpdateCronConfig);
     }
 
     if field_changed(&old.webhook_triggers, &new.webhook_triggers) {
         plan.hot_actions.push(HotAction::UpdateWebhookConfig);
-    }
-
-    if field_changed(&old.extensions, &new.extensions) {
-        plan.hot_actions.push(HotAction::ReloadExtensions);
     }
 
     if field_changed(&old.mcp_servers, &new.mcp_servers) {
@@ -283,11 +265,6 @@ pub fn validate_config_for_reload(config: &KernelConfig) -> Result<(), Vec<Strin
 
     if config.max_cron_jobs > 10_000 {
         errors.push("max_cron_jobs exceeds reasonable limit (10000)".to_string());
-    }
-
-    // Validate approval policy
-    if let Err(e) = config.approval.validate() {
-        errors.push(format!("approval policy: {e}"));
     }
 
     // Network config: if network is enabled, shared_secret must be set
@@ -428,20 +405,6 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_channels_hot_reload() {
-        let a = default_cfg();
-        let mut b = default_cfg();
-        // Change the channels config by adding a Telegram config
-        b.channels.telegram = Some(opencarrier_types::config::TelegramConfig {
-            bot_token_env: "TG_TOKEN".to_string(),
-            ..Default::default()
-        });
-        let plan = build_reload_plan(&a, &b);
-        assert!(!plan.restart_required);
-        assert!(plan.hot_actions.contains(&HotAction::ReloadChannels));
-    }
-
-    #[test]
     fn test_usage_footer_hot_reload() {
         use opencarrier_types::config::UsageFooterMode;
         let a = default_cfg();
@@ -460,16 +423,6 @@ mod tests {
         let plan = build_reload_plan(&a, &b);
         assert!(!plan.restart_required);
         assert!(plan.hot_actions.contains(&HotAction::UpdateCronConfig));
-    }
-
-    #[test]
-    fn test_extensions_hot_reload() {
-        let a = default_cfg();
-        let mut b = default_cfg();
-        b.extensions.reconnect_max_attempts = 20;
-        let plan = build_reload_plan(&a, &b);
-        assert!(!plan.restart_required);
-        assert!(plan.hot_actions.contains(&HotAction::ReloadExtensions));
     }
 
     #[test]
@@ -580,7 +533,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: false,
             restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadChannels],
+            hot_actions: vec![HotAction::ReloadSkills],
             noop_changes: vec![],
         };
         assert!(plan.is_hot_reloadable());
@@ -588,7 +541,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: true,
             restart_reasons: vec!["api_listen changed".to_string()],
-            hot_actions: vec![HotAction::ReloadChannels],
+            hot_actions: vec![HotAction::ReloadSkills],
             noop_changes: vec![],
         };
         assert!(!plan.is_hot_reloadable());
@@ -637,7 +590,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: false,
             restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadChannels],
+            hot_actions: vec![HotAction::ReloadSkills],
             noop_changes: vec![],
         };
         assert!(!should_apply_hot(ReloadMode::Off, &plan));
@@ -648,7 +601,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: false,
             restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadChannels],
+            hot_actions: vec![HotAction::ReloadSkills],
             noop_changes: vec![],
         };
         assert!(!should_apply_hot(ReloadMode::Restart, &plan));
@@ -659,7 +612,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: false,
             restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadChannels],
+            hot_actions: vec![HotAction::ReloadSkills],
             noop_changes: vec![],
         };
         assert!(should_apply_hot(ReloadMode::Hybrid, &plan));

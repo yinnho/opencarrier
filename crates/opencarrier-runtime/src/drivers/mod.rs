@@ -6,11 +6,9 @@
 
 pub mod anthropic;
 pub mod claude_code;
-pub mod copilot;
 pub mod fallback;
 pub mod gemini;
 pub mod openai;
-pub mod proxy;
 pub mod qwen_code;
 
 use crate::llm_driver::{DriverConfig, LlmDriver, LlmError};
@@ -135,11 +133,6 @@ fn provider_defaults(provider: &str) -> Option<ProviderDefaults> {
         "replicate" => Some(ProviderDefaults {
             base_url: REPLICATE_BASE_URL,
             api_key_env: "REPLICATE_API_TOKEN",
-            key_required: true,
-        }),
-        "github-copilot" | "copilot" => Some(ProviderDefaults {
-            base_url: copilot::GITHUB_COPILOT_BASE_URL,
-            api_key_env: "GITHUB_TOKEN",
             key_required: true,
         }),
         "codex" | "openai-codex" => Some(ProviderDefaults {
@@ -328,59 +321,6 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
         )));
     }
 
-    // Cloud Proxy — LLM requests go through cloud, API keys stored remotely
-    // This matches yingheclient's ProxyLLMClient behavior
-    // Requires the carrier to be bound first (yinghe bind or perform_binding())
-    if provider == "proxy" || provider == "cloud" || provider == "carrier" {
-        use crate::cloud_client::CarrierCloudClient;
-
-        let cloud_client = Arc::new(CarrierCloudClient::new(config.base_url.clone()));
-
-        // 检查是否已绑定
-        let is_bound = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(cloud_client.is_bound())
-        });
-
-        if !is_bound {
-            return Err(LlmError::Config(
-                "Carrier not bound to cloud. Run 'yinghe bind' first, or set OPENCARRIER_TOKEN and OPENCARRIER_CARRIER_ID env vars.".to_string()
-            ));
-        }
-
-        let mut driver = proxy::ProxyDriver::new(cloud_client);
-
-        // Initialize endpoints (async, but we block here for simplicity)
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(driver.initialize())
-        })
-        .map_err(|e| LlmError::Http(format!("Failed to initialize proxy driver: {}", e)))?;
-
-        return Ok(Arc::new(driver));
-    }
-
-    // GitHub Copilot — wraps OpenAI-compatible driver with automatic token exchange.
-    // The CopilotDriver exchanges the GitHub PAT for a Copilot API token on demand,
-    // caches it, and refreshes when expired.
-    if provider == "github-copilot" || provider == "copilot" {
-        let github_token = config
-            .api_key
-            .clone()
-            .or_else(|| std::env::var("GITHUB_TOKEN").ok())
-            .ok_or_else(|| {
-                LlmError::MissingApiKey(
-                    "Set GITHUB_TOKEN environment variable for GitHub Copilot".to_string(),
-                )
-            })?;
-        let base_url = config
-            .base_url
-            .clone()
-            .unwrap_or_else(|| copilot::GITHUB_COPILOT_BASE_URL.to_string());
-        return Ok(Arc::new(copilot::CopilotDriver::new(
-            github_token,
-            base_url,
-        )));
-    }
-
     // Azure OpenAI — deployment-based URL with `api-key` header
     if provider == "azure" || provider == "azure-openai" {
         let api_key = config
@@ -499,7 +439,7 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
         message: format!(
             "Unknown provider '{}'. Supported: anthropic, gemini, openai, azure, groq, openrouter, \
              deepseek, together, mistral, fireworks, ollama, vllm, lmstudio, perplexity, \
-             cohere, ai21, cerebras, sambanova, huggingface, xai, replicate, github-copilot, \
+             cohere, ai21, cerebras, sambanova, huggingface, xai, replicate, \
              chutes, venice, nvidia, codex, claude-code. Or set base_url for a custom OpenAI-compatible endpoint.",
             provider
         ),
@@ -585,7 +525,6 @@ pub fn known_providers() -> &'static [&'static str] {
         "huggingface",
         "xai",
         "replicate",
-        "github-copilot",
         "moonshot",
         "qwen",
         "minimax",
@@ -690,7 +629,6 @@ mod tests {
         assert!(providers.contains(&"huggingface"));
         assert!(providers.contains(&"xai"));
         assert!(providers.contains(&"replicate"));
-        assert!(providers.contains(&"github-copilot"));
         assert!(providers.contains(&"moonshot"));
         assert!(providers.contains(&"qwen"));
         assert!(providers.contains(&"minimax"));
@@ -706,7 +644,7 @@ mod tests {
         assert!(providers.contains(&"claude-code"));
         assert!(providers.contains(&"qwen-code"));
         assert!(providers.contains(&"azure"));
-        assert_eq!(providers.len(), 37);
+        assert_eq!(providers.len(), 36);
     }
 
     #[test]
