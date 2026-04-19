@@ -16,8 +16,8 @@ const __dirname = path.dirname(__filename);
 // Config from environment
 // ---------------------------------------------------------------------------
 const PORT = parseInt(process.env.WHATSAPP_GATEWAY_PORT || '3009', 10);
-const OPENFANG_URL = (process.env.OPENFANG_URL || 'http://127.0.0.1:4200').replace(/\/+$/, '');
-const DEFAULT_AGENT = process.env.OPENFANG_DEFAULT_AGENT || 'assistant';
+const OPENCARRIER_URL = (process.env.OPENCARRIER_URL || 'http://127.0.0.1:4200').replace(/\/+$/, '');
+const DEFAULT_AGENT = process.env.OPENCARRIER_DEFAULT_AGENT || 'assistant';
 
 // ---------------------------------------------------------------------------
 // State
@@ -191,7 +191,7 @@ function forwardToOpenCarrier(text, phone, pushName, metadata) {
       },
     });
 
-    const url = new URL(`${OPENFANG_URL}/api/agents/${encodeURIComponent(DEFAULT_AGENT)}/message`);
+    const url = new URL(`${OPENCARRIER_URL}/api/agents/${encodeURIComponent(DEFAULT_AGENT)}/message`);
 
     const req = http.request(
       {
@@ -358,7 +358,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[gateway] WhatsApp Web gateway listening on http://127.0.0.1:${PORT}`);
-  console.log(`[gateway] OpenCarrier URL: ${OPENFANG_URL}`);
+  console.log(`[gateway] OpenCarrier URL: ${OPENCARRIER_URL}`);
   console.log(`[gateway] Default agent: ${DEFAULT_AGENT}`);
 
   // Auto-connect if credentials already exist from a previous session

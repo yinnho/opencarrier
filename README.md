@@ -1,520 +1,220 @@
-<p align="center">
-  <img src="public/assets/opencarrier-logo.png" width="160" alt="OpenCarrier Logo" />
-</p>
-
 <h1 align="center">OpenCarrier</h1>
-<h3 align="center">The Agent Operating System</h3>
+<h3 align="center">分身操作系统 — Agent Operating System</h3>
 
 <p align="center">
-  Open-source Agent OS built in Rust. 137K LOC. 14 crates. 1,767+ tests. Zero clippy warnings.<br/>
-  <strong>One binary. Battle-tested. Agents that actually work for you.</strong>
-</p>
-
-<p align="center">
-  <a href="https://opencarrier.sh/docs">Documentation</a> &bull;
-  <a href="https://opencarrier.sh/docs/getting-started">Quick Start</a> &bull;
-  <a href="https://x.com/opencarrierg">Twitter / X</a>
+  Open-source Agent OS built in Rust. 9 crates. 1500+ tests.<br/>
+  <strong>分身 + 大脑 + 工具 + MCP + 记忆 — 五层架构，一个二进制</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/version-0.3.30-green?style=flat-square" alt="v0.3.30" />
-  <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" alt="Tests" />
-  <img src="https://img.shields.io/badge/clippy-0%20warnings-brightgreen?style=flat-square" alt="Clippy" />
-  <a href="https://www.buymeacoffee.com/opencarrier" target="_blank"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee" /></a>
+  <img src="https://img.shields.io/badge/tests-1500%2B-brightgreen?style=flat-square" alt="Tests" />
 </p>
-
----
-
-> **v0.3.30 — Security Hardening Release (March 2026)**
->
-> OpenCarrier is feature-complete but still pre-1.0. You may encounter rough edges or breaking changes between minor versions. We ship fast and fix fast. Pin to a specific commit for production use until v1.0. [Report issues here.](https://github.com/RightNow-AI/opencarrier/issues)
 
 ---
 
 ## What is OpenCarrier?
 
-OpenCarrier is an **open-source Agent Operating System** — not a chatbot framework, not a Python wrapper around an LLM, not a "multi-agent orchestrator." It is a full operating system for autonomous agents, built from scratch in Rust.
+OpenCarrier is an **open-source Agent Operating System** — 不是聊天框架，不是 LLM 的 Python 包装，而是一个从零开始用 Rust 构建的完整 Agent 操作系统。
 
-Traditional agent frameworks wait for you to type something. OpenCarrier runs **autonomous agents that work for you** — on schedules, 24/7, building knowledge graphs, monitoring targets, generating leads, managing your social media, and reporting results to your dashboard.
-
-The entire system compiles to a **single ~32MB binary**. One install, one command, your agents are live.
+核心理念：**分身（Clone）**。每个分身是一个独立的数字实体，拥有自己的人格、知识、技能和工作空间。分身从 Hub 下载，在本地运行，能学习、进化、自我维护。
 
 ```bash
-curl -fsSL https://opencarrier.sh/install | sh
-opencarrier init
-opencarrier start
-# Dashboard live at http://localhost:4200
-```
-
-<details>
-<summary><strong>Windows</strong></summary>
-
-```powershell
-irm https://opencarrier.sh/install.ps1 | iex
-opencarrier init
-opencarrier start
-```
-
-</details>
-
----
-
-## Hands: Agents That Actually Do Things
-
-<p align="center"><em>"Traditional agents wait for you to type. Hands work <strong>for</strong> you."</em></p>
-
-**Hands** are OpenCarrier's core innovation — pre-built autonomous capability packages that run independently, on schedules, without you having to prompt them. This is not a chatbot. This is an agent that wakes up at 6 AM, researches your competitors, builds a knowledge graph, scores the findings, and delivers a report to your Telegram before you've had coffee.
-
-Each Hand bundles:
-- **HAND.toml** — Manifest declaring tools, settings, requirements, and dashboard metrics
-- **System Prompt** — Multi-phase operational playbook (not a one-liner — these are 500+ word expert procedures)
-- **SKILL.md** — Domain expertise reference injected into context at runtime
-- **Guardrails** — Approval gates for sensitive actions (e.g. Browser Hand requires approval before any purchase)
-
-All compiled into the binary. No downloading, no pip install, no Docker pull.
-
-### The 7 Bundled Hands
-
-| Hand | What It Actually Does |
-|------|----------------------|
-| **Clip** | Takes a YouTube URL, downloads it, identifies the best moments, cuts them into vertical shorts with captions and thumbnails, optionally adds AI voice-over, and publishes to Telegram and WhatsApp. 8-phase pipeline. FFmpeg + yt-dlp + 5 STT backends. |
-| **Lead** | Runs daily. Discovers prospects matching your ICP, enriches them with web research, scores 0-100, deduplicates against your existing database, and delivers qualified leads in CSV/JSON/Markdown. Builds ICP profiles over time. |
-| **Collector** | OSINT-grade intelligence. You give it a target (company, person, topic). It monitors continuously — change detection, sentiment tracking, knowledge graph construction, and critical alerts when something important shifts. |
-| **Predictor** | Superforecasting engine. Collects signals from multiple sources, builds calibrated reasoning chains, makes predictions with confidence intervals, and tracks its own accuracy using Brier scores. Has a contrarian mode that deliberately argues against consensus. |
-| **Researcher** | Deep autonomous researcher. Cross-references multiple sources, evaluates credibility using CRAAP criteria (Currency, Relevance, Authority, Accuracy, Purpose), generates cited reports with APA formatting, supports multiple languages. |
-| **Twitter** | Autonomous Twitter/X account manager. Creates content in 7 rotating formats, schedules posts for optimal engagement, responds to mentions, tracks performance metrics. Has an approval queue — nothing posts without your OK. |
-| **Browser** | Web automation agent. Navigates sites, fills forms, clicks buttons, handles multi-step workflows. Uses Playwright bridge with session persistence. **Mandatory purchase approval gate** — it will never spend your money without explicit confirmation. |
-
-```bash
-# Activate the Researcher Hand — it starts working immediately
-opencarrier hand activate researcher
-
-# Check its progress anytime
-opencarrier hand status researcher
-
-# Activate lead generation on a daily schedule
-opencarrier hand activate lead
-
-# Pause without losing state
-opencarrier hand pause lead
-
-# See all available Hands
-opencarrier hand list
-```
-
-**Build your own.** Define a `HAND.toml` with tools, settings, and a system prompt. Publish to FangHub.
-
----
-
-## OpenCarrier vs The Landscape
-
-<p align="center">
-  <img src="public/assets/opencarrier-vs-claws.png" width="600" alt="OpenCarrier vs OpenClaw vs ZeroClaw" />
-</p>
-
-### Benchmarks: Measured, Not Marketed
-
-All data from official documentation and public repositories — February 2026.
-
-#### Cold Start Time (lower is better)
-
-```
-ZeroClaw   ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   10 ms
-OpenCarrier   ██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  180 ms    ★
-LangGraph  █████████████████░░░░░░░░░░░░░░░░░░░░░░░░░  2.5 sec
-CrewAI     ████████████████████░░░░░░░░░░░░░░░░░░░░░░  3.0 sec
-AutoGen    ██████████████████████████░░░░░░░░░░░░░░░░░  4.0 sec
-OpenClaw   █████████████████████████████████████████░░  5.98 sec
-```
-
-#### Idle Memory Usage (lower is better)
-
-```
-ZeroClaw   █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    5 MB
-OpenCarrier   ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   40 MB    ★
-LangGraph  ██████████████████░░░░░░░░░░░░░░░░░░░░░░░░░  180 MB
-CrewAI     ████████████████████░░░░░░░░░░░░░░░░░░░░░░░  200 MB
-AutoGen    █████████████████████████░░░░░░░░░░░░░░░░░░  250 MB
-OpenClaw   ████████████████████████████████████████░░░░  394 MB
-```
-
-#### Install Size (lower is better)
-
-```
-ZeroClaw   █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  8.8 MB
-OpenCarrier   ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   32 MB    ★
-CrewAI     ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  100 MB
-LangGraph  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  150 MB
-AutoGen    ████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░  200 MB
-OpenClaw   ████████████████████████████████████████░░░░  500 MB
-```
-
-#### Security Systems (higher is better)
-
-```
-OpenCarrier   ████████████████████████████████████████████   16      ★
-ZeroClaw   ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░    6
-OpenClaw   ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    3
-AutoGen    █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    2
-LangGraph  █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    2
-CrewAI     ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    1
-```
-
-#### Channel Adapters (higher is better)
-
-```
-OpenCarrier   ████████████████████████████████████████████   40      ★
-ZeroClaw   ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░   15
-OpenClaw   █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   13
-CrewAI     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    0
-AutoGen    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    0
-LangGraph  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    0
-```
-
-#### LLM Providers (higher is better)
-
-```
-ZeroClaw   ████████████████████████████████████████████   28
-OpenCarrier   ██████████████████████████████████████████░░   27      ★
-LangGraph  ██████████████████████░░░░░░░░░░░░░░░░░░░░░   15
-CrewAI     ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   10
-OpenClaw   ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   10
-AutoGen    ███████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    8
-```
-
-### Feature-by-Feature Comparison
-
-| Feature | OpenCarrier | OpenClaw | ZeroClaw | CrewAI | AutoGen | LangGraph |
-|---------|----------|----------|----------|--------|---------|-----------|
-| **Language** | **Rust** | TypeScript | **Rust** | Python | Python | Python |
-| **Autonomous Hands** | **7 built-in** | None | None | None | None | None |
-| **Security Layers** | **16 discrete** | 3 basic | 6 layers | 1 basic | Docker | AES enc. |
-| **Agent Sandbox** | **WASM dual-metered** | None | Allowlists | None | Docker | None |
-| **Channel Adapters** | **40** | 13 | 15 | 0 | 0 | 0 |
-| **Built-in Tools** | **53 + MCP + A2A** | 50+ | 12 | Plugins | MCP | LC tools |
-| **Memory** | **SQLite + vector** | File-based | SQLite FTS5 | 4-layer | External | Checkpoints |
-| **Desktop App** | **Tauri 2.0** | None | None | None | Studio | None |
-| **Audit Trail** | **Merkle hash-chain** | Logs | Logs | Tracing | Logs | Checkpoints |
-| **Cold Start** | **<200ms** | ~6s | ~10ms | ~3s | ~4s | ~2.5s |
-| **Install Size** | **~32 MB** | ~500 MB | ~8.8 MB | ~100 MB | ~200 MB | ~150 MB |
-| **License** | MIT | MIT | MIT | MIT | Apache 2.0 | MIT |
-
----
-
-## 16 Security Systems — Defense in Depth
-
-OpenCarrier doesn't bolt security on after the fact. Every layer is independently testable and operates without a single point of failure.
-
-| # | System | What It Does |
-|---|--------|-------------|
-| 1 | **WASM Dual-Metered Sandbox** | Tool code runs in WebAssembly with fuel metering + epoch interruption. A watchdog thread kills runaway code. |
-| 2 | **Merkle Hash-Chain Audit Trail** | Every action is cryptographically linked to the previous one. Tamper with one entry and the entire chain breaks. |
-| 3 | **Information Flow Taint Tracking** | Labels propagate through execution — secrets are tracked from source to sink. |
-| 4 | **Ed25519 Signed Agent Manifests** | Every agent identity and capability set is cryptographically signed. |
-| 5 | **SSRF Protection** | Blocks private IPs, cloud metadata endpoints, and DNS rebinding attacks. |
-| 6 | **Secret Zeroization** | `Zeroizing<String>` auto-wipes API keys from memory the instant they're no longer needed. |
-| 7 | **OFP Mutual Authentication** | HMAC-SHA256 nonce-based, constant-time verification for P2P networking. |
-| 8 | **Capability Gates** | Role-based access control — agents declare required tools, the kernel enforces it. |
-| 9 | **Security Headers** | CSP, X-Frame-Options, HSTS, X-Content-Type-Options on every response. |
-| 10 | **Health Endpoint Redaction** | Public health check returns minimal info. Full diagnostics require authentication. |
-| 11 | **Subprocess Sandbox** | `env_clear()` + selective variable passthrough. Process tree isolation with cross-platform kill. |
-| 12 | **Prompt Injection Scanner** | Detects override attempts, data exfiltration patterns, and shell reference injection in skills. |
-| 13 | **Loop Guard** | SHA256-based tool call loop detection with circuit breaker. Handles ping-pong patterns. |
-| 14 | **Session Repair** | 7-phase message history validation and automatic recovery from corruption. |
-| 15 | **Path Traversal Prevention** | Canonicalization with symlink escape prevention. `../` doesn't work here. |
-| 16 | **GCRA Rate Limiter** | Cost-aware token bucket rate limiting with per-IP tracking and stale cleanup. |
-
----
-
-## Architecture
-
-14 Rust crates. 137,728 lines of code. Modular kernel design.
-
-```
-opencarrier-kernel      Orchestration, workflows, metering, RBAC, scheduler, budget tracking
-opencarrier-runtime     Agent loop, 3 LLM drivers, 53 tools, WASM sandbox, MCP, A2A
-opencarrier-api         140+ REST/WS/SSE endpoints, OpenAI-compatible API, dashboard
-opencarrier-channels    40 messaging adapters with rate limiting, DM/group policies
-opencarrier-memory      SQLite persistence, vector embeddings, canonical sessions, compaction
-opencarrier-types       Core types, taint tracking, Ed25519 manifest signing, model catalog
-opencarrier-skills      60 bundled skills, SKILL.md parser, FangHub marketplace
-opencarrier-hands       7 autonomous Hands, HAND.toml parser, lifecycle management
-opencarrier-extensions  25 MCP templates, AES-256-GCM credential vault, OAuth2 PKCE
-opencarrier-wire        OFP P2P protocol with HMAC-SHA256 mutual authentication
-opencarrier-cli         CLI with daemon management, TUI dashboard, MCP server mode
-opencarrier-desktop     Tauri 2.0 native app (system tray, notifications, global shortcuts)
-opencarrier-migrate     OpenClaw, LangChain, AutoGPT migration engine
-xtask                Build automation
+opencarrier init      # 初始化配置
+opencarrier start     # 启动守护进程
+# Dashboard: http://localhost:4200
 ```
 
 ---
 
-## 40 Channel Adapters
+## 五层架构
 
-Connect your agents to every platform your users are on.
+OpenCarrier 由五个核心层组成，每层职责清晰：
 
-**Core:** Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email (IMAP/SMTP)
-**Enterprise:** Microsoft Teams, Mattermost, Google Chat, Webex, Feishu/Lark, Zulip
-**Social:** LINE, Viber, Facebook Messenger, Mastodon, Bluesky, Reddit, LinkedIn, Twitch
-**Community:** IRC, XMPP, Guilded, Revolt, Keybase, Discourse, Gitter
-**Privacy:** Threema, Nostr, Mumble, Nextcloud Talk, Rocket.Chat, Ntfy, Gotify
-**Workplace:** Pumble, Flock, Twist, DingTalk, Zalo, Webhooks
+```
+┌──────────────────────────────────────────┐
+│  分身 (Clone) — WHO: 身份 + 工作空间     │
+├──────────────────────────────────────────┤
+│  大脑 (Brain) — THINK: LLM 智能路由      │
+├──────────────────────────────────────────┤
+│  工具 (Tool) — DO: 内置系统能力          │
+├──────────────────────────────────────────┤
+│  MCP — EXTEND: 外部工具接入              │
+├──────────────────────────────────────────┤
+│  记忆 (Memory) — REMEMBER: 生命周期管理   │
+└──────────────────────────────────────────┘
+```
 
-Each adapter supports per-channel model overrides, DM/group policies, rate limiting, and output formatting.
+### 分身层 (Clone) — WHO
+
+分身是系统的核心实体，决定"做什么"：
+
+```
+~/.opencarrier/workspaces/<name>/
+├── SOUL.md              # 人格 — "你是谁"
+├── system_prompt.md     # 行为指令 — "你怎么做事"
+├── MEMORY.md            # 知识索引（始终加载）
+├── data/knowledge/      # 知识库（按需加载）
+├── skills/              # 技能（per-agent 自定义）
+├── agents/              # 子代理（可派出去干活）
+└── agent.toml           # 运行参数（模型、资源、能力）
+```
+
+同样的工具 + 同样的大脑，不同的分身做完全不同的事。
+
+关键设计：
+- **Workspace 即分身** — workspace 里的文件就是分身的身份
+- **动态组装** — system prompt 每次对话从文件构建，不预存
+- **Lifecycle 系统** — 对话后自动进化、知识过期清理、版本管理
+
+### 大脑层 (Brain) — THINK
+
+大脑负责 LLM 调用的智能路由，配置在 `brain.json` 中：
+
+```
+Provider (OpenAI / Anthropic / Gemini / ...)
+  └── Endpoint (gpt-4o / claude-sonnet / ...)
+        └── Modality (chat / vision / tools / ...)
+```
+
+- **三层路由**: Provider → Endpoint → Modality
+- **熔断器**: 连续失败 >= 3 次触发熔断，60 秒冷却
+- **热重载**: 修改 `brain.json` 即时生效，无需重启
+- **20+ Provider**: Anthropic, OpenAI, Gemini, Groq, DeepSeek, OpenRouter, Ollama, vLLM 等
+
+### 工具层 (Tool) — DO
+
+系统级内置工具，所有分身共享：
+
+| 类别 | 工具 |
+|------|------|
+| 文件 | file_read, file_write, file_list |
+| 网络 | web_fetch, web_search |
+| 执行 | shell_exec |
+| 浏览器 | browser_* 系列 |
+| 知识 | knowledge_add, knowledge_import, knowledge_compile |
+| 记忆 | memory_store, memory_recall, user_profile |
+
+通过 `capabilities.tools` 白名单控制每个分身能用哪些工具。
+
+### MCP 层 — EXTEND
+
+外部工具接入层（Model Context Protocol）：
+
+- **连接方式**: stdio（本地进程）或 SSE（HTTP 长连接）
+- **命名空间**: `mcp_{server}_{tool}` 防冲突
+- **per-agent 过滤**: 每个分身可通过白名单选择使用哪些 MCP 服务器
+- **健康监控**: 后台自动 ping，断开自动重连
+- **热重载**: 修改配置即时生效
+
+### 记忆层 (Memory) — REMEMBER
+
+独立的记忆生命周期管理层，跨分身的基础设施：
+
+**自动整理（系统级）**：
+- **ConsolidationEngine** — 每 24h 对 7 天未访问的记忆降低 confidence
+- **Session Compaction** — 三阶段 LLM 压缩（>30 条消息或 >70% context window 触发）
+- **Context Overflow Recovery** — 4 级渐进恢复
+- **Knowledge Bloat Control** — 两步过期（30 天 stale → 60 天删除）
+
+**记忆存储（per-agent）**：
+- **Structured KV** — JSON 键值存储，写入不可变
+- **Semantic** — 向量嵌入 + 余弦相似度搜索
+- **Knowledge Graph** — 实体-关系图谱
+- **Canonical Session** — 跨渠道持久会话
 
 ---
 
-## WhatsApp Web Gateway (QR Code)
+## Crate 结构
 
-Connect your personal WhatsApp account to OpenCarrier via QR code — just like WhatsApp Web. No Meta Business account required.
-
-### Prerequisites
-
-- **Node.js >= 18** installed ([download](https://nodejs.org/))
-- OpenCarrier installed and initialized
-
-### Setup
-
-**1. Install the gateway dependencies:**
-
-```bash
-cd packages/whatsapp-gateway
-npm install
 ```
-
-**2. Configure `config.toml`:**
-
-```toml
-[channels.whatsapp]
-mode = "web"
-default_agent = "assistant"
+opencarrier-types          共享类型 (Agent, Capability, Config, Message, Tool...)
+opencarrier-memory         SQLite 记忆层 (KV / Semantic / Knowledge Graph / Session)
+opencarrier-runtime        Agent loop + 3 LLM drivers + 23 tools + MCP + A2A
+opencarrier-kernel         内核: 组装所有子系统, RBAC, 调度, 触发器
+opencarrier-api            REST/WS/SSE API (76 endpoints) + Dashboard
+opencarrier-cli            CLI (init/start/agent/chat/config/mcp)
+opencarrier-lifecycle      分身生命周期: 进化, 编译, 健康, 评估, 版本
+opencarrier-clone          分身管理: Hub 下载, .agx 加载, workspace 安装
+opencarrier-skills         60 bundled skills
 ```
-
-**3. Set the gateway URL (choose one):**
-
-Add to your shell profile for persistence:
-
-```bash
-# macOS / Linux
-echo 'export WHATSAPP_WEB_GATEWAY_URL="http://127.0.0.1:3009"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-Or set it inline when starting the gateway:
-
-```bash
-export WHATSAPP_WEB_GATEWAY_URL="http://127.0.0.1:3009"
-```
-
-**4. Start the gateway:**
-
-```bash
-node packages/whatsapp-gateway/index.js
-```
-
-The gateway listens on port `3009` by default. Override with `WHATSAPP_GATEWAY_PORT`.
-
-**5. Start OpenCarrier:**
-
-```bash
-opencarrier start
-# Dashboard at http://localhost:4200
-```
-
-**6. Scan the QR code:**
-
-Open the dashboard → **Channels** → **WhatsApp**. A QR code will appear. Scan it with your phone:
-
-> **WhatsApp** → **Settings** → **Linked Devices** → **Link a Device**
-
-Once scanned, the status changes to `connected` and incoming messages are routed to your configured agent.
-
-### Gateway Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `WHATSAPP_WEB_GATEWAY_URL` | Gateway URL for OpenCarrier to connect to | _(empty = disabled)_ |
-| `WHATSAPP_GATEWAY_PORT` | Port the gateway listens on | `3009` |
-| `OPENFANG_URL` | OpenCarrier API URL the gateway reports to | `http://127.0.0.1:4200` |
-| `OPENFANG_DEFAULT_AGENT` | Agent that handles incoming messages | `assistant` |
-
-### Gateway API Endpoints
-
-| Method | Route | Description |
-|--------|-------|-------------|
-| `POST` | `/login/start` | Generate QR code (returns base64 PNG) |
-| `GET` | `/login/status` | Connection status (`disconnected`, `qr_ready`, `connected`) |
-| `POST` | `/message/send` | Send a message (`{ "to": "5511999999999", "text": "Hello" }`) |
-| `GET` | `/health` | Health check |
-
-### Alternative: WhatsApp Cloud API
-
-For production workloads, use the [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) with a Meta Business account. See the [Cloud API configuration docs](https://opencarrier.sh/docs/channels/whatsapp).
-
-
 
 ---
 
-## 27 LLM Providers — 123+ Models
+## 安全体系
 
-3 native drivers (Anthropic, Gemini, OpenAI-compatible) route to 27 providers:
+16 层安全防御，每层独立可测试：
 
-Anthropic, Gemini, OpenAI, Groq, DeepSeek, OpenRouter, Together, Mistral, Fireworks, Cohere, Perplexity, xAI, AI21, Cerebras, SambaNova, HuggingFace, Replicate, Ollama, vLLM, LM Studio, Qwen, MiniMax, Zhipu, Moonshot, Qianfan, Bedrock, and more.
-
-Intelligent routing with task complexity scoring, automatic fallback, cost tracking, and per-model pricing.
-
----
-
-## Migrate from OpenClaw
-
-Already running OpenClaw? One command:
-
-```bash
-# Migrate everything — agents, memory, skills, configs
-opencarrier migrate --from openclaw
-
-# Migrate from a specific path
-opencarrier migrate --from openclaw --path ~/.openclaw
-
-# Dry run first to see what would change
-opencarrier migrate --from openclaw --dry-run
-```
-
-The migration engine imports your agents, conversation history, skills, and configuration. OpenCarrier reads SKILL.md natively and is compatible with the ClawHub marketplace.
-
----
-
-## OpenAI-Compatible API
-
-Drop-in replacement. Point your existing tools at OpenCarrier:
-
-```bash
-curl -X POST localhost:4200/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "researcher",
-    "messages": [{"role": "user", "content": "Analyze Q4 market trends"}],
-    "stream": true
-  }'
-```
-
-140+ REST/WS/SSE endpoints covering agents, memory, workflows, channels, models, skills, A2A, Hands, and more.
+| 层 | 系统 | 功能 |
+|----|------|------|
+| 1 | WASM Dual-Metered Sandbox | 燃料计量 + epoch 中断，watchdog 杀死失控代码 |
+| 2 | Merkle Hash-Chain Audit | 每个操作密码学链接到前一个，篡改即断裂 |
+| 3 | Taint Tracking | 信息流标记传播，追踪 secrets 从源头到出口 |
+| 4 | Ed25519 Manifest Signing | 分身身份和能力集密码学签名 |
+| 5 | SSRF Protection | 阻断私有 IP、云元数据端点、DNS rebinding |
+| 6 | Secret Zeroization | API key 用 `Zeroizing<String>` 自动擦除 |
+| 7 | Capability Gates | RBAC 能力门控，分身声明工具，内核强制执行 |
+| 8 | Path Traversal Prevention | 规范化 + symlink 逃逸防护 |
+| 9 | Loop Guard | SHA256 工具循环检测 + 熔断器 |
+| 10 | Session Repair | 7 阶段消息历史修复 |
+| + | GCRA Rate Limiter, Security Headers, Prompt Injection Scanner, Subprocess Sandbox, Health Redaction, OFP HMAC Auth |
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Install (macOS/Linux)
-curl -fsSL https://opencarrier.sh/install | sh
+# 1. Build
+cargo build --release -p opencarrier-cli
 
-# 2. Initialize — walks you through provider setup
-opencarrier init
+# 2. Initialize
+./target/release/opencarrier init
 
-# 3. Start the daemon
-opencarrier start
+# 3. Start daemon
+./target/release/opencarrier start
 
-# 4. Dashboard is live at http://localhost:4200
-
-# 5. Activate a Hand — it starts working for you
-opencarrier hand activate researcher
-
-# 6. Chat with an agent
-opencarrier chat researcher
-> "What are the emerging trends in AI agent frameworks?"
-
-# 7. Spawn a pre-built agent
-opencarrier agent spawn coder
+# 4. Dashboard
+open http://localhost:4200
 ```
-
-<details>
-<summary><strong>Windows (PowerShell)</strong></summary>
-
-```powershell
-irm https://opencarrier.sh/install.ps1 | iex
-opencarrier init
-opencarrier start
-```
-
-</details>
 
 ---
 
 ## Development
 
 ```bash
-# Build the workspace
-cargo build --workspace --lib
-
-# Run all tests (1,767+)
-cargo test --workspace
-
-# Lint (must be 0 warnings)
-cargo clippy --workspace --all-targets -- -D warnings
-
-# Format
-cargo fmt --all -- --check
+cargo build --workspace --lib          # 编译
+cargo test --workspace                 # 1500+ tests
+cargo clippy --workspace --all-targets -- -D warnings  # 0 warnings
 ```
 
 ---
 
-## Stability Notice
+## Channel Adapters
 
-OpenCarrier v0.3.30 is pre-1.0. The architecture is solid, the test suite is comprehensive, and the security model is comprehensive. That said:
+40 个消息平台适配器：
 
-- **Breaking changes** may occur between minor versions until v1.0
-- **Some Hands** are more mature than others (Browser and Researcher are the most battle-tested)
-- **Edge cases** exist — if you find one, [open an issue](https://github.com/RightNow-AI/opencarrier/issues)
-- **Pin to a specific commit** for production deployments until v1.0
-
-We ship fast and fix fast. The goal is a rock-solid v1.0 by mid-2026.
+**Core**: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email
+**Enterprise**: Teams, Mattermost, Google Chat, Webex, Feishu, Zulip, DingTalk
+**Social**: LINE, Viber, Messenger, Mastodon, Bluesky, Reddit, LinkedIn, Twitch
+**Community**: IRC, XMPP, Guilded, Revolt, Keybase, Discourse, Gitter
+**Privacy**: Threema, Nostr, Mumble, Nextcloud, Rocket.Chat, Ntfy, Gotify
 
 ---
 
-## Security
+## Documentation
 
-To report a security vulnerability, email **jaber@rightnowai.co**. We take all reports seriously and will respond within 48 hours.
+| 文档 | 内容 |
+|------|------|
+| [architecture.md](docs/architecture.md) | 技术架构: crate 结构、内核启动、agent 生命周期 |
+| [ARCHITECTURE-PRINCIPLES.md](docs/ARCHITECTURE-PRINCIPLES.md) | 架构原则: 五层系统、分身结构、动态组装 |
+| [getting-started.md](docs/getting-started.md) | 快速开始 |
+| [configuration.md](docs/configuration.md) | 配置参考 |
+| [api-reference.md](docs/api-reference.md) | API 文档 |
+| [security.md](docs/security.md) | 安全体系 |
 
 ---
 
 ## License
 
-MIT — use it however you want.
-
----
-
-## Links
-
-- [Website & Documentation](https://opencarrier.sh)
-- [Quick Start Guide](https://opencarrier.sh/docs/getting-started)
-- [GitHub](https://github.com/RightNow-AI/opencarrier)
-- [Discord](https://discord.gg/sSJqgNnq6X)
-- [Twitter / X](https://x.com/opencarrierg)
-
----
-
-## Built by RightNow
-
-<p align="center">
-  <a href="https://www.rightnowai.co/">
-    <img src="public/assets/rightnow-logo.webp" width="60" alt="RightNow Logo" />
-  </a>
-</p>
-
-<p align="center">
-  OpenCarrier is built and maintained by <a href="https://x.com/Akashi203"><strong>Jaber</strong></a>, Founder of <a href="https://www.rightnowai.co/"><strong>RightNow</strong></a>.
-</p>
-
-<p align="center">
-  <a href="https://www.rightnowai.co/">Website</a> &bull;
-  <a href="https://x.com/Akashi203">Twitter / X</a> &bull;
-  <a href="https://www.buymeacoffee.com/opencarrier" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
-</p>
-
----
-
-<p align="center">
-  <strong>Built with Rust. Secured with 16 layers. Agents that actually work for you.</strong>
-</p>
+MIT

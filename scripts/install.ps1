@@ -3,14 +3,14 @@
 #   or:  powershell -c "irm https://opencarrier.sh/install.ps1 | iex"
 #
 # Flags (via environment variables):
-#   $env:OPENFANG_INSTALL_DIR = custom install directory
-#   $env:OPENFANG_VERSION     = specific version tag (e.g. "v0.1.0")
+#   $env:OPENCARRIER_INSTALL_DIR = custom install directory
+#   $env:OPENCARRIER_VERSION     = specific version tag (e.g. "v0.1.0")
 
 $ErrorActionPreference = 'Stop'
 
 $Repo = "RightNow-AI/opencarrier"
 $DefaultInstallDir = Join-Path $env:USERPROFILE ".opencarrier\bin"
-$InstallDir = if ($env:OPENFANG_INSTALL_DIR) { $env:OPENFANG_INSTALL_DIR } else { $DefaultInstallDir }
+$InstallDir = if ($env:OPENCARRIER_INSTALL_DIR) { $env:OPENCARRIER_INSTALL_DIR } else { $DefaultInstallDir }
 
 function Write-Banner {
     Write-Host ""
@@ -60,8 +60,8 @@ function Get-Architecture {
 }
 
 function Get-LatestVersion {
-    if ($env:OPENFANG_VERSION) {
-        return $env:OPENFANG_VERSION
+    if ($env:OPENCARRIER_VERSION) {
+        return $env:OPENCARRIER_VERSION
     }
 
     Write-Host "  Fetching latest release..."

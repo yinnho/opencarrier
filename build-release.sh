@@ -8,7 +8,7 @@ set -e
 
 VERSION=${1:-v0.1.0}
 OUTPUT_DIR="dist"
-BINARY_NAME="yinghe"
+BINARY_NAME="opencarrier"
 
 echo "=== Building OpenCarrier Release ${VERSION} ==="
 echo ""

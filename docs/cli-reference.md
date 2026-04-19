@@ -53,7 +53,7 @@ These options apply to all commands.
 | Variable | Description |
 |---|---|
 | `RUST_LOG` | Controls log verbosity (e.g. `info`, `debug`, `opencarrier_kernel=trace`). |
-| `OPENFANG_AGENTS_DIR` | Override the agent templates directory. |
+| `OPENCARRIER_AGENTS_DIR` | Override the agent templates directory. |
 | `EDITOR` / `VISUAL` | Editor used by `opencarrier config edit`. Falls back to `notepad` (Windows) or `vi` (Unix). |
 
 ---
@@ -299,7 +299,7 @@ opencarrier agent new [<TEMPLATE>]
 
 **Behavior:**
 
-- Templates are discovered from: the repo `agents/` directory (dev builds), `~/.opencarrier/agents/` (installed), and `OPENFANG_AGENTS_DIR` (env override).
+- Templates are discovered from: the repo `agents/` directory (dev builds), `~/.opencarrier/agents/` (installed), and `OPENCARRIER_AGENTS_DIR` (env override).
 - Each template is a directory containing an `agent.toml` manifest.
 - In daemon mode: sends `POST /api/agents` with the manifest. Agent is persistent.
 - In standalone mode: boots an in-process kernel. Agent is ephemeral.
