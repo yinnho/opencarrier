@@ -160,7 +160,7 @@ memory_write = ["self.*"]
     ];
 
     println!("\n{}", "=".repeat(60));
-    println!("  OPENFANG MULTI-AGENT FLEET TEST");
+    println!("  OPENCARRIER MULTI-AGENT FLEET TEST");
     println!("  Spawning {} agents...", agents.len());
     println!("{}\n", "=".repeat(60));
 

@@ -3,13 +3,13 @@
 # Usage: curl -sSf https://opencarrier.sh | sh
 #
 # Environment variables:
-#   OPENFANG_INSTALL_DIR  — custom install directory (default: ~/.opencarrier/bin)
-#   OPENFANG_VERSION      — install a specific version tag (default: latest)
+#   OPENCARRIER_INSTALL_DIR  — custom install directory (default: ~/.opencarrier/bin)
+#   OPENCARRIER_VERSION      — install a specific version tag (default: latest)
 
 set -euo pipefail
 
 REPO="RightNow-AI/opencarrier"
-INSTALL_DIR="${OPENFANG_INSTALL_DIR:-$HOME/.opencarrier/bin}"
+INSTALL_DIR="${OPENCARRIER_INSTALL_DIR:-$HOME/.opencarrier/bin}"
 
 detect_platform() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -47,8 +47,8 @@ install() {
     echo ""
 
     # Get latest version
-    if [ -n "${OPENFANG_VERSION:-}" ]; then
-        VERSION="$OPENFANG_VERSION"
+    if [ -n "${OPENCARRIER_VERSION:-}" ]; then
+        VERSION="$OPENCARRIER_VERSION"
         echo "  Using specified version: $VERSION"
     else
         echo "  Fetching latest release..."
