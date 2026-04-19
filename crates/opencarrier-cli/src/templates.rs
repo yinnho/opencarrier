@@ -111,15 +111,3 @@ fn extract_description(toml_str: &str) -> String {
     }
     String::new()
 }
-
-/// Format a template description as a hint for cliclack select items.
-pub fn template_display_hint(t: &AgentTemplate) -> String {
-    if t.description.is_empty() {
-        String::new()
-    } else if t.description.chars().count() > 60 {
-        let truncated: String = t.description.chars().take(57).collect();
-        format!("{truncated}...")
-    } else {
-        t.description.clone()
-    }
-}

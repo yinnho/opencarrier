@@ -1,16 +1,2 @@
-pub mod agents;
-pub mod audit;
 pub mod chat;
-pub mod comms;
-pub mod dashboard;
 pub mod init_wizard;
-pub mod logs;
-pub mod memory;
-pub mod security;
-pub mod sessions;
-pub mod settings;
-pub mod skills;
-pub mod templates;
-pub mod usage;
-pub mod welcome;
-pub mod wizard;
