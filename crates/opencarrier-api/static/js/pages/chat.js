@@ -29,25 +29,11 @@ function chatPage() {
     _audioChunks: [],
     recordingTime: 0,
     _recordingTimer: null,
-    // Model autocomplete state
-    showModelPicker: false,
-    modelPickerList: [],
-    modelPickerFilter: '',
-    modelPickerIdx: 0,
-    // Model switcher dropdown
-    showModelSwitcher: false,
-    modelSwitcherFilter: '',
-    modelSwitcherProviderFilter: '',
-    modelSwitcherIdx: 0,
-    modelSwitching: false,
-    _modelCache: null,
-    _modelCacheTime: 0,
     slashCommands: [
       { cmd: '/help', desc: 'Show available commands' },
       { cmd: '/agents', desc: 'Switch to Agents page' },
       { cmd: '/new', desc: 'Reset session (clear history)' },
       { cmd: '/compact', desc: 'Trigger LLM session compaction' },
-      { cmd: '/model', desc: 'Show or switch model (/model [name])' },
       { cmd: '/stop', desc: 'Cancel current agent run' },
       { cmd: '/usage', desc: 'Show session token usage & cost' },
       { cmd: '/think', desc: 'Toggle extended thinking (/think [on|off|stream])' },
@@ -56,16 +42,13 @@ function chatPage() {
       { cmd: '/queue', desc: 'Check if agent is processing' },
       { cmd: '/status', desc: 'Show system status' },
       { cmd: '/clear', desc: 'Clear chat display' },
-      { cmd: '/exit', desc: 'Disconnect from agent' },
-      { cmd: '/budget', desc: 'Show spending limits and current costs' },
-      { cmd: '/peers', desc: 'Show OFP peer network status' },
-      { cmd: '/a2a', desc: 'List discovered external A2A agents' }
+      { cmd: '/exit', desc: 'Disconnect from agent' }
     ],
     tokenCount: 0,
 
     // ── Tip Bar ──
     tipIndex: 0,
-    tips: ['Type / for commands', '/think on for reasoning', 'Ctrl+Shift+F for focus mode', 'Drag files to attach', '/model to switch models', '/context to check usage', '/verbose off to hide tool details'],
+    tips: ['Type / for commands', '/think on for reasoning', 'Ctrl+Shift+F for focus mode', 'Drag files to attach', '/context to check usage', '/verbose off to hide tool details'],
     tipTimer: null,
     get currentTip() {
       if (localStorage.getItem('of-tips-off') === 'true') return '';
@@ -100,40 +83,6 @@ function chatPage() {
       return short.length > 24 ? short.substring(0, 22) + '\u2026' : short;
     },
 
-    get switcherProviders() {
-      var seen = {};
-      (this._modelCache || []).forEach(function(m) { seen[m.provider] = true; });
-      return Object.keys(seen).sort();
-    },
-
-    get filteredSwitcherModels() {
-      var models = this._modelCache || [];
-      var provFilter = this.modelSwitcherProviderFilter;
-      var textFilter = this.modelSwitcherFilter ? this.modelSwitcherFilter.toLowerCase() : '';
-      if (!provFilter && !textFilter) return models;
-      return models.filter(function(m) {
-        if (provFilter && m.provider !== provFilter) return false;
-        if (textFilter) {
-          return m.id.toLowerCase().indexOf(textFilter) !== -1 ||
-                 (m.display_name || '').toLowerCase().indexOf(textFilter) !== -1 ||
-                 m.provider.toLowerCase().indexOf(textFilter) !== -1;
-        }
-        return true;
-      });
-    },
-
-    get groupedSwitcherModels() {
-      var filtered = this.filteredSwitcherModels;
-      var groups = {}, order = [];
-      filtered.forEach(function(m) {
-        if (!groups[m.provider]) { groups[m.provider] = []; order.push(m.provider); }
-        groups[m.provider].push(m);
-      });
-      return order.map(function(p) {
-        return { provider: p.charAt(0).toUpperCase() + p.slice(1), models: groups[p] };
-      });
-    },
-
     init() {
       var self = this;
 
@@ -149,11 +98,6 @@ function chatPage() {
           e.preventDefault();
           var input = document.getElementById('msg-input');
           if (input) { input.focus(); self.inputText = '/'; }
-        }
-        // Ctrl+M for model switcher
-        if ((e.ctrlKey || e.metaKey) && e.key === 'm' && self.currentAgent) {
-          e.preventDefault();
-          self.toggleModelSwitcher();
         }
         // Ctrl+F for chat search
         if ((e.ctrlKey || e.metaKey) && e.key === 'f' && self.currentAgent) {
@@ -185,95 +129,15 @@ function chatPage() {
         }
       });
 
-      // Watch for slash commands + model autocomplete
+      // Watch for slash commands
       this.$watch('inputText', function(val) {
-        var modelMatch = val.match(/^\/model\s+(.*)$/i);
-        if (modelMatch) {
-          self.showSlashMenu = false;
-          self.modelPickerFilter = modelMatch[1].toLowerCase();
-          if (!self.modelPickerList.length) {
-            OpenCarrierAPI.get('/api/models').then(function(data) {
-              self.modelPickerList = (data.models || []).filter(function(m) { return m.available; });
-              self.showModelPicker = true;
-              self.modelPickerIdx = 0;
-            }).catch(function() {});
-          } else {
-            self.showModelPicker = true;
-          }
-        } else if (val.startsWith('/')) {
-          self.showModelPicker = false;
+        if (val.startsWith('/')) {
           self.slashFilter = val.slice(1).toLowerCase();
           self.showSlashMenu = true;
           self.slashIdx = 0;
         } else {
           self.showSlashMenu = false;
-          self.showModelPicker = false;
         }
-      });
-    },
-
-    get filteredModelPicker() {
-      if (!this.modelPickerFilter) return this.modelPickerList.slice(0, 15);
-      var f = this.modelPickerFilter;
-      return this.modelPickerList.filter(function(m) {
-        return m.id.toLowerCase().indexOf(f) !== -1 || (m.display_name || '').toLowerCase().indexOf(f) !== -1 || m.provider.toLowerCase().indexOf(f) !== -1;
-      }).slice(0, 15);
-    },
-
-    pickModel(modelId) {
-      this.showModelPicker = false;
-      this.inputText = '/model ' + modelId;
-      this.sendMessage();
-    },
-
-    toggleModelSwitcher() {
-      if (this.showModelSwitcher) { this.showModelSwitcher = false; return; }
-      var self = this;
-      var now = Date.now();
-      if (this._modelCache && (now - this._modelCacheTime) < 300000) {
-        this.modelSwitcherFilter = '';
-        this.modelSwitcherProviderFilter = '';
-        this.modelSwitcherIdx = 0;
-        this.showModelSwitcher = true;
-        this.$nextTick(function() {
-          var el = document.getElementById('model-switcher-search');
-          if (el) el.focus();
-        });
-        return;
-      }
-      OpenCarrierAPI.get('/api/models').then(function(data) {
-        var models = (data.models || []).filter(function(m) { return m.available; });
-        self._modelCache = models;
-        self._modelCacheTime = Date.now();
-        self.modelPickerList = models;
-        self.modelSwitcherFilter = '';
-        self.modelSwitcherProviderFilter = '';
-        self.modelSwitcherIdx = 0;
-        self.showModelSwitcher = true;
-        self.$nextTick(function() {
-          var el = document.getElementById('model-switcher-search');
-          if (el) el.focus();
-        });
-      }).catch(function(e) {
-        OpenCarrierToast.error('Failed to load models: ' + e.message);
-      });
-    },
-
-    switchModel(model) {
-      if (!this.currentAgent) return;
-      if (model.id === this.currentAgent.model_name) { this.showModelSwitcher = false; return; }
-      var self = this;
-      this.modelSwitching = true;
-      OpenCarrierAPI.put('/api/agents/' + this.currentAgent.id + '/model', { model: model.id }).then(function(resp) {
-        // Use server-resolved model/provider to stay in sync (fixes #387/#466)
-        self.currentAgent.model_name = (resp && resp.model) || model.id;
-        self.currentAgent.model_provider = (resp && resp.provider) || model.provider;
-        OpenCarrierToast.success('Switched to ' + (model.display_name || model.id));
-        self.showModelSwitcher = false;
-        self.modelSwitching = false;
-      }).catch(function(e) {
-        OpenCarrierToast.error('Switch failed: ' + e.message);
-        self.modelSwitching = false;
       });
     },
 
@@ -418,27 +282,6 @@ function chatPage() {
             self.scrollToBottom();
           }).catch(function() {});
           break;
-        case '/model':
-          if (self.currentAgent) {
-            if (cmdArgs) {
-              OpenCarrierAPI.put('/api/agents/' + self.currentAgent.id + '/model', { model: cmdArgs }).then(function(resp) {
-                // Use server-resolved model/provider (fixes #387/#466)
-                var resolvedModel = (resp && resp.model) || cmdArgs;
-                var resolvedProvider = (resp && resp.provider) || '';
-                self.currentAgent.model_name = resolvedModel;
-                if (resolvedProvider) { self.currentAgent.model_provider = resolvedProvider; }
-                self.messages.push({ id: ++msgId, role: 'system', text: 'Model switched to: `' + resolvedModel + '`' + (resolvedProvider ? ' (provider: `' + resolvedProvider + '`)' : ''), meta: '', tools: [] });
-                self.scrollToBottom();
-              }).catch(function(e) { OpenCarrierToast.error('Model switch failed: ' + e.message); });
-            } else {
-              self.messages.push({ id: ++msgId, role: 'system', text: '**Current Model**\n- Provider: `' + (self.currentAgent.model_provider || '?') + '`\n- Model: `' + (self.currentAgent.model_name || '?') + '`', meta: '', tools: [] });
-              self.scrollToBottom();
-            }
-          } else {
-            self.messages.push({ id: ++msgId, role: 'system', text: 'No agent selected.', meta: '', tools: [] });
-            self.scrollToBottom();
-          }
-          break;
         case '/clear':
           self.messages = [];
           break;
@@ -448,36 +291,6 @@ function chatPage() {
           self.currentAgent = null;
           self.messages = [];
           window.dispatchEvent(new Event('close-chat'));
-          break;
-        case '/budget':
-          OpenCarrierAPI.get('/api/budget').then(function(b) {
-            var fmt = function(v) { return v > 0 ? '$' + v.toFixed(2) : 'unlimited'; };
-            self.messages.push({ id: ++msgId, role: 'system', text: '**Budget Status**\n' +
-              '- Hourly: $' + (b.hourly_spend||0).toFixed(4) + ' / ' + fmt(b.hourly_limit) + '\n' +
-              '- Daily: $' + (b.daily_spend||0).toFixed(4) + ' / ' + fmt(b.daily_limit) + '\n' +
-              '- Monthly: $' + (b.monthly_spend||0).toFixed(4) + ' / ' + fmt(b.monthly_limit), meta: '', tools: [] });
-            self.scrollToBottom();
-          }).catch(function() {});
-          break;
-        case '/peers':
-          OpenCarrierAPI.get('/api/network/status').then(function(ns) {
-            self.messages.push({ id: ++msgId, role: 'system', text: '**OFP Network**\n' +
-              '- Status: ' + (ns.enabled ? 'Enabled' : 'Disabled') + '\n' +
-              '- Connected peers: ' + (ns.connected_peers||0) + ' / ' + (ns.total_peers||0), meta: '', tools: [] });
-            self.scrollToBottom();
-          }).catch(function() {});
-          break;
-        case '/a2a':
-          OpenCarrierAPI.get('/api/a2a/agents').then(function(res) {
-            var agents = res.agents || [];
-            if (!agents.length) {
-              self.messages.push({ id: ++msgId, role: 'system', text: 'No external A2A agents discovered.', meta: '', tools: [] });
-            } else {
-              var lines = agents.map(function(a) { return '- **' + a.name + '** — ' + a.url; });
-              self.messages.push({ id: ++msgId, role: 'system', text: '**A2A Agents (' + agents.length + ')**\n' + lines.join('\n'), meta: '', tools: [] });
-            }
-            self.scrollToBottom();
-          }).catch(function() {});
           break;
       }
     },

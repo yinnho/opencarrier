@@ -1,23 +1,11 @@
-// OpenCarrier Scheduler Page — Cron job management + event triggers unified view
+// OpenCarrier Scheduler Page — Cron job management
 'use strict';
 
 function schedulerPage() {
   return {
-    tab: 'jobs',
-
-    // -- Scheduled Jobs state --
     jobs: [],
     loading: true,
     loadError: '',
-
-    // -- Event Triggers state --
-    triggers: [],
-    trigLoading: false,
-    trigLoadError: '',
-
-    // -- Run History state --
-    history: [],
-    historyLoading: false,
 
     // -- Create Job form --
     showCreateForm: false,
@@ -64,7 +52,6 @@ function schedulerPage() {
     async loadJobs() {
       var data = await OpenCarrierAPI.get('/api/cron/jobs');
       var raw = data.jobs || [];
-      // Normalize cron API response to flat fields the UI expects
       this.jobs = raw.map(function(j) {
         var cron = '';
         if (j.schedule) {
@@ -85,59 +72,6 @@ function schedulerPage() {
           created_at: j.created_at
         };
       });
-    },
-
-    async loadTriggers() {
-      this.trigLoading = true;
-      this.trigLoadError = '';
-      try {
-        var data = await OpenCarrierAPI.get('/api/triggers');
-        this.triggers = Array.isArray(data) ? data : [];
-      } catch(e) {
-        this.triggers = [];
-        this.trigLoadError = e.message || 'Could not load triggers.';
-      }
-      this.trigLoading = false;
-    },
-
-    async loadHistory() {
-      this.historyLoading = true;
-      try {
-        var historyItems = [];
-        var jobs = this.jobs || [];
-        for (var i = 0; i < jobs.length; i++) {
-          var job = jobs[i];
-          if (job.last_run) {
-            historyItems.push({
-              timestamp: job.last_run,
-              name: job.name || '(unnamed)',
-              type: 'schedule',
-              status: 'completed',
-              run_count: 0
-            });
-          }
-        }
-        var triggers = this.triggers || [];
-        for (var j = 0; j < triggers.length; j++) {
-          var t = triggers[j];
-          if (t.fire_count > 0) {
-            historyItems.push({
-              timestamp: t.created_at,
-              name: 'Trigger: ' + this.triggerType(t.pattern),
-              type: 'trigger',
-              status: 'fired',
-              run_count: t.fire_count
-            });
-          }
-        }
-        historyItems.sort(function(a, b) {
-          return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-        });
-        this.history = historyItems;
-      } catch(e) {
-        this.history = [];
-      }
-      this.historyLoading = false;
     },
 
     // ── Job CRUD ──
@@ -214,52 +148,6 @@ function schedulerPage() {
       this.runningJobId = '';
     },
 
-    // ── Trigger helpers ──
-
-    triggerType(pattern) {
-      if (!pattern) return 'unknown';
-      if (typeof pattern === 'string') return pattern;
-      var keys = Object.keys(pattern);
-      if (keys.length === 0) return 'unknown';
-      var key = keys[0];
-      var names = {
-        lifecycle: 'Lifecycle',
-        agent_spawned: 'Agent Spawned',
-        agent_terminated: 'Agent Terminated',
-        system: 'System',
-        system_keyword: 'System Keyword',
-        memory_update: 'Memory Update',
-        memory_key_pattern: 'Memory Key',
-        all: 'All Events',
-        content_match: 'Content Match'
-      };
-      return names[key] || key.replace(/_/g, ' ');
-    },
-
-    async toggleTrigger(trigger) {
-      try {
-        var newState = !trigger.enabled;
-        await OpenCarrierAPI.put('/api/triggers/' + trigger.id, { enabled: newState });
-        trigger.enabled = newState;
-        OpenCarrierToast.success('Trigger ' + (newState ? 'enabled' : 'disabled'));
-      } catch(e) {
-        OpenCarrierToast.error('Failed to toggle trigger: ' + (e.message || e));
-      }
-    },
-
-    deleteTrigger(trigger) {
-      var self = this;
-      OpenCarrierToast.confirm('Delete Trigger', 'Delete this trigger? This cannot be undone.', async function() {
-        try {
-          await OpenCarrierAPI.del('/api/triggers/' + trigger.id);
-          self.triggers = self.triggers.filter(function(t) { return t.id !== trigger.id; });
-          OpenCarrierToast.success('Trigger deleted');
-        } catch(e) {
-          OpenCarrierToast.error('Failed to delete trigger: ' + (e.message || e));
-        }
-      });
-    },
-
     // ── Utility ──
 
     get availableAgents() {
@@ -278,7 +166,6 @@ function schedulerPage() {
 
     describeCron(expr) {
       if (!expr) return '';
-      // Handle non-cron schedule descriptions
       if (expr.indexOf('every ') === 0) return expr;
       if (expr.indexOf('at ') === 0) return 'One-time: ' + expr.substring(3);
 
@@ -360,7 +247,6 @@ function schedulerPage() {
         var diff = Date.now() - new Date(ts).getTime();
         if (isNaN(diff)) return 'never';
         if (diff < 0) {
-          // Future time
           var absDiff = Math.abs(diff);
           if (absDiff < 60000) return 'in <1m';
           if (absDiff < 3600000) return 'in ' + Math.floor(absDiff / 60000) + 'm';
@@ -378,14 +264,6 @@ function schedulerPage() {
       var enabled = 0;
       for (var i = 0; i < this.jobs.length; i++) {
         if (this.jobs[i].enabled) enabled++;
-      }
-      return enabled;
-    },
-
-    triggerCount() {
-      var enabled = 0;
-      for (var i = 0; i < this.triggers.length; i++) {
-        if (this.triggers[i].enabled) enabled++;
       }
       return enabled;
     }
