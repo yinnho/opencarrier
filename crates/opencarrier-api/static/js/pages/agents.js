@@ -86,7 +86,7 @@ function agentsPage() {
 
     // -- Templates state --
     tplTemplates: [],
-    tplProviders: [],
+    activeTplTab: 'browse',
     tplLoading: false,
     tplLoadError: '',
     selectedCategory: 'All',
@@ -177,12 +177,6 @@ function agentsPage() {
       });
     },
 
-    isProviderConfigured(providerName) {
-      if (!providerName) return false;
-      var p = this.tplProviders.find(function(pr) { return pr.id === providerName; });
-      return p ? p.auth_status === 'configured' : false;
-    },
-
     async init() {
       var self = this;
       this.loading = true;
@@ -222,12 +216,8 @@ function agentsPage() {
       this.tplLoading = true;
       this.tplLoadError = '';
       try {
-        var results = await Promise.all([
-          OpenCarrierAPI.get('/api/templates'),
-          OpenCarrierAPI.get('/api/providers').catch(function() { return { providers: [] }; })
-        ]);
-        this.tplTemplates = results[0].templates || [];
-        this.tplProviders = results[1].providers || [];
+        var data = await OpenCarrierAPI.get('/api/templates');
+        this.tplTemplates = data.templates || [];
       } catch(e) {
         this.tplTemplates = [];
         this.tplLoadError = e.message || 'Could not load templates.';

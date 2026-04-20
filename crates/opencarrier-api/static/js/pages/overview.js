@@ -7,8 +7,6 @@ function overviewPage() {
     status: {},
     usageSummary: {},
     recentAudit: [],
-    channels: [],
-    providers: [],
     mcpServers: [],
     skillCount: 0,
     loading: true,
@@ -25,8 +23,6 @@ function overviewPage() {
           this.loadStatus(),
           this.loadUsage(),
           this.loadAudit(),
-          this.loadChannels(),
-          this.loadProviders(),
           this.loadMcpServers(),
           this.loadSkills()
         ]);
@@ -47,8 +43,6 @@ function overviewPage() {
           this.loadStatus(),
           this.loadUsage(),
           this.loadAudit(),
-          this.loadChannels(),
-          this.loadProviders(),
           this.loadMcpServers(),
           this.loadSkills()
         ]);
@@ -107,20 +101,6 @@ function overviewPage() {
       } catch(e) { this.recentAudit = []; }
     },
 
-    async loadChannels() {
-      try {
-        var data = await OpenCarrierAPI.get('/api/channels');
-        this.channels = (data.channels || []).filter(function(ch) { return ch.has_token; });
-      } catch(e) { this.channels = []; }
-    },
-
-    async loadProviders() {
-      try {
-        var data = await OpenCarrierAPI.get('/api/providers');
-        this.providers = data.providers || [];
-      } catch(e) { this.providers = []; }
-    },
-
     async loadMcpServers() {
       try {
         var data = await OpenCarrierAPI.get('/api/mcp/servers');
@@ -135,34 +115,8 @@ function overviewPage() {
       } catch(e) { this.skillCount = 0; }
     },
 
-    get configuredProviders() {
-      return this.providers.filter(function(p) { return p.auth_status === 'configured'; });
-    },
-
-    get unconfiguredProviders() {
-      return this.providers.filter(function(p) { return p.auth_status === 'not_set' || p.auth_status === 'missing'; });
-    },
-
     get connectedMcp() {
       return this.mcpServers.filter(function(s) { return s.status === 'connected'; });
-    },
-
-    // Provider health badge color
-    providerBadgeClass(p) {
-      if (p.auth_status === 'configured') {
-        if (p.health === 'cooldown' || p.health === 'open') return 'badge-warn';
-        return 'badge-success';
-      }
-      if (p.auth_status === 'not_set' || p.auth_status === 'missing') return 'badge-muted';
-      return 'badge-dim';
-    },
-
-    // Provider health tooltip
-    providerTooltip(p) {
-      if (p.health === 'cooldown') return p.display_name + ' \u2014 cooling down (rate limited)';
-      if (p.health === 'open') return p.display_name + ' \u2014 circuit breaker open';
-      if (p.auth_status === 'configured') return p.display_name + ' \u2014 ready';
-      return p.display_name + ' \u2014 not configured';
     },
 
     // Audit action badge color
@@ -179,17 +133,15 @@ function overviewPage() {
 
     get setupChecklist() {
       return [
-        { key: 'provider', label: 'Configure an LLM provider', done: this.configuredProviders.length > 0, action: '#settings' },
         { key: 'agent', label: 'Create your first agent', done: (Alpine.store('app').agents || []).length > 0, action: '#agents' },
         { key: 'chat', label: 'Send your first message', done: localStorage.getItem('of-first-msg') === 'true', action: '#chat' },
-        { key: 'channel', label: 'Connect a messaging channel', done: this.channels.length > 0, action: '#channels' },
         { key: 'skill', label: 'Browse or install a skill', done: localStorage.getItem('of-skill-browsed') === 'true', action: '#skills' }
       ];
     },
 
     get setupProgress() {
       var done = this.setupChecklist.filter(function(item) { return item.done; }).length;
-      return (done / 5) * 100;
+      return (done / 3) * 100;
     },
 
     get setupDoneCount() {
