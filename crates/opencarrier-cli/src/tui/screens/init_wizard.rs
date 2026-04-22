@@ -626,7 +626,7 @@ pub fn run() -> InitResult {
                                     && state.key_test == KeyTestState::Idle
                                 {
                                     if let Some(p) = state.provider() {
-                                        let _ = crate::dotenv::save_env_key(
+                                        let _ = opencarrier_kernel::dotenv::save_env_key(
                                             p.env_var,
                                             &state.api_key_input,
                                         );

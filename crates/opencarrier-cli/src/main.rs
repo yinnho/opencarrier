@@ -3,7 +3,6 @@
 //! When a daemon is running (`opencarrier start`), the CLI talks to it over HTTP.
 //! Otherwise, commands boot an in-process kernel (single-shot mode).
 
-mod dotenv;
 mod mcp;
 pub mod serve;
 mod acp;
@@ -14,7 +13,7 @@ mod ui;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use opencarrier_api::server::read_daemon_info;
-use opencarrier_kernel::OpenCarrierKernel;
+use opencarrier_kernel::{KernelHandle, OpenCarrierKernel};
 use opencarrier_types::agent::{AgentId, AgentManifest};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
@@ -495,7 +494,7 @@ fn init_tracing_file() {
 
 fn main() {
     // Load ~/.opencarrier/.env into process environment (system env takes priority).
-    dotenv::load_dotenv();
+    opencarrier_kernel::dotenv::load_dotenv();
 
     let cli = Cli::parse();
 
@@ -998,6 +997,81 @@ fn cmd_start(config: Option<PathBuf>) {
     rt.block_on(async {
         let kernel_config = opencarrier_kernel::config::load_config(config.as_deref());
 
+        // ── Brain config: sync from Hub ─────────────────────────────
+        let brain_path = kernel_config.home_dir.join(&kernel_config.brain.config);
+        let brain_ts_path = kernel_config.home_dir.join(".brain_updated_at");
+        let hub = &kernel_config.hub;
+        match std::env::var(&hub.api_key_env) {
+            Ok(api_key) => {
+                let url = format!("{}/api/brain/config", hub.url.trim_end_matches('/'));
+                match reqwest::Client::new()
+                    .get(&url)
+                    .bearer_auth(&api_key)
+                    .send().await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        let hub_updated_at: i64 = resp
+                            .headers()
+                            .get("X-Brain-Updated-At")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        let local_updated_at: i64 = std::fs::read_to_string(&brain_ts_path)
+                            .ok()
+                            .and_then(|s| s.trim().parse().ok())
+                            .unwrap_or(0);
+                        if hub_updated_at > local_updated_at || !brain_path.exists() {
+                            match resp.text().await {
+                                Ok(json) => {
+                                    if let Some(parent) = brain_path.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+                                    if let Err(e) = std::fs::write(&brain_path, &json) {
+                                        eprintln!("  ✘ Failed to save brain.json: {e}");
+                                        std::process::exit(1);
+                                    }
+                                    if let Err(e) = std::fs::write(&brain_ts_path, hub_updated_at.to_string()) {
+                                        eprintln!("  ✘ Failed to save brain timestamp: {e}");
+                                    }
+                                    if local_updated_at == 0 {
+                                        eprintln!("  ✓ Brain config saved to {}", brain_path.display());
+                                    } else {
+                                        eprintln!("  ✓ Brain config updated from Hub ({} → {})", local_updated_at, hub_updated_at);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("  ✘ Failed to read Hub response: {e}");
+                                    if !brain_path.exists() {
+                                        std::process::exit(1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(resp) => {
+                        let body = resp.text().await.unwrap_or_default();
+                        eprintln!("  ⚠ Hub returned error for brain config: {body}");
+                        if !brain_path.exists() {
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  ⚠ Cannot connect to Hub for brain config: {e}");
+                        if !brain_path.exists() {
+                            eprintln!("  ✘ Brain config not found and Hub unreachable.");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                if !brain_path.exists() {
+                    eprintln!("  ✘ Brain config not found and {} is not set.", hub.api_key_env);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         let kernel = match OpenCarrierKernel::boot_with_config(kernel_config) {
             Ok(k) => k,
             Err(e) => {
@@ -1005,6 +1079,72 @@ fn cmd_start(config: Option<PathBuf>) {
                 std::process::exit(1);
             }
         };
+
+        // ── Install default clones from Hub (only if missing) ─────────
+        const DEFAULT_CLONES: &[&str] = &["clone-creator", "clone-trainer"];
+        let hub = &kernel.config.hub;
+        if let Ok(api_key) = std::env::var(&hub.api_key_env) {
+            for clone_name in DEFAULT_CLONES {
+                if kernel.registry.find_by_name(clone_name).is_some() {
+                    continue; // already installed
+                }
+
+                let url = format!(
+                    "{}/api/templates/{}/download",
+                    hub.url.trim_end_matches('/'),
+                    clone_name
+                );
+                eprintln!("  Installing default clone '{}' from Hub...", clone_name);
+
+                match reqwest::Client::new()
+                    .get(&url)
+                    .bearer_auth(&api_key)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => {
+                        if resp.status().is_success() {
+                            match resp.bytes().await {
+                                Ok(bytes) => {
+                                    match kernel.clone_install(clone_name, &bytes).await {
+                                        Ok((id, name)) => {
+                                            eprintln!("  ✓ Clone '{}' installed (id={})", name, id);
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "  ⚠ Failed to install clone '{}': {}",
+                                                clone_name, e
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "  ⚠ Failed to read .agx for '{}': {}",
+                                        clone_name, e
+                                    );
+                                }
+                            }
+                        } else {
+                            let status = resp.status();
+                            let body = resp.text().await.unwrap_or_default();
+                            eprintln!(
+                                "  ⚠ Hub returned {} for '{}': {}",
+                                status,
+                                clone_name,
+                                body
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "  ⚠ Cannot download '{}': {}",
+                            clone_name, e
+                        );
+                    }
+                }
+            }
+        }
 
         let listen_addr = kernel.config.api_listen.clone();
         let daemon_info_path = kernel.config.home_dir.join("daemon.json");
@@ -2781,7 +2921,7 @@ fn cmd_providers() {
     }
 
     // Load .env to check which keys are set
-    dotenv::load_dotenv();
+    opencarrier_kernel::dotenv::load_dotenv();
 
     loop {
         println!();
@@ -2898,7 +3038,7 @@ fn cmd_providers() {
         }
 
         // Save
-        match dotenv::save_env_key(&env_var, &key) {
+        match opencarrier_kernel::dotenv::save_env_key(&env_var, &key) {
             Ok(()) => {
                 // Update in-memory env so status reflects immediately
                 std::env::set_var(&env_var, &key);

@@ -699,7 +699,7 @@
         <div class="page-header">
           <h2>Chat</h2>
           <div class="flex gap-2">
-            <button class="btn btn-ghost btn-sm" x-show="agents.length" @click="openSpawnWizard()">+ New Agent</button>
+            <button class="btn btn-ghost btn-sm" x-show="agents.length" @click="openHubModal()">+ 安装分身</button>
             <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
           </div>
         </div>
@@ -1091,6 +1091,69 @@
             </div>
           </template>
 
+          <!-- Hub Install Modal -->
+          <template x-if="showHubModal">
+            <div class="modal-overlay" @click.self="closeHubModal()" @keydown.escape.window="closeHubModal()">
+              <div class="modal" style="max-width:560px;max-height:80vh;display:flex;flex-direction:column">
+                <div class="modal-header">
+                  <h3>从 Hub 安装分身</h3>
+                  <button class="modal-close" @click="closeHubModal()">&times;</button>
+                </div>
+
+                <!-- Loading -->
+                <div x-show="hubLoading" style="padding:24px;text-align:center">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                  <p class="text-xs text-dim" style="margin-top:8px">Loading templates from Hub...</p>
+                </div>
+
+                <!-- Error -->
+                <div x-show="hubError && !hubLoading" style="padding:16px;background:var(--danger-subtle);border-radius:var(--radius-md);margin:16px">
+                  <p class="text-xs" style="color:var(--danger)" x-text="hubError"></p>
+                  <button class="btn btn-ghost btn-sm" style="margin-top:8px" @click="loadHubTemplates()">Retry</button>
+                </div>
+
+                <!-- Empty -->
+                <div x-show="!hubLoading && !hubError && hubTemplates.length === 0" style="padding:24px;text-align:center">
+                  <p class="text-xs text-dim">No templates available on Hub.</p>
+                </div>
+
+                <!-- Template list -->
+                <div x-show="!hubLoading && hubTemplates.length > 0" style="overflow-y:auto;flex:1;padding:0 16px 16px">
+                  <div style="display:flex;flex-direction:column;gap:8px">
+                    <template x-for="t in hubTemplates" :key="t.name">
+                      <div style="display:flex;align-items:flex-start;gap:10px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md)">
+                        <div style="flex:1;min-width:0">
+                          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                            <span class="font-bold" style="font-size:13px" x-text="t.name"></span>
+                            <span class="badge" style="font-size:9px;padding:1px 6px;background:var(--accent-subtle);color:var(--accent)" x-text="'v' + t.version"></span>
+                          </div>
+                          <p class="text-xs text-dim" style="margin-top:4px;line-height:1.4" x-text="t.description || 'No description'"></p>
+                          <div style="display:flex;align-items:center;gap:12px;margin-top:6px" class="text-xs text-dim">
+                            <span x-show="t.author" x-text="'By ' + t.author"></span>
+                            <span x-text="t.downloads + ' downloads'"></span>
+                            <span x-show="t.rating > 0" x-text="'★ ' + t.rating.toFixed(1)"></span>
+                          </div>
+                        </div>
+                        <button class="btn btn-primary btn-sm" style="flex-shrink:0;white-space:nowrap"
+                                @click="installHubTemplate(t.name)"
+                                :disabled="hubInstalling === t.name">
+                          <span x-show="hubInstalling !== t.name">Install</span>
+                          <span x-show="hubInstalling === t.name">Installing...</span>
+                        </button>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+                <!-- Footer -->
+                <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+                  <button class="btn btn-ghost btn-sm" @click="closeHubModal(); openSpawnWizard()" style="font-size:11px">Create empty agent manually</button>
+                  <button class="btn btn-ghost btn-sm" @click="loadHubTemplates()" style="font-size:11px">Refresh</button>
+                </div>
+              </div>
+            </div>
+          </template>
+
         </div><!-- /activeChatAgent picker wrapper -->
       </div>
     </template>
@@ -1341,6 +1404,84 @@
                 </template>
               </div>
             </template>
+
+            <!-- LLM Providers -->
+            <div class="card mt-4" style="border-left:3px solid var(--accent-light)">
+              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <span>LLM Providers</span>
+                <span class="badge badge-secondary" style="font-size:10px" x-show="providerKeySaving" x-text="Object.keys(providerKeySaving).filter(k=>providerKeySaving[k]).length + ' saving'"></span>
+              </div>
+              <div class="card-body" style="padding-top:8px">
+                <p style="font-size:12px;color:var(--text-dim);margin:0 0 8px">Set API keys for each LLM provider. Keys are stored in <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px">~/.opencarrier/.env</code> and loaded into the daemon at runtime.</p>
+                <div x-show="providerKeys.length === 0" style="font-size:12px;color:var(--text-dim)">No providers configured in brain.json.</div>
+                <table x-show="providerKeys.length > 0" style="width:100%;font-size:12px;border-collapse:collapse">
+                  <thead>
+                    <tr style="border-bottom:1px solid var(--border)">
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">Provider</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">Endpoints</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">Credentials</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600;width:80px">Status</th>
+                      <th style="text-align:right;padding:6px 4px;font-weight:600;width:60px"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="p in providerKeys" :key="p.name">
+                      <tr style="border-bottom:1px solid var(--border-light)">
+                        <td style="padding:8px 4px">
+                          <div style="font-weight:600" x-text="p.name"></div>
+                          <div style="font-size:10px;color:var(--text-dim)">
+                            <span x-text="p.auth_type === 'jwt' ? 'JWT Auth' : (p.api_key_env || 'No auth')"></span>
+                          </div>
+                        </td>
+                        <td style="padding:8px 4px">
+                          <template x-if="p.endpoints.length > 0">
+                            <div>
+                              <template x-for="ep in p.endpoints" :key="ep">
+                                <span class="badge badge-secondary" style="font-size:10px;margin-right:4px" x-text="ep"></span>
+                              </template>
+                            </div>
+                          </template>
+                          <template x-if="p.endpoints.length === 0">
+                            <span style="font-size:10px;color:var(--text-dim)">—</span>
+                          </template>
+                        </td>
+                        <td style="padding:8px 4px">
+                          <!-- apikey type: single input -->
+                          <template x-if="p.auth_type !== 'jwt'">
+                            <div style="display:flex;align-items:center;gap:6px">
+                              <input class="form-input" type="password" style="flex:1;font-size:12px" :placeholder="p.has_key ? '******' : 'Enter API key...'" x-model="providerKeyInputs[p.name]" spellcheck="false">
+                              <button class="btn btn-primary btn-sm" :disabled="providerKeySaving[p.name] || !providerKeyInputs[p.name]" @click="saveProviderKey(p.name)">Save</button>
+                            </div>
+                          </template>
+                          <!-- jwt type: multi-param inputs -->
+                          <template x-if="p.auth_type === 'jwt'">
+                            <div>
+                              <template x-for="param in (p.params || [])" :key="param.name">
+                                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+                                  <label style="width:100px;font-size:10px;color:var(--text-dim);flex-shrink:0" x-text="param.name.replace('_env','').replace(/_/g,' ')"></label>
+                                  <input class="form-input" type="password" style="flex:1;font-size:12px" :placeholder="param.has_value ? '******' : 'Enter ' + param.name.replace('_env','').replace(/_/g,' ') + '...'" x-model="providerKeyInputs[p.name + '_' + param.name]" spellcheck="false">
+                                </div>
+                              </template>
+                              <div style="display:flex;justify-content:flex-end;margin-top:4px">
+                                <button class="btn btn-primary btn-sm" :disabled="providerKeySaving[p.name]" @click="saveProviderKeyJwt(p.name)">Save</button>
+                              </div>
+                            </div>
+                          </template>
+                        </td>
+                        <td style="padding:8px 4px">
+                          <span class="badge" :class="p.has_key ? 'badge-success' : 'badge-warning'" style="font-size:10px" x-text="p.has_key ? 'Ready' : 'Missing'"></span>
+                        </td>
+                        <td style="padding:8px 4px;text-align:right">
+                          <button class="btn btn-ghost btn-sm" style="color:var(--error);padding:2px 6px" x-show="p.has_key" @click="deleteProviderKey(p.name)">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                          </button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
 
             <!-- Raw JSON fallback -->
             <div class="card mt-4" style="border-left:3px solid var(--border)">

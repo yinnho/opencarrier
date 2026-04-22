@@ -35,12 +35,20 @@ pub struct ProviderConfig {
     /// If empty/missing, this provider doesn't require authentication (e.g., Ollama).
     #[serde(default)]
     pub api_key_env: String,
+    /// Authentication type: "apikey" (default), "jwt", etc.
+    /// Determines how credentials are used to authenticate API calls.
+    #[serde(default = "default_auth_type")]
+    pub auth_type: String,
     /// Additional parameters (env var names) for multi-credential providers.
     /// Maps a logical name → environment variable name to read at runtime.
     /// Example: Kling needs access_key + secret_key:
     ///   { "access_key_env": "KLING_ACCESS_KEY", "secret_key_env": "KLING_SECRET_KEY" }
     #[serde(default)]
     pub params: HashMap<String, String>,
+}
+
+fn default_auth_type() -> String {
+    "apikey".to_string()
 }
 
 /// Endpoint = format + base_url + model (complete callable unit).
@@ -69,9 +77,10 @@ fn default_format() -> ApiFormat {
 }
 
 /// API protocol format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ApiFormat {
+    #[default]
     OpenAI,
     Anthropic,
     Gemini,
@@ -250,6 +259,20 @@ mod tests {
         assert!(config.modalities["fast"].fallbacks.is_empty());
 
         assert_eq!(config.default_modality, "chat"); // default
+    }
+
+    #[test]
+    fn test_provider_auth_type_default() {
+        // Missing auth_type defaults to "apikey"
+        let json = r#"{"api_key_env": "FOO"}"#;
+        let pc: ProviderConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(pc.auth_type, "apikey");
+
+        // Explicit auth_type
+        let json = r#"{"auth_type": "jwt", "params": {"access_key_env": "AK", "secret_key_env": "SK"}}"#;
+        let pc: ProviderConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(pc.auth_type, "jwt");
+        assert_eq!(pc.params["access_key_env"], "AK");
     }
 
     #[test]

@@ -100,6 +100,30 @@ pub fn env_file_exists() -> bool {
     env_file_path().map(|p| p.exists()).unwrap_or(false)
 }
 
+/// Delete a key from `~/.opencarrier/.env`.
+///
+/// Also removes the key from the current process environment.
+pub fn delete_env_key(key: &str) -> Result<(), String> {
+    let path = env_file_path().ok_or("Could not determine home directory")?;
+
+    let mut entries = read_env_file(&path);
+    let removed = entries.remove(key).is_some();
+
+    if removed {
+        write_env_file(&path, &entries)?;
+    }
+
+    // Also unset from current process
+    std::env::remove_var(key);
+
+    Ok(())
+}
+
+/// Check if a key exists in `~/.opencarrier/.env` or the process environment.
+pub fn has_env_key(key: &str) -> bool {
+    std::env::var(key).is_ok()
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

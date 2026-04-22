@@ -2066,6 +2066,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "urlencoding",
  "uuid",
 ]
 
@@ -2123,6 +2124,7 @@ name = "opencarrier-kernel"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "chrono",
  "chrono-tz",
  "cron",
@@ -2131,6 +2133,7 @@ dependencies = [
  "dirs",
  "futures",
  "hex",
+ "hmac",
  "libc",
  "opencarrier-clone",
  "opencarrier-lifecycle",
@@ -2142,6 +2145,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "tempfile",
  "thiserror 2.0.18",

@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use opencarrier_types::brain::ApiFormat;
 use opencarrier_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use opencarrier_types::tool::{ToolCall, ToolDefinition};
 use serde::{Deserialize, Serialize};
@@ -225,12 +226,15 @@ pub trait Brain: Send + Sync {
 /// Configuration for creating an LLM driver.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DriverConfig {
-    /// Provider name.
+    /// Provider name (used for logging and CLI subprocess drivers).
     pub provider: String,
     /// API key.
     pub api_key: Option<String>,
-    /// Base URL override.
+    /// Base URL — the complete API endpoint URL (no path suffix appended by drivers).
     pub base_url: Option<String>,
+    /// API protocol format — determines which driver to instantiate.
+    #[serde(default)]
+    pub format: Option<ApiFormat>,
     /// Skip interactive permission prompts (Claude Code provider only).
     ///
     /// When `true`, adds `--dangerously-skip-permissions` to the spawned
@@ -253,6 +257,7 @@ impl std::fmt::Debug for DriverConfig {
             .field("provider", &self.provider)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("base_url", &self.base_url)
+            .field("format", &self.format)
             .field("skip_permissions", &self.skip_permissions)
             .finish()
     }

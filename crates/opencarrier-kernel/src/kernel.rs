@@ -300,6 +300,54 @@ fn append_daily_memory_log(workspace: &Path, response: &str) {
 }
 
 impl OpenCarrierKernel {
+    /// Fetch brain configuration from Hub synchronously.
+    ///
+    /// Uses a temporary tokio runtime to perform the async HTTP request.
+    /// On success, writes the config to `brain_path` and returns the parsed config.
+    fn fetch_brain_from_hub_sync(
+        hub: &opencarrier_types::config::HubConfig,
+        brain_path: &std::path::Path,
+    ) -> Result<opencarrier_types::brain::BrainConfig, String> {
+        let api_key = std::env::var(&hub.api_key_env)
+            .map_err(|_| format!("Environment variable {} not set", hub.api_key_env))?;
+
+        let url = format!("{}/api/brain/config", hub.url.trim_end_matches('/'));
+
+        let json_str = {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
+            rt.block_on(async {
+                let client = reqwest::Client::new();
+                let resp = client
+                    .get(&url)
+                    .bearer_auth(&api_key)
+                    .send()
+                    .await
+                    .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+                if !resp.status().is_success() {
+                    return Err(format!("Hub returned {}: {}", resp.status(), resp.text().await.unwrap_or_default()));
+                }
+
+                resp.text().await
+                    .map_err(|e| format!("Failed to read response body: {e}"))
+            })?
+        };
+
+        // Validate JSON before saving
+        let config: opencarrier_types::brain::BrainConfig = serde_json::from_str(&json_str)
+            .map_err(|e| format!("Invalid brain config from Hub: {e}"))?;
+
+        // Save to disk for subsequent boots
+        if let Some(parent) = brain_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(brain_path, &json_str)
+            .map_err(|e| format!("Failed to write brain.json: {e}"))?;
+
+        Ok(config)
+    }
+
     /// Run post-conversation evolution for clone agents (background, non-blocking).
     ///
     /// Checks if evolution is enabled, the agent is a clone (empty system_prompt),
@@ -957,10 +1005,23 @@ impl OpenCarrierKernel {
             info!("Brain loaded from {}", brain_path.display());
             brain
         } else {
-            return Err(KernelError::BootFailed(format!(
-                "Brain config not found at {}. Create brain.json with providers, endpoints, and modalities.",
-                brain_path.display()
-            )));
+            // No local brain.json — try fetching from Hub.
+            info!("Brain config not found locally; attempting to fetch from Hub...");
+            match Self::fetch_brain_from_hub_sync(&config.hub, &brain_path) {
+                Ok(brain_config) => {
+                    let brain = Brain::new(brain_config)
+                        .map_err(|e| KernelError::BootFailed(format!("Brain init failed: {e}")))?;
+                    info!("Brain fetched from Hub and saved to {}", brain_path.display());
+                    brain
+                }
+                Err(e) => {
+                    return Err(KernelError::BootFailed(format!(
+                        "Brain config not found at {} and could not be fetched from Hub: {}. \
+                         Please set {} or create brain.json manually.",
+                        brain_path.display(), e, config.hub.api_key_env
+                    )));
+                }
+            }
         };
 
         // Initialize metering engine (shares the same SQLite connection as the memory substrate)
@@ -4744,8 +4805,25 @@ impl KernelHandle for OpenCarrierKernel {
         let evolution = read_file(&workspace.join("EVOLUTION.md"));
         let profile = read_file(&workspace.join("profile.md"));
 
-        // Read template.json
-        // Read template.json if present (written during install)
+        // Extract description from profile.md frontmatter (needed for default manifest)
+        let description = if let Some(rest) = profile.strip_prefix("---") {
+            if let Some(end) = rest.find("---") {
+                let fm = &profile[3..3 + end];
+                fm.lines()
+                    .find_map(|line| {
+                        let trimmed = line.trim();
+                        trimmed.strip_prefix("description:")
+                            .map(|v| v.trim().trim_matches('"').to_string())
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        // Read template.json — create a default if absent (workspace name = template name)
         let manifest = workspace.join("template.json")
             .exists()
             .then(|| {
@@ -4753,7 +4831,16 @@ impl KernelHandle for OpenCarrierKernel {
                     .ok()
                     .and_then(|s| serde_json::from_str::<opencarrier_clone::TemplateManifest>(&s).ok())
             })
-            .flatten();
+            .flatten()
+            .unwrap_or_else(|| opencarrier_clone::TemplateManifest {
+                version: "1".to_string(),
+                name: name.to_string(),
+                description: description.clone(),
+                author: String::new(),
+                tags: vec![],
+                exported_at: String::new(),
+                knowledge_version: 0,
+            });
 
         // Read knowledge/ (recursive)
         let mut knowledge = HashMap::new();
@@ -4863,26 +4950,8 @@ impl KernelHandle for OpenCarrierKernel {
             }
         }
 
-        // Extract description from profile.md frontmatter
-        let description = if let Some(rest) = profile.strip_prefix("---") {
-            if let Some(end) = rest.find("---") {
-                let fm = &profile[3..3 + end];
-                fm.lines()
-                    .find_map(|line| {
-                        let trimmed = line.trim();
-                        trimmed.strip_prefix("description:")
-                            .map(|v| v.trim().trim_matches('"').to_string())
-                    })
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
         let clone_data = CloneData {
-            manifest,
+            manifest: Some(manifest),
             name: name.to_string(),
             description,
             soul,
