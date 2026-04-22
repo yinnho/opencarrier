@@ -36,6 +36,7 @@ hex = { workspace = true }
 argon2 = { workspace = true }
 socket2 = { workspace = true }
 reqwest = { workspace = true }
+urlencoding = "2"
 anyhow = { workspace = true }
 
 [dev-dependencies]

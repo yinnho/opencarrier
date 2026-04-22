@@ -73,7 +73,7 @@ impl OpenAIDriver {
 
     /// Build the chat completions URL for the given model.
     ///
-    /// Standard OpenAI: `{base_url}/chat/completions`
+    /// Standard OpenAI: `base_url` is used as-is (complete URL).
     /// Azure OpenAI:    `{base_url}/{model}/chat/completions?api-version=2024-10-21`
     fn chat_url(&self, model: &str) -> String {
         if self.azure_mode {
@@ -84,7 +84,7 @@ impl OpenAIDriver {
                 AZURE_API_VERSION,
             )
         } else {
-            format!("{}/chat/completions", self.base_url)
+            self.base_url.clone()
         }
     }
 
@@ -1819,7 +1819,7 @@ mod tests {
     fn test_standard_chat_url() {
         let driver = OpenAIDriver::new(
             "test-key".to_string(),
-            "https://api.openai.com/v1".to_string(),
+            "https://api.openai.com/v1/chat/completions".to_string(),
         );
         let url = driver.chat_url("gpt-4o");
         assert_eq!(url, "https://api.openai.com/v1/chat/completions");

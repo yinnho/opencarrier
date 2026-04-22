@@ -124,6 +124,16 @@ pub async fn build_router(
             axum::routing::get(routes::health_detail),
         )
         .route("/api/status", axum::routing::get(routes::status))
+        // Provider API Key management
+        .route(
+            "/api/providers/keys",
+            axum::routing::get(routes::list_provider_keys),
+        )
+        .route(
+            "/api/providers/{name}/key",
+            axum::routing::post(routes::set_provider_key)
+                .delete(routes::delete_provider_key),
+        )
         .route("/api/brain", axum::routing::get(routes::brain_info))
         .route("/api/brain/status", axum::routing::get(routes::brain_status))
         .route(
@@ -153,6 +163,11 @@ pub async fn build_router(
         .route(
             "/api/brain/reload",
             axum::routing::post(routes::reload_brain),
+        )
+        .route(
+            "/api/brain/config",
+            axum::routing::get(routes::get_brain_config_raw)
+                .put(routes::put_brain_config_raw),
         )
         .route("/api/version", axum::routing::get(routes::version))
         .route(
@@ -265,6 +280,12 @@ pub async fn build_router(
         .route(
             "/api/templates/{name}",
             axum::routing::get(routes::get_template),
+        )
+        // Hub marketplace endpoints
+        .route("/api/hub/templates", axum::routing::get(routes::list_hub_templates))
+        .route(
+            "/api/hub/templates/{name}/install",
+            axum::routing::post(routes::install_hub_template),
         )
         // Clone (.agx) endpoints
         .route("/api/clones", axum::routing::get(routes::list_clones))

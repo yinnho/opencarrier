@@ -24,6 +24,12 @@ function agentsPage() {
     showSpawnModal: false,
     showDetailModal: false,
     detailAgent: null,
+    // -- Hub install modal --
+    showHubModal: false,
+    hubTemplates: [],
+    hubLoading: false,
+    hubError: '',
+    hubInstalling: '',
     spawnMode: 'wizard',
     spawning: false,
     spawnToml: '',
@@ -291,6 +297,56 @@ function agentsPage() {
           OpenCarrierToast.success(list.length + ' agent(s) stopped');
         }
       });
+    },
+
+    // ── Hub install modal ──
+    async openHubModal() {
+      this.showHubModal = true;
+      this.hubTemplates = [];
+      this.hubError = '';
+      await this.loadHubTemplates();
+    },
+
+    closeHubModal() {
+      this.showHubModal = false;
+      this.hubTemplates = [];
+      this.hubError = '';
+      this.hubInstalling = '';
+    },
+
+    async loadHubTemplates() {
+      this.hubLoading = true;
+      this.hubError = '';
+      try {
+        var data = await OpenCarrierAPI.get('/api/hub/templates');
+        this.hubTemplates = (data.templates || []).map(function(t) {
+          return {
+            name: t.name || '',
+            description: t.description || '',
+            version: t.latest_version || '1',
+            downloads: t.download_count || 0,
+            rating: t.rating_avg || 0,
+            author: t.author || ''
+          };
+        });
+      } catch(e) {
+        this.hubError = e.message || 'Failed to load Hub templates';
+        this.hubTemplates = [];
+      }
+      this.hubLoading = false;
+    },
+
+    async installHubTemplate(name) {
+      this.hubInstalling = name;
+      try {
+        var res = await OpenCarrierAPI.post('/api/hub/templates/' + encodeURIComponent(name) + '/install');
+        OpenCarrierToast.success('Installed "' + res.name + '" (' + res.agent_id + ')');
+        this.closeHubModal();
+        await Alpine.store('app').refreshAgents();
+      } catch(e) {
+        OpenCarrierToast.error('Install failed: ' + e.message);
+      }
+      this.hubInstalling = '';
     },
 
     // ── Multi-step wizard navigation ──

@@ -705,6 +705,182 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }))
 }
 
+// ── Provider API Key management ────────────────────────────────────────────
+
+/// GET /api/providers/keys — List all providers with API key status.
+pub async fn list_provider_keys(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let brain = state.kernel.brain_info();
+    let config = brain.config();
+
+    let providers: Vec<serde_json::Value> = config
+        .providers
+        .iter()
+        .map(|(name, pc)| {
+            let endpoints: Vec<String> = config
+                .endpoints
+                .values()
+                .filter(|ep| ep.provider == *name)
+                .map(|ep| ep.model.clone())
+                .collect();
+
+            let has_key = if pc.auth_type == "jwt" {
+                // JWT auth: check that all param env vars are set
+                pc.params.values().all(|env_name| opencarrier_kernel::dotenv::has_env_key(env_name))
+            } else {
+                opencarrier_kernel::dotenv::has_env_key(&pc.api_key_env)
+            };
+
+            let params_status: Vec<serde_json::Value> = pc.params.iter()
+                .map(|(logical_name, env_name)| {
+                    serde_json::json!({
+                        "name": logical_name,
+                        "env": env_name,
+                        "has_value": opencarrier_kernel::dotenv::has_env_key(env_name),
+                    })
+                })
+                .collect();
+
+            serde_json::json!({
+                "name": name,
+                "api_key_env": pc.api_key_env,
+                "auth_type": pc.auth_type,
+                "has_key": has_key,
+                "params": params_status,
+                "endpoints": endpoints,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({ "providers": providers }))
+}
+
+/// POST /api/providers/{name}/key — Set API key for a provider.
+///
+/// For `apikey` auth type: `{ "key": "sk-xxx" }`
+/// For `jwt` auth type: `{ "params": { "access_key_env": "val", "secret_key_env": "val" } }`
+pub async fn set_provider_key(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let brain = state.kernel.brain_info();
+    let config = brain.config();
+
+    let pc = match config.providers.get(&name) {
+        Some(p) => p.clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("Provider '{}' not found", name)})),
+            );
+        }
+    };
+
+    match pc.auth_type.as_str() {
+        "jwt" => {
+            // JWT auth: save each param value to its corresponding env var
+            let params = match body.get("params").and_then(|p| p.as_object()) {
+                Some(p) => p,
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "JWT provider requires 'params' object"})),
+                    );
+                }
+            };
+
+            for (logical_name, env_name) in &pc.params {
+                if let Some(val) = params.get(logical_name).and_then(|v| v.as_str()) {
+                    let val = val.trim();
+                    if val.is_empty() {
+                        continue;
+                    }
+                    if let Err(e) = opencarrier_kernel::dotenv::save_env_key(env_name, val) {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": e})),
+                        );
+                    }
+                }
+            }
+        }
+        _ => {
+            // Default apikey auth
+            let key = body["key"].as_str().unwrap_or("").trim();
+            if key.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Missing 'key' field"})),
+                );
+            }
+            if let Err(e) = opencarrier_kernel::dotenv::save_env_key(&pc.api_key_env, key) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e})),
+                );
+            }
+        }
+    }
+
+    let reload_result = state.kernel.reload_brain();
+    state.kernel.audit_log.record(
+        "system",
+        opencarrier_runtime::audit::AuditAction::ConfigChange,
+        format!("API key set for provider '{}'", name),
+        if reload_result.is_ok() { "ok" } else { "reload_failed" },
+    );
+    match reload_result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "ok"})),
+        ),
+        Err(e) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "ok", "warning": format!("Key saved but brain reload failed: {}", e)})),
+        ),
+    }
+}
+
+/// DELETE /api/providers/{name}/key — Remove API key for a provider.
+pub async fn delete_provider_key(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let brain = state.kernel.brain_info();
+    let config = brain.config();
+
+    let pc = match config.providers.get(&name) {
+        Some(p) => p.clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("Provider '{}' not found", name)})),
+            );
+        }
+    };
+
+    if pc.auth_type == "jwt" {
+        // Delete all param env vars
+        for env_name in pc.params.values() {
+            let _ = opencarrier_kernel::dotenv::delete_env_key(env_name);
+        }
+    } else {
+        let _ = opencarrier_kernel::dotenv::delete_env_key(&pc.api_key_env);
+    }
+
+    let _ = state.kernel.reload_brain();
+    state.kernel.audit_log.record(
+        "system",
+        opencarrier_runtime::audit::AuditAction::ConfigChange,
+        format!("API key removed for provider '{}'", name),
+        "ok",
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "ok"})),
+    )
+}
+
 /// GET /api/brain — Brain configuration and status.
 ///
 /// Returns the Brain's modalities, endpoints, and which ones are ready.
@@ -795,7 +971,7 @@ pub async fn set_brain_provider(
     let result = state.kernel.update_brain(|config| {
         config.providers.insert(
             name.clone(),
-            opencarrier_types::brain::ProviderConfig { api_key_env, params: std::collections::HashMap::new() },
+            opencarrier_types::brain::ProviderConfig { api_key_env, auth_type: "apikey".to_string(), params: std::collections::HashMap::new() },
         );
     });
 
@@ -1205,6 +1381,81 @@ pub async fn reload_brain(State(state): State<Arc<AppState>>) -> impl IntoRespon
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// GET /api/brain/config — Return raw brain.json content.
+pub async fn get_brain_config_raw(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let path = state.kernel.brain_path();
+    match std::fs::read_to_string(path) {
+        Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
+            Ok(value) => (StatusCode::OK, Json(value)),
+            Err(_) => (
+                StatusCode::OK,
+                Json(serde_json::json!({"_raw": json_str})),
+            ),
+        },
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Cannot read brain.json: {e}")})),
+        ),
+    }
+}
+
+/// PUT /api/brain/config — Update brain.json from raw JSON.
+pub async fn put_brain_config_raw(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    // Validate it's a valid BrainConfig before writing
+    let config: opencarrier_types::brain::BrainConfig = match serde_json::from_value(body.clone()) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Invalid brain config: {e}")})),
+            );
+        }
+    };
+
+    let path = state.kernel.brain_path();
+    let json_str = match serde_json::to_string_pretty(&config) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Serialize error: {e}")})),
+            );
+        }
+    };
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(path, json_str) {
+        Ok(()) => {
+            let reload_result = state.kernel.reload_brain();
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::ConfigChange,
+                "brain.json updated via API",
+                if reload_result.is_ok() { "ok" } else { "reload_failed" },
+            );
+            match reload_result {
+                Ok(()) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({"status": "ok"})),
+                ),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("Saved but reload failed: {e}")})),
+                ),
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Write error: {e}")})),
         ),
     }
 }
@@ -5831,4 +6082,142 @@ pub async fn clone_verify(
     }
 }
 
+// ========== Hub template marketplace endpoints ==========
 
+/// GET /api/hub/templates — List templates from the connected Hub.
+pub async fn list_hub_templates(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let hub_url = state.kernel.config.hub.url.clone();
+    let hub_api_key = match
+        opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
+    {
+        Ok(k) => k,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": format!("Hub API key not configured: {e}")
+                })),
+            );
+        }
+    };
+
+    let url = format!("{}/api/templates?limit=50", hub_url.trim_end_matches('/'));
+
+    let resp = match reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&hub_api_key)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("Hub unreachable: {e}")})),
+            );
+        }
+    };
+
+    if !resp.status().is_success() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": format!("Hub returned {}", resp.status())
+            })),
+        );
+    }
+
+    match resp.json::<serde_json::Value>().await {
+        Ok(body) => (StatusCode::OK, Json(body)),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("Failed to parse Hub response: {e}")})),
+        ),
+    }
+}
+
+/// POST /api/hub/templates/{name}/install — Download and install a template from Hub.
+pub async fn install_hub_template(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let hub_url = state.kernel.config.hub.url.clone();
+    let hub_api_key = match
+        opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
+    {
+        Ok(k) => k,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": format!("Hub API key not configured: {e}")
+                })),
+            );
+        }
+    };
+
+    let home_dir = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let device_id = opencarrier_clone::hub::get_or_create_device_id(&home_dir)
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let base = hub_url.trim_end_matches('/');
+    let download_url = format!(
+        "{}/api/templates/{}/download",
+        base,
+        urlencoding::encode(&name)
+    );
+
+    tracing::info!(template = %name, "Downloading from Hub for install");
+
+    let resp = match reqwest::Client::new()
+        .get(&download_url)
+        .bearer_auth(&hub_api_key)
+        .header("X-Device-ID", &device_id)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("Hub unreachable: {e}")})),
+            );
+        }
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("Hub download failed: {} — {}", status, body)})),
+        );
+    }
+
+    let agx_bytes = match resp.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("Failed to read download: {e}")})),
+            );
+        }
+    };
+
+    match state.kernel.clone_install(&name, &agx_bytes).await {
+        Ok((agent_id, agent_name)) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "agent_id": agent_id,
+                "name": agent_name,
+                "size": agx_bytes.len(),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}

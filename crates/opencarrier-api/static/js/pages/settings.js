@@ -15,6 +15,13 @@ function settingsPage() {
     configValues: {},
     configDirty: {},
     configSaving: {},
+    brainConfig: null,
+    brainConfigRaw: '',
+    brainConfigSaving: false,
+    brainConfigError: '',
+    providerKeys: [],
+    providerKeyInputs: {},
+    providerKeySaving: {},
     securityData: null,
     secLoading: false,
     verifyingChain: false,
@@ -28,7 +35,7 @@ function settingsPage() {
     ],
     async loadSettings() {
       this.loading = true; this.loadError = '';
-      try { await Promise.all([this.loadSysInfo(), this.loadUsage(), this.loadTools(), this.loadConfig()]); } catch(e) { this.loadError = e.message || 'Could not load settings.'; }
+      try { await Promise.all([this.loadSysInfo(), this.loadUsage(), this.loadTools(), this.loadConfig(), this.loadBrainConfig(), this.loadProviderKeys()]); } catch(e) { this.loadError = e.message || 'Could not load settings.'; }
       this.loading = false;
     },
     async loadData() { return this.loadSettings(); },
@@ -37,6 +44,12 @@ function settingsPage() {
     async loadTools() { try { var data = await OpenCarrierAPI.get('/api/tools'); this.tools = data.tools || []; } catch(e) { this.tools = []; } },
     async loadConfig() { try { this.config = await OpenCarrierAPI.get('/api/config'); } catch(e) { this.config = {}; } },
     async loadConfigSchema() { try { var r = await Promise.all([OpenCarrierAPI.get('/api/config/schema').catch(function(){return{}}), OpenCarrierAPI.get('/api/config')]); this.configSchema = r[0].sections || null; this.configValues = r[1] || {}; } catch(e) {} },
+    async loadBrainConfig() { try { var data = await OpenCarrierAPI.get('/api/brain/config'); this.brainConfig = data; this.brainConfigRaw = JSON.stringify(data, null, 2); this.brainConfigError = ''; } catch(e) { this.brainConfig = null; this.brainConfigRaw = ''; this.brainConfigError = e.message || 'Failed to load brain config'; } },
+    async saveBrainConfig() { this.brainConfigSaving = true; this.brainConfigError = ''; try { var json = JSON.parse(this.brainConfigRaw); await OpenCarrierAPI.put('/api/brain/config', json); this.brainConfig = json; OpenCarrierToast.success('Brain config saved'); } catch(e) { this.brainConfigError = e.message || 'Failed to save brain config'; OpenCarrierToast.error(this.brainConfigError); } this.brainConfigSaving = false; },
+    async loadProviderKeys() { try { var data = await OpenCarrierAPI.get('/api/providers/keys'); this.providerKeys = data.providers || []; this.providerKeyInputs = {}; } catch(e) { this.providerKeys = []; } },
+    async saveProviderKey(name) { var p = this.providerKeys.find(function(x){return x.name===name}); if (p && p.auth_type === 'jwt') { return this.saveProviderKeyJwt(name); } var key = (this.providerKeyInputs[name] || '').trim(); if (!key) { OpenCarrierToast.error('API key cannot be empty'); return; } this.providerKeySaving[name] = true; try { await OpenCarrierAPI.post('/api/providers/' + name + '/key', { key: key }); await this.loadProviderKeys(); OpenCarrierToast.success('API key saved for ' + name); } catch(e) { OpenCarrierToast.error('Failed to save key: ' + (e.message || e)); } this.providerKeySaving[name] = false; },
+    async saveProviderKeyJwt(name) { var p = this.providerKeys.find(function(x){return x.name===name}); if (!p) return; var params = {}; var hasValue = false; (p.params || []).forEach(function(param) { var val = (this.providerKeyInputs[name + '_' + param.name] || '').trim(); if (val) { params[param.name] = val; hasValue = true; } }.bind(this)); if (!hasValue) { OpenCarrierToast.error('Please fill in at least one credential'); return; } this.providerKeySaving[name] = true; try { await OpenCarrierAPI.post('/api/providers/' + name + '/key', { params: params }); await this.loadProviderKeys(); OpenCarrierToast.success('Credentials saved for ' + name); } catch(e) { OpenCarrierToast.error('Failed to save credentials: ' + (e.message || e)); } this.providerKeySaving[name] = false; },
+    async deleteProviderKey(name) { if (!confirm('Remove credentials for ' + name + '?')) return; try { await OpenCarrierAPI.del('/api/providers/' + name + '/key'); await this.loadProviderKeys(); OpenCarrierToast.success('Credentials removed for ' + name); } catch(e) { OpenCarrierToast.error('Failed to remove credentials: ' + (e.message || e)); } },
     isConfigDirty(s, f) { return this.configDirty[s + '.' + f] === true; },
     markConfigDirty(s, f) { this.configDirty[s + '.' + f] = true; },
     async saveConfigField(section, field, value) { var key = section + '.' + field; var meta = this.configSchema && this.configSchema[section]; var path = (meta && meta.root_level) ? field : key; this.configSaving[key] = true; try { await OpenCarrierAPI.post('/api/config/set', { path: path, value: value }); this.configDirty[key] = false; OpenCarrierToast.success('Saved ' + field); } catch(e) { OpenCarrierToast.error('Failed to save: ' + e.message); } this.configSaving[key] = false; },
