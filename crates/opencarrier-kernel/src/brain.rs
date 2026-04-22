@@ -423,6 +423,7 @@ impl Brain {
             base_url: Some(endpoint.base_url.clone()),
             skip_permissions: true,
             format: Some(endpoint.format),
+            auth_header: endpoint.auth_header,
         };
 
         drivers::create_driver(&driver_config)

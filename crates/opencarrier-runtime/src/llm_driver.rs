@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use opencarrier_types::brain::ApiFormat;
+use opencarrier_types::brain::{ApiFormat, AuthHeaderType};
 use opencarrier_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use opencarrier_types::tool::{ToolCall, ToolDefinition};
 use serde::{Deserialize, Serialize};
@@ -235,6 +235,9 @@ pub struct DriverConfig {
     /// API protocol format — determines which driver to instantiate.
     #[serde(default)]
     pub format: Option<ApiFormat>,
+    /// Authentication header style. Only used by `OpenAI` format drivers.
+    #[serde(default)]
+    pub auth_header: AuthHeaderType,
     /// Skip interactive permission prompts (Claude Code provider only).
     ///
     /// When `true`, adds `--dangerously-skip-permissions` to the spawned
@@ -250,6 +253,19 @@ fn default_skip_permissions() -> bool {
     true
 }
 
+impl Default for DriverConfig {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            api_key: None,
+            base_url: None,
+            format: None,
+            auth_header: AuthHeaderType::default(),
+            skip_permissions: true,
+        }
+    }
+}
+
 /// SECURITY: Custom Debug impl redacts the API key.
 impl std::fmt::Debug for DriverConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -258,6 +274,7 @@ impl std::fmt::Debug for DriverConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("base_url", &self.base_url)
             .field("format", &self.format)
+            .field("auth_header", &self.auth_header)
             .field("skip_permissions", &self.skip_permissions)
             .finish()
     }

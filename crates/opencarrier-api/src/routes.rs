@@ -1125,6 +1125,7 @@ pub async fn set_brain_endpoint(
                 model,
                 base_url,
                 format,
+                auth_header: Default::default(),
             },
         );
     });

@@ -3,6 +3,7 @@
 //! Works with OpenAI, Ollama, vLLM, and any other OpenAI-compatible endpoint.
 
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use opencarrier_types::brain::AuthHeaderType;
 use crate::think_filter::{FilterAction, StreamingThinkFilter};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -12,40 +13,24 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use zeroize::Zeroizing;
 
-/// Azure OpenAI API version query parameter.
-const AZURE_API_VERSION: &str = "2024-10-21";
-
 /// OpenAI-compatible API driver.
 pub struct OpenAIDriver {
     api_key: Zeroizing<String>,
     base_url: String,
     client: reqwest::Client,
     extra_headers: Vec<(String, String)>,
-    /// When true, uses Azure OpenAI URL format and `api-key` header.
-    azure_mode: bool,
+    /// Authentication header style. Defaults to `Bearer`.
+    auth_header: AuthHeaderType,
 }
 
 impl OpenAIDriver {
     /// Create a new OpenAI-compatible driver.
     pub fn new(api_key: String, base_url: String) -> Self {
-        Self {
-            api_key: Zeroizing::new(api_key),
-            base_url,
-            client: reqwest::Client::builder()
-                .user_agent(crate::USER_AGENT)
-                .build()
-                .unwrap_or_default(),
-            extra_headers: Vec::new(),
-            azure_mode: false,
-        }
+        Self::with_auth_header(api_key, base_url, AuthHeaderType::Bearer)
     }
 
-    /// Create a driver configured for Azure OpenAI.
-    ///
-    /// Azure uses a deployment-based URL scheme and `api-key` header instead of
-    /// `Authorization: Bearer`.  The `base_url` should be the deployments root,
-    /// e.g. `https://{resource}.openai.azure.com/openai/deployments`.
-    pub fn new_azure(api_key: String, base_url: String) -> Self {
+    /// Create a driver with a specific auth header style.
+    pub fn with_auth_header(api_key: String, base_url: String, auth_header: AuthHeaderType) -> Self {
         Self {
             api_key: Zeroizing::new(api_key),
             base_url,
@@ -54,7 +39,7 @@ impl OpenAIDriver {
                 .build()
                 .unwrap_or_default(),
             extra_headers: Vec::new(),
-            azure_mode: true,
+            auth_header,
         }
     }
 
@@ -71,35 +56,28 @@ impl OpenAIDriver {
         self
     }
 
-    /// Build the chat completions URL for the given model.
+    /// Build the chat completions URL.
     ///
-    /// Standard OpenAI: `base_url` is used as-is (complete URL).
-    /// Azure OpenAI:    `{base_url}/{model}/chat/completions?api-version=2024-10-21`
-    fn chat_url(&self, model: &str) -> String {
-        if self.azure_mode {
-            format!(
-                "{}/{}/chat/completions?api-version={}",
-                self.base_url.trim_end_matches('/'),
-                model,
-                AZURE_API_VERSION,
-            )
-        } else {
-            self.base_url.clone()
-        }
+    /// `base_url` is used as-is (complete URL).
+    fn chat_url(&self, _model: &str) -> String {
+        self.base_url.clone()
     }
 
     /// Apply authentication headers to the request builder.
     ///
-    /// Standard: `Authorization: Bearer {key}`
-    /// Azure:    `api-key: {key}`
+    /// `Bearer`  → `Authorization: Bearer {key}`
+    /// `ApiKey`  → `api-key: {key}`
     fn apply_auth(&self, mut builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if self.api_key.as_str().is_empty() {
             return builder;
         }
-        if self.azure_mode {
-            builder = builder.header("api-key", self.api_key.as_str());
-        } else {
-            builder = builder.header("authorization", format!("Bearer {}", self.api_key.as_str()));
+        match self.auth_header {
+            AuthHeaderType::ApiKey => {
+                builder = builder.header("api-key", self.api_key.as_str());
+            }
+            AuthHeaderType::Bearer => {
+                builder = builder.header("authorization", format!("Bearer {}", self.api_key.as_str()));
+            }
         }
         builder
     }
@@ -1767,52 +1745,6 @@ mod tests {
         let msg: OaiResponseMessage = serde_json::from_str(json).unwrap();
         assert!(msg.content.is_none());
         assert!(msg.reasoning_content.is_none());
-    }
-
-    // ── Azure OpenAI tests ──────────────────────────────────────────
-
-    #[test]
-    fn test_azure_driver_creation() {
-        let driver = OpenAIDriver::new_azure(
-            "test-key".to_string(),
-            "https://myresource.openai.azure.com/openai/deployments".to_string(),
-        );
-        assert!(driver.azure_mode);
-    }
-
-    #[test]
-    fn test_standard_driver_not_azure() {
-        let driver = OpenAIDriver::new(
-            "test-key".to_string(),
-            "https://api.openai.com/v1".to_string(),
-        );
-        assert!(!driver.azure_mode);
-    }
-
-    #[test]
-    fn test_azure_chat_url() {
-        let driver = OpenAIDriver::new_azure(
-            "test-key".to_string(),
-            "https://myresource.openai.azure.com/openai/deployments".to_string(),
-        );
-        let url = driver.chat_url("my-gpt4o-deployment");
-        assert_eq!(
-            url,
-            "https://myresource.openai.azure.com/openai/deployments/my-gpt4o-deployment/chat/completions?api-version=2024-10-21"
-        );
-    }
-
-    #[test]
-    fn test_azure_chat_url_trailing_slash() {
-        let driver = OpenAIDriver::new_azure(
-            "test-key".to_string(),
-            "https://myresource.openai.azure.com/openai/deployments/".to_string(),
-        );
-        let url = driver.chat_url("gpt-4o");
-        assert_eq!(
-            url,
-            "https://myresource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21"
-        );
     }
 
     #[test]

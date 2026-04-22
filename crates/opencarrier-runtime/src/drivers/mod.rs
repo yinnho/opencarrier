@@ -66,27 +66,16 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             Ok(Arc::new(gemini::GeminiDriver::new(api_key, base_url)))
         }
         ApiFormat::OpenAI => {
-            // Azure OpenAI: uses `api-key` header instead of `Authorization: Bearer`
-            if provider == "azure" || provider == "azure-openai" {
-                let api_key = config.api_key.clone().ok_or_else(|| {
-                    LlmError::MissingApiKey(
-                        "Set AZURE_OPENAI_API_KEY environment variable for Azure OpenAI"
-                            .to_string(),
-                    )
-                })?;
-                let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                    status: 0,
-                    message: "Azure OpenAI requires base_url".to_string(),
-                })?;
-                return Ok(Arc::new(openai::OpenAIDriver::new_azure(api_key, base_url)));
-            }
-
             let api_key = config.api_key.clone().unwrap_or_default();
             let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
                 status: 0,
                 message: "base_url required for OpenAI format".to_string(),
             })?;
-            Ok(Arc::new(openai::OpenAIDriver::new(api_key, base_url)))
+            Ok(Arc::new(openai::OpenAIDriver::with_auth_header(
+                api_key,
+                base_url,
+                config.auth_header,
+            )))
         }
     }
 }
@@ -94,6 +83,7 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opencarrier_types::brain::AuthHeaderType;
 
     #[test]
     fn test_anthropic_format_with_key_and_url() {
@@ -102,6 +92,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             base_url: Some("https://api.anthropic.com/v1/messages".to_string()),
             format: Some(ApiFormat::Anthropic),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -115,6 +106,7 @@ mod tests {
             api_key: None,
             base_url: Some("https://api.anthropic.com/v1/messages".to_string()),
             format: Some(ApiFormat::Anthropic),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let result = create_driver(&config);
@@ -128,6 +120,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             base_url: None,
             format: Some(ApiFormat::Anthropic),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let result = create_driver(&config);
@@ -141,6 +134,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             base_url: Some("https://api.groq.com/openai/v1/chat/completions".to_string()),
             format: Some(ApiFormat::OpenAI),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -155,6 +149,7 @@ mod tests {
             api_key: None,
             base_url: Some("http://localhost:11434/v1/chat/completions".to_string()),
             format: Some(ApiFormat::OpenAI),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -168,6 +163,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             base_url: None,
             format: Some(ApiFormat::OpenAI),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let result = create_driver(&config);
@@ -181,6 +177,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             base_url: Some("https://generativelanguage.googleapis.com/v1beta/models".to_string()),
             format: Some(ApiFormat::Gemini),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -194,6 +191,7 @@ mod tests {
             api_key: None,
             base_url: Some("https://generativelanguage.googleapis.com".to_string()),
             format: Some(ApiFormat::Gemini),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let result = create_driver(&config);
@@ -209,31 +207,11 @@ mod tests {
                 "https://myresource.openai.azure.com/openai/deployments".to_string(),
             ),
             format: Some(ApiFormat::OpenAI),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
         assert!(driver.is_ok(), "Azure driver with key + URL should succeed");
-    }
-
-    #[test]
-    fn test_azure_driver_no_key_errors() {
-        let config = DriverConfig {
-            provider: "azure".to_string(),
-            api_key: None,
-            base_url: Some(
-                "https://myresource.openai.azure.com/openai/deployments".to_string(),
-            ),
-            format: Some(ApiFormat::OpenAI),
-            skip_permissions: true,
-        };
-        let result = create_driver(&config);
-        assert!(result.is_err(), "Azure driver without key should error");
-        let err = result.err().unwrap().to_string();
-        assert!(
-            err.contains("AZURE_OPENAI_API_KEY"),
-            "Error should mention AZURE_OPENAI_API_KEY: {}",
-            err
-        );
     }
 
     #[test]
@@ -243,6 +221,7 @@ mod tests {
             api_key: Some("test-azure-key".to_string()),
             base_url: None,
             format: Some(ApiFormat::OpenAI),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let result = create_driver(&config);
@@ -264,6 +243,7 @@ mod tests {
                 "https://myresource.openai.azure.com/openai/deployments".to_string(),
             ),
             format: Some(ApiFormat::OpenAI),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -281,6 +261,7 @@ mod tests {
             api_key: Some("test-kimi-key".to_string()),
             base_url: Some("https://api.kimi.com/coding/v1/messages".to_string()),
             format: Some(ApiFormat::Anthropic),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -297,6 +278,7 @@ mod tests {
             api_key: None,
             base_url: Some("/usr/local/bin/claude".to_string()),
             format: None,
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -314,6 +296,7 @@ mod tests {
             api_key: Some("test".to_string()),
             base_url: Some("http://localhost:9999/v1/chat/completions".to_string()),
             format: Some(ApiFormat::OpenAI),
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -328,6 +311,7 @@ mod tests {
             api_key: Some("test".to_string()),
             base_url: Some("http://localhost:1234/v1/chat/completions".to_string()),
             format: None,
+            auth_header: AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
