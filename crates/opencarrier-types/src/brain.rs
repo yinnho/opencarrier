@@ -70,6 +70,10 @@ pub struct EndpointConfig {
     /// "openai" → OpenAIDriver, "anthropic" → AnthropicDriver, "gemini" → GeminiDriver
     #[serde(default = "default_format")]
     pub format: ApiFormat,
+    /// Authentication header style. Only used by `OpenAI` format drivers;
+    /// ignored by Anthropic/Gemini drivers which have fixed auth schemes.
+    #[serde(default)]
+    pub auth_header: AuthHeaderType,
 }
 
 fn default_format() -> ApiFormat {
@@ -84,6 +88,20 @@ pub enum ApiFormat {
     OpenAI,
     Anthropic,
     Gemini,
+}
+
+/// Authentication header type for HTTP API drivers.
+///
+/// Only meaningful for `OpenAI` format drivers; `Anthropic` and `Gemini`
+/// drivers use their own fixed authentication schemes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthHeaderType {
+    /// `Authorization: Bearer {key}` — standard OpenAI-compatible.
+    #[default]
+    Bearer,
+    /// `api-key: {key}` — Azure OpenAI style.
+    ApiKey,
 }
 
 impl std::fmt::Display for ApiFormat {
