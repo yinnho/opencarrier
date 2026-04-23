@@ -123,6 +123,8 @@ async fn start_test_server_with_provider(
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn(middleware::request_logging))
+        // Inject admin TenantContext for tests (no auth middleware in test server)
+        .layer(axum::Extension(opencarrier_types::tenant::TenantContext::admin()))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state.clone());

@@ -114,6 +114,8 @@ async fn start_test_server() -> TestServer {
         .route("/api/usage", axum::routing::get(routes::usage_stats))
         .route("/api/config", axum::routing::get(routes::get_config))
         .layer(axum::middleware::from_fn(middleware::request_logging))
+        // Inject admin TenantContext for tests (no auth middleware in test server)
+        .layer(axum::Extension(opencarrier_types::tenant::TenantContext::admin()))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state.clone());

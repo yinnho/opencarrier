@@ -5754,7 +5754,7 @@ fn get_tenant_ctx(extensions: &axum::http::Extensions) -> opencarrier_types::ten
     extensions
         .get::<opencarrier_types::tenant::TenantContext>()
         .cloned()
-        .unwrap_or_else(opencarrier_types::tenant::TenantContext::admin)
+        .unwrap_or_else(opencarrier_types::tenant::TenantContext::deny_all)
 }
 
 /// Helper: check if the requester can access a resource owned by `resource_tenant_id`.
@@ -5766,7 +5766,7 @@ fn can_access(ctx: &opencarrier_types::tenant::TenantContext, resource_tenant_id
     match (&ctx.tenant_id, resource_tenant_id) {
         (Some(tid), Some(rid)) => tid == rid,
         (Some(_), None) => false, // tenant can't access global resources
-        (None, _) => true,         // admin path (shouldn't happen if is_admin checked)
+        (None, _) => false,        // deny — missing tenant context is not admin
     }
 }
 
