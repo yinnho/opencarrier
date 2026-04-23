@@ -33,8 +33,6 @@ const CDP_CONNECT_TIMEOUT_SECS: u64 = 15;
 const CDP_COMMAND_TIMEOUT_SECS: u64 = 30;
 const PAGE_LOAD_POLL_INTERVAL_MS: u64 = 200;
 const PAGE_LOAD_MAX_POLLS: u32 = 150; // 30 seconds
-#[allow(dead_code)]
-const MAX_CONTENT_CHARS: usize = 50_000;
 
 // ── Public types ───────────────────────────────────────────────────────────
 

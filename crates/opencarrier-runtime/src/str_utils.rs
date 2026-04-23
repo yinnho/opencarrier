@@ -1,22 +1,8 @@
 //! UTF-8-safe string utilities.
 
-/// Truncate a string to at most `max_bytes` bytes without splitting a multi-byte
-/// character.  Returns the full string when it already fits.
-///
-/// This avoids panics that occur when using `&s[..max_bytes]` on strings containing
-/// multi-byte characters (e.g. Chinese, emoji, accented Latin).
-#[inline]
-pub fn safe_truncate_str(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut end = max_bytes;
-    // Walk backwards to the nearest char boundary
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
-}
+// Re-export from opencarrier-types to avoid duplicate implementation.
+// See audit R-1: truncate_str (types) and safe_truncate_str (runtime) were identical.
+pub use opencarrier_types::truncate_str as safe_truncate_str;
 
 #[cfg(test)]
 mod tests {
