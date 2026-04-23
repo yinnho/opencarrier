@@ -13,8 +13,10 @@ pub mod migration;
 pub mod semantic;
 pub mod session;
 pub mod structured;
+pub mod tenant;
 pub mod usage;
 pub mod acp_session;
 
 mod substrate;
 pub use substrate::MemorySubstrate;
+pub use tenant::TenantStore;

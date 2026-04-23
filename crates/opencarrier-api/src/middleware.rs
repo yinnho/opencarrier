@@ -61,7 +61,7 @@ pub struct AuthState {
 /// When dashboard auth is enabled, session cookies are also accepted.
 pub async fn auth(
     axum::extract::State(auth_state): axum::extract::State<AuthState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response<Body> {
     // SECURITY: Capture method early for method-aware public endpoint checks.
@@ -108,6 +108,10 @@ pub async fn auth(
     // To secure the dashboard, set a non-empty api_key in config.toml.
     let api_key_trimmed = auth_state.api_key.trim().to_string();
     if api_key_trimmed.is_empty() && !auth_state.auth_enabled {
+        // No auth → admin context (backward compatible)
+        request.extensions_mut().insert(
+            opencarrier_types::tenant::TenantContext::admin(),
+        );
         return next.run(request).await;
     }
     let api_key = api_key_trimmed.as_str();
@@ -153,15 +157,23 @@ pub async fn auth(
 
     // Accept if either auth method matches
     if header_auth == Some(true) || query_auth == Some(true) {
+        // Bearer/API-key auth → admin context (backward compatible)
+        request.extensions_mut().insert(
+            opencarrier_types::tenant::TenantContext::admin(),
+        );
         return next.run(request).await;
     }
 
     // Check session cookie (dashboard login sessions)
     if auth_state.auth_enabled {
         if let Some(token) = extract_session_cookie(&request) {
-            if crate::session_auth::verify_session_token(&token, &auth_state.session_secret)
-                .is_some()
-            {
+            if let Some(info) = crate::session_auth::verify_session_token(&token, &auth_state.session_secret) {
+                // Inject TenantContext from session token
+                let ctx = opencarrier_types::tenant::TenantContext {
+                    tenant_id: info.tenant_id,
+                    role: opencarrier_types::tenant::TenantRole::from_role_str(&info.role),
+                };
+                request.extensions_mut().insert(ctx);
                 return next.run(request).await;
             }
         }

@@ -1,5 +1,5 @@
 //! Stateless session token authentication for the dashboard.
-//! Tokens are HMAC-SHA256 signed and contain username + expiry.
+//! Tokens are HMAC-SHA256 signed and contain tenant_id + role + username + expiry.
 //!
 //! Password hashing uses Argon2id for security against brute-force attacks.
 
@@ -12,52 +12,125 @@ use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Create a session token: base64(username:expiry_unix:hmac_hex)
-pub fn create_session_token(username: &str, secret: &str, ttl_hours: u64) -> String {
+/// Information extracted from a verified session token.
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    /// The tenant's ID (None for admin/no-auth).
+    pub tenant_id: Option<String>,
+    /// The tenant's role.
+    pub role: String,
+    /// The login username.
+    pub username: String,
+}
+
+/// Create a session token: base64(tenant_id:role:username:expiry_unix:hmac_hex)
+///
+/// Format is backward-compatible: old tokens with 3 segments (username:expiry:sig)
+/// are still accepted by `verify_session_token` and treated as admin sessions.
+pub fn create_session_token(
+    tenant_id: Option<&str>,
+    role: &str,
+    username: &str,
+    secret: &str,
+    ttl_hours: u64,
+) -> String {
     use base64::Engine;
     let expiry = chrono::Utc::now().timestamp() + (ttl_hours as i64 * 3600);
-    let payload = format!("{username}:{expiry}");
+    let tid = tenant_id.unwrap_or("_");
+    let payload = format!("{tid}:{role}:{username}:{expiry}");
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC key");
     mac.update(payload.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
     base64::engine::general_purpose::STANDARD.encode(format!("{payload}:{signature}"))
 }
 
-/// Verify a session token. Returns the username if valid and not expired.
-pub fn verify_session_token(token: &str, secret: &str) -> Option<String> {
+/// Verify a session token. Returns session info if valid and not expired.
+///
+/// Supports both new format (5 segments: tenant_id:role:username:expiry:sig)
+/// and legacy format (3 segments: username:expiry:sig, treated as admin).
+pub fn verify_session_token(token: &str, secret: &str) -> Option<SessionInfo> {
     use base64::Engine;
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(token)
         .ok()?;
     let decoded_str = String::from_utf8(decoded).ok()?;
-    let parts: Vec<&str> = decoded_str.splitn(3, ':').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let (username, expiry_str, provided_sig) = (parts[0], parts[1], parts[2]);
+    let parts: Vec<&str> = decoded_str.splitn(5, ':').collect();
 
-    let expiry: i64 = expiry_str.parse().ok()?;
-    if chrono::Utc::now().timestamp() > expiry {
-        return None;
-    }
+    match parts.len() {
+        // New format: tenant_id:role:username:expiry:sig
+        5 => {
+            let (tenant_id_str, role, username, expiry_str, provided_sig) =
+                (parts[0], parts[1], parts[2], parts[3], parts[4]);
 
-    let payload = format!("{username}:{expiry_str}");
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
-    mac.update(payload.as_bytes());
-    let expected_sig = hex::encode(mac.finalize().into_bytes());
+            let expiry: i64 = expiry_str.parse().ok()?;
+            if chrono::Utc::now().timestamp() > expiry {
+                return None;
+            }
 
-    use subtle::ConstantTimeEq;
-    if provided_sig.len() != expected_sig.len() {
-        return None;
-    }
-    if provided_sig
-        .as_bytes()
-        .ct_eq(expected_sig.as_bytes())
-        .into()
-    {
-        Some(username.to_string())
-    } else {
-        None
+            let payload = format!(
+                "{}:{}:{}:{}",
+                tenant_id_str, role, username, expiry_str
+            );
+            let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+            mac.update(payload.as_bytes());
+            let expected_sig = hex::encode(mac.finalize().into_bytes());
+
+            use subtle::ConstantTimeEq;
+            if provided_sig.len() != expected_sig.len() {
+                return None;
+            }
+            if provided_sig
+                .as_bytes()
+                .ct_eq(expected_sig.as_bytes())
+                .into()
+            {
+                let tenant_id = if tenant_id_str == "_" {
+                    None
+                } else {
+                    Some(tenant_id_str.to_string())
+                };
+                Some(SessionInfo {
+                    tenant_id,
+                    role: role.to_string(),
+                    username: username.to_string(),
+                })
+            } else {
+                None
+            }
+        }
+        // Legacy format: username:expiry:sig
+        3 => {
+            let (username, expiry_str, provided_sig) = (parts[0], parts[1], parts[2]);
+
+            let expiry: i64 = expiry_str.parse().ok()?;
+            if chrono::Utc::now().timestamp() > expiry {
+                return None;
+            }
+
+            let payload = format!("{username}:{expiry_str}");
+            let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+            mac.update(payload.as_bytes());
+            let expected_sig = hex::encode(mac.finalize().into_bytes());
+
+            use subtle::ConstantTimeEq;
+            if provided_sig.len() != expected_sig.len() {
+                return None;
+            }
+            if provided_sig
+                .as_bytes()
+                .ct_eq(expected_sig.as_bytes())
+                .into()
+            {
+                Some(SessionInfo {
+                    tenant_id: None,
+                    role: "admin".to_string(),
+                    username: username.to_string(),
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
@@ -118,23 +191,56 @@ mod tests {
     }
 
     #[test]
-    fn test_create_and_verify_token() {
-        let token = create_session_token("admin", "my-secret", 1);
-        let user = verify_session_token(&token, "my-secret");
-        assert_eq!(user, Some("admin".to_string()));
+    fn test_create_and_verify_new_token() {
+        let token = create_session_token(
+            Some("tenant-123"),
+            "tenant",
+            "user1",
+            "my-secret",
+            1,
+        );
+        let info = verify_session_token(&token, "my-secret").unwrap();
+        assert_eq!(info.tenant_id, Some("tenant-123".to_string()));
+        assert_eq!(info.role, "tenant");
+        assert_eq!(info.username, "user1");
+    }
+
+    #[test]
+    fn test_create_and_verify_admin_token() {
+        let token = create_session_token(None, "admin", "admin", "my-secret", 1);
+        let info = verify_session_token(&token, "my-secret").unwrap();
+        assert_eq!(info.tenant_id, None);
+        assert_eq!(info.role, "admin");
+        assert_eq!(info.username, "admin");
+    }
+
+    #[test]
+    fn test_legacy_token_compatibility() {
+        // Old format: base64(username:expiry:sig)
+        let token = {
+            use base64::Engine;
+            let expiry = chrono::Utc::now().timestamp() + 3600;
+            let payload = format!("admin:{expiry}");
+            let mut mac = HmacSha256::new_from_slice(b"my-secret").unwrap();
+            mac.update(payload.as_bytes());
+            let sig = hex::encode(mac.finalize().into_bytes());
+            base64::engine::general_purpose::STANDARD.encode(format!("{payload}:{sig}"))
+        };
+        let info = verify_session_token(&token, "my-secret").unwrap();
+        assert_eq!(info.tenant_id, None);
+        assert_eq!(info.role, "admin");
+        assert_eq!(info.username, "admin");
     }
 
     #[test]
     fn test_token_wrong_secret() {
-        let token = create_session_token("admin", "my-secret", 1);
-        let user = verify_session_token(&token, "wrong-secret");
-        assert_eq!(user, None);
+        let token = create_session_token(None, "admin", "admin", "my-secret", 1);
+        assert!(verify_session_token(&token, "wrong-secret").is_none());
     }
 
     #[test]
     fn test_token_invalid_base64() {
-        let user = verify_session_token("not-valid-base64!!!", "secret");
-        assert_eq!(user, None);
+        assert!(verify_session_token("not-valid-base64!!!", "secret").is_none());
     }
 
     #[test]

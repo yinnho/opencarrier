@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 10;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -45,6 +45,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 9 {
         migrate_v9(conn)?;
+    }
+
+    if current_version < 10 {
+        migrate_v10(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -351,6 +355,61 @@ fn migrate_v9(conn: &Connection) -> Result<(), rusqlite::Error> {
 
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
         VALUES (9, datetime('now'), 'Add kv_history table for memory immutability');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 10: Multi-tenant support.
+///
+/// - Creates `tenants` table for tenant/user management.
+/// - Adds nullable `tenant_id` column to all data tables for tenant isolation.
+/// - Existing rows get `tenant_id = NULL` (global/admin scope).
+fn migrate_v10(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // Create tenants table (serves as both tenant and user table).
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS tenants (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'tenant',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        ",
+    )?;
+
+    // Add tenant_id to all data tables (nullable for backward compatibility).
+    let tables = [
+        "agents",
+        "sessions",
+        "events",
+        "kv_store",
+        "task_queue",
+        "memories",
+        "entities",
+        "relations",
+        "usage_events",
+        "canonical_sessions",
+        "audit_entries",
+        "kv_history",
+    ];
+
+    for table in &tables {
+        if !column_exists(conn, table, "tenant_id") {
+            let sql = format!("ALTER TABLE {table} ADD COLUMN tenant_id TEXT DEFAULT NULL");
+            conn.execute_batch(&sql)?;
+        }
+        let idx = format!("CREATE INDEX IF NOT EXISTS idx_{table}_tenant ON {table}(tenant_id)");
+        conn.execute_batch(&idx)?;
+    }
+
+    conn.execute_batch(
+        "
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (10, datetime('now'), 'Multi-tenant: tenants table + tenant_id on all data tables');
         ",
     )?;
     Ok(())

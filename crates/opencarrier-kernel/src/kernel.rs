@@ -111,6 +111,9 @@ pub struct OpenCarrierKernel {
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
     self_handle: OnceLock<Weak<OpenCarrierKernel>>,
+    /// Plugin tool dispatcher — routes plugin tool calls to loaded shared libraries.
+    pub plugin_tool_dispatcher:
+        std::sync::Mutex<Option<Arc<opencarrier_runtime::plugin::tool_dispatch::PluginToolDispatcher>>>,
 }
 
 /// Create workspace directory structure for an agent.
@@ -992,6 +995,45 @@ impl OpenCarrierKernel {
                 .map_err(|e| KernelError::BootFailed(format!("Memory init failed: {e}")))?,
         );
 
+        // ── Auto-migrate admin tenant from config.toml ──────────────
+        // If auth is enabled and the tenants table is empty, create the admin
+        // tenant from config.toml's username/password_hash. This gives existing
+        // single-tenant deployments a zero-downtime upgrade path.
+        if config.auth.enabled && !config.auth.password_hash.is_empty() {
+            let tenant_store = memory.tenant();
+            match tenant_store.is_empty() {
+                Ok(true) => {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let admin_entry = opencarrier_types::tenant::TenantEntry {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: config.auth.username.clone(),
+                        password_hash: config.auth.password_hash.clone(),
+                        role: opencarrier_types::tenant::TenantRole::Admin,
+                        enabled: true,
+                        created_at: now.clone(),
+                        updated_at: now,
+                    };
+                    match tenant_store.create_tenant(&admin_entry) {
+                        Ok(()) => {
+                            info!(
+                                "Auto-migrated admin tenant '{}' from config.toml",
+                                config.auth.username
+                            );
+                        }
+                        Err(e) => {
+                            warn!("Failed to auto-migrate admin tenant: {e}");
+                        }
+                    }
+                }
+                Ok(false) => {
+                    debug!("Tenants table already populated — skipping admin auto-migration");
+                }
+                Err(e) => {
+                    warn!("Failed to check tenants table: {e}");
+                }
+            }
+        }
+
         // ── Load Brain (carrier's independent LLM brain) ──────────────
         // Brain is required — boot fails without a valid brain.json.
         let brain_path = config.home_dir.join(&config.brain.config);
@@ -1221,6 +1263,7 @@ impl OpenCarrierKernel {
             booted_at: std::time::Instant::now(),
             agent_msg_locks: dashmap::DashMap::new(),
             self_handle: OnceLock::new(),
+            plugin_tool_dispatcher: std::sync::Mutex::new(None),
         };
 
         // Restore persisted agents from SQLite
@@ -1439,6 +1482,7 @@ impl OpenCarrierKernel {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
         };
         self.registry
             .register(entry.clone())
@@ -3855,6 +3899,20 @@ impl OpenCarrierKernel {
             }
         }
 
+        // Step 3.5: Add plugin tools (from dlopen-loaded shared libraries).
+        if let Ok(guard) = self.plugin_tool_dispatcher.lock() {
+            if let Some(ref dispatcher) = *guard {
+                for t in dispatcher.definitions() {
+                    if !tools_unrestricted
+                        && !declared_tools.iter().any(|d| d == &t.name)
+                    {
+                        continue;
+                    }
+                    all_tools.push(t);
+                }
+            }
+        }
+
         // Step 4: Apply per-agent tool_allowlist/tool_blocklist overrides.
         // These are separate from capabilities.tools and act as additional filters.
         let (tool_allowlist, tool_blocklist) = entry
@@ -4385,7 +4443,13 @@ impl KernelHandle for OpenCarrierKernel {
         Ok((id.to_string(), name))
     }
 
-    async fn send_to_agent(&self, agent_id: &str, message: &str) -> Result<String, String> {
+    async fn send_to_agent(
+        &self,
+        agent_id: &str,
+        message: &str,
+        sender_id: Option<&str>,
+        sender_name: Option<&str>,
+    ) -> Result<String, String> {
         // Try UUID first, then fall back to name lookup
         let id: AgentId = match agent_id.parse() {
             Ok(id) => id,
@@ -4395,8 +4459,13 @@ impl KernelHandle for OpenCarrierKernel {
                 .map(|e| e.id)
                 .ok_or_else(|| format!("Agent not found: {agent_id}"))?,
         };
+        let handle: Option<Arc<dyn KernelHandle>> = self
+            .self_handle
+            .get()
+            .and_then(|w| w.upgrade())
+            .map(|arc| arc as Arc<dyn KernelHandle>);
         let result = self
-            .send_message(id, message)
+            .send_message_with_handle(id, message, handle, sender_id.map(|s| s.to_string()), sender_name.map(|s| s.to_string()))
             .await
             .map_err(|e| format!("Send failed: {e}"))?;
         Ok(result.response)
@@ -4601,6 +4670,7 @@ impl KernelHandle for OpenCarrierKernel {
             created_at: chrono::Utc::now(),
             next_run: None,
             last_run: None,
+            tenant_id: None,
         };
 
         let id = self
@@ -4998,6 +5068,27 @@ impl KernelHandle for OpenCarrierKernel {
 
         Ok(result)
     }
+
+    async fn execute_plugin_tool(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        sender_id: &str,
+        agent_id: &str,
+    ) -> Result<String, String> {
+        let guard = self.plugin_tool_dispatcher.lock().unwrap();
+        if let Some(ref dispatcher) = *guard {
+            let context = opencarrier_types::plugin::PluginToolContext {
+                tenant_id: String::new(),
+                sender_id: sender_id.to_string(),
+                agent_id: agent_id.to_string(),
+                channel_type: String::new(),
+            };
+            dispatcher.execute(tool_name, args, &context)
+        } else {
+            Err(format!("Unknown tool: {tool_name}"))
+        }
+    }
 }
 
 /// Simple frontmatter parser for clone_export — extracts key: value pairs.
@@ -5116,6 +5207,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
         };
         registry.register(entry).unwrap();
 
@@ -5153,6 +5245,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
         };
         registry.register(e1).unwrap();
 
@@ -5176,6 +5269,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
         };
         registry.register(e2).unwrap();
 

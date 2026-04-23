@@ -486,6 +486,9 @@ pub struct AgentBinding {
     pub agent: String,
     /// Match criteria (all specified fields must match).
     pub match_rule: BindingMatchRule,
+    /// Owning tenant ID (None for global/admin bindings).
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 /// Match rule for agent bindings. All specified (non-None) fields must match.
@@ -877,6 +880,10 @@ pub struct KernelConfig {
     /// Clone lifecycle configuration (evolution, version tracking).
     #[serde(default)]
     pub clone_lifecycle: CloneLifecycleConfig,
+    /// Plugin directory for loading channel/tool plugins.
+    /// Each subdirectory should contain a plugin.toml and a shared library (.so/.dylib/.dll).
+    #[serde(default)]
+    pub plugins_dir: Option<PathBuf>,
 }
 
 /// Clone lifecycle configuration — controls post-conversation learning and knowledge evolution.
@@ -1057,6 +1064,7 @@ impl Default for KernelConfig {
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
             clone_lifecycle: CloneLifecycleConfig::default(),
+            plugins_dir: None,
         }
     }
 }

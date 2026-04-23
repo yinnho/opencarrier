@@ -27,6 +27,9 @@ pub struct AppState {
     /// Avoids blocking the `/api/providers` endpoint on TCP timeouts to
     /// unreachable local services. 60-second TTL.
     pub provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache,
+    /// Plugin manager (optional — only if plugins_dir is configured).
+    #[allow(clippy::type_complexity)]
+    pub plugin_manager: Option<Arc<tokio::sync::Mutex<opencarrier_runtime::plugin::PluginManager>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +69,23 @@ fn parse_and_get_agent(
     Ok((agent_id, entry))
 }
 
+/// Parse agent ID, get agent entry, and check tenant ownership.
+/// Returns 403 if the requester doesn't own the agent.
+fn parse_and_get_agent_with_tenant(
+    id: &str,
+    registry: &opencarrier_kernel::registry::AgentRegistry,
+    ctx: &opencarrier_types::tenant::TenantContext,
+) -> Result<(AgentId, opencarrier_types::agent::AgentEntry), (StatusCode, Json<serde_json::Value>)> {
+    let (agent_id, entry) = parse_and_get_agent(id, registry)?;
+    if !can_access(ctx, entry.tenant_id.as_deref()) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
+        ));
+    }
+    Ok((agent_id, entry))
+}
+
 /// Look up a clone by name and extract its workspace path.
 /// Returns (AgentEntry, PathBuf) or an error response.
 fn get_clone_workspace(
@@ -94,8 +114,10 @@ fn get_clone_workspace(
 /// POST /api/agents — Spawn a new agent.
 pub async fn spawn_agent(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(req): Json<SpawnRequest>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     // Resolve template name → manifest_toml if template is provided and manifest_toml is empty
     let manifest_toml = if req.manifest_toml.trim().is_empty() {
         if let Some(ref tmpl_name) = req.template {
@@ -194,6 +216,10 @@ pub async fn spawn_agent(
     let name = manifest.name.clone();
     match state.kernel.spawn_agent(manifest) {
         Ok(id) => {
+            // Assign tenant ownership from the request context
+            if ctx.tenant_id.is_some() {
+                state.kernel.registry.set_tenant_id(id, ctx.tenant_id.clone());
+            }
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!(SpawnResponse {
@@ -213,11 +239,20 @@ pub async fn spawn_agent(
 }
 
 /// GET /api/agents — List all agents.
-pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agents: Vec<serde_json::Value> = state
-        .kernel
-        .registry
-        .list()
+pub async fn list_agents(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let all_agents = if ctx.is_admin() {
+        state.kernel.registry.list()
+    } else if let Some(ref tid) = ctx.tenant_id {
+        state.kernel.registry.list_by_tenant(tid)
+    } else {
+        vec![]
+    };
+
+    let agents: Vec<serde_json::Value> = all_agents
         .into_iter()
         .map(|e| {
             let (modality, model) = state.kernel.resolve_model_label(&e.manifest.model.modality);
@@ -338,10 +373,12 @@ pub fn inject_attachments_into_session(
 pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    extensions: axum::http::Extensions,
     Json(req): Json<MessageRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok((aid, _)) => aid,
         Err(resp) => return resp,
     };
 
@@ -599,9 +636,11 @@ pub async fn get_agent_session(
 pub async fn kill_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok((aid, _)) => aid,
         Err(resp) => return resp,
     };
 
@@ -1559,8 +1598,10 @@ pub async fn version() -> impl IntoResponse {
 pub async fn get_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -5307,6 +5348,9 @@ pub async fn comms_task(
 // ── Dashboard Authentication (username/password sessions) ──
 
 /// POST /api/auth/login — Authenticate with username/password, returns session token.
+///
+/// First checks the tenants table (multi-tenant login), then falls back to
+/// config.toml credentials (legacy admin login).
 pub async fn auth_login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<serde_json::Value>,
@@ -5328,6 +5372,71 @@ pub async fn auth_login(
     let username = req.get("username").and_then(|v| v.as_str()).unwrap_or("");
     let password = req.get("password").and_then(|v| v.as_str()).unwrap_or("");
 
+    // Derive the session secret the same way as server.rs
+    let api_key = state.kernel.config.api_key.trim().to_string();
+    let secret = if !api_key.is_empty() {
+        api_key
+    } else {
+        auth_cfg.password_hash.clone()
+    };
+
+    // Step 1: Try tenants table (multi-tenant login)
+    let tenant_store = state.kernel.memory.tenant();
+    if let Ok(Some(tenant)) = tenant_store.get_tenant_by_name(username) {
+        if !tenant.enabled {
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::AuthAttempt,
+                "dashboard login failed (tenant disabled)",
+                format!("username: {username}"),
+            );
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"error": "Invalid credentials"}).to_string(),
+                ))
+                .unwrap();
+        }
+        if crate::session_auth::verify_password(password, &tenant.password_hash) {
+            let token = crate::session_auth::create_session_token(
+                Some(&tenant.id),
+                tenant.role.as_str(),
+                &tenant.name,
+                &secret,
+                auth_cfg.session_ttl_hours,
+            );
+            let ttl_secs = auth_cfg.session_ttl_hours * 3600;
+            let cookie = format!(
+                "opencarrier_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl_secs}"
+            );
+
+            state.kernel.audit_log.record(
+                "system",
+                opencarrier_runtime::audit::AuditAction::AuthAttempt,
+                "dashboard login success (tenant)",
+                format!("username: {username}, role: {}", tenant.role.as_str()),
+            );
+
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .header("set-cookie", &cookie)
+                .body(Body::from(
+                    serde_json::json!({
+                        "status": "ok",
+                        "token": token,
+                        "username": username,
+                        "role": tenant.role.as_str(),
+                        "tenant_id": tenant.id,
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+        }
+    }
+
+    // Step 2: Fallback to config.toml credentials (legacy admin login)
     // Constant-time username comparison to prevent timing attacks
     let username_ok = {
         use subtle::ConstantTimeEq;
@@ -5357,16 +5466,14 @@ pub async fn auth_login(
             .unwrap();
     }
 
-    // Derive the session secret the same way as server.rs
-    let api_key = state.kernel.config.api_key.trim().to_string();
-    let secret = if !api_key.is_empty() {
-        api_key
-    } else {
-        auth_cfg.password_hash.clone()
-    };
-
-    let token =
-        crate::session_auth::create_session_token(username, &secret, auth_cfg.session_ttl_hours);
+    // Legacy admin login — issue new-format token with admin role
+    let token = crate::session_auth::create_session_token(
+        None,
+        "admin",
+        username,
+        &secret,
+        auth_cfg.session_ttl_hours,
+    );
     let ttl_secs = auth_cfg.session_ttl_hours * 3600;
     let cookie = format!(
         "opencarrier_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl_secs}"
@@ -5375,7 +5482,7 @@ pub async fn auth_login(
     state.kernel.audit_log.record(
         "system",
         opencarrier_runtime::audit::AuditAction::AuthAttempt,
-        "dashboard login success",
+        "dashboard login success (legacy admin)",
         format!("username: {username}"),
     );
 
@@ -5388,6 +5495,7 @@ pub async fn auth_login(
                 "status": "ok",
                 "token": token,
                 "username": username,
+                "role": "admin",
             })
             .to_string(),
         ))
@@ -5439,17 +5547,298 @@ pub async fn auth_check(
         })
         .and_then(|token| crate::session_auth::verify_session_token(&token, &secret));
 
-    if let Some(username) = session_user {
+    if let Some(info) = session_user {
         Json(serde_json::json!({
             "authenticated": true,
             "mode": "session",
-            "username": username,
+            "username": info.username,
+            "role": info.role,
+            "tenant_id": info.tenant_id,
         }))
     } else {
         Json(serde_json::json!({
             "authenticated": false,
             "mode": "session",
         }))
+    }
+}
+
+// ========== Tenant Management endpoints ==========
+
+/// Helper: extract TenantContext from request extensions, defaulting to admin.
+fn get_tenant_ctx(extensions: &axum::http::Extensions) -> opencarrier_types::tenant::TenantContext {
+    extensions
+        .get::<opencarrier_types::tenant::TenantContext>()
+        .cloned()
+        .unwrap_or_else(opencarrier_types::tenant::TenantContext::admin)
+}
+
+/// Helper: check if the requester can access a resource owned by `resource_tenant_id`.
+/// Admin can access everything. Tenants can only access their own resources.
+fn can_access(ctx: &opencarrier_types::tenant::TenantContext, resource_tenant_id: Option<&str>) -> bool {
+    if ctx.is_admin() {
+        return true;
+    }
+    match (&ctx.tenant_id, resource_tenant_id) {
+        (Some(tid), Some(rid)) => tid == rid,
+        (Some(_), None) => false, // tenant can't access global resources
+        (None, _) => true,         // admin path (shouldn't happen if is_admin checked)
+    }
+}
+
+/// GET /api/tenants — List all tenants (admin only).
+pub async fn list_tenants(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+    }
+
+    let tenant_store = state.kernel.memory.tenant();
+    match tenant_store.list_tenants() {
+        Ok(tenants) => {
+            // Don't expose password hashes in the API response
+            let safe: Vec<serde_json::Value> = tenants
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "id": t.id,
+                        "name": t.name,
+                        "role": t.role.as_str(),
+                        "enabled": t.enabled,
+                        "created_at": t.created_at,
+                        "updated_at": t.updated_at,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!(safe)))
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to list tenants: {e}")})),
+        ),
+    }
+}
+
+/// POST /api/tenants — Create a new tenant (admin only).
+pub async fn create_tenant(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Json(req): Json<opencarrier_types::tenant::CreateTenantRequest>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+    }
+
+    if req.name.trim().is_empty() || req.password.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Name and password are required"})),
+        );
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let password_hash = crate::session_auth::hash_password(&req.password);
+    let entry = opencarrier_types::tenant::TenantEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: req.name.trim().to_string(),
+        password_hash,
+        role: opencarrier_types::tenant::TenantRole::Tenant,
+        enabled: true,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    let tenant_id = entry.id.clone();
+    let tenant_name = entry.name.clone();
+    let tenant_store = state.kernel.memory.tenant();
+    match tenant_store.create_tenant(&entry) {
+        Ok(()) => {
+            // Try to auto-start clone-creator and clone-trainer for this tenant
+            for clone_name in &["clone-creator", "clone-trainer"] {
+                if let Some(existing) = state.kernel.registry.find_by_name(clone_name) {
+                    // Already running globally — skip
+                    let _ = existing;
+                    continue;
+                }
+                // Check if the clone is installed on disk
+                let clone_toml = state
+                    .kernel
+                    .config
+                    .effective_workspaces_dir()
+                    .join(clone_name)
+                    .join("agent.toml");
+                if clone_toml.exists() {
+                    match std::fs::read_to_string(&clone_toml) {
+                        Ok(toml_str) => {
+                            match toml::from_str::<AgentManifest>(&toml_str) {
+                                Ok(manifest) => {
+                                    match state.kernel.spawn_agent(manifest) {
+                                        Ok(agent_id) => {
+                                            state.kernel.registry.set_tenant_id(
+                                                agent_id,
+                                                Some(tenant_id.clone()),
+                                            );
+                                            tracing::info!(
+                                                "Auto-started {} for tenant {}",
+                                                clone_name,
+                                                tenant_name
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Failed to auto-start {} for tenant {}: {}",
+                                                clone_name,
+                                                tenant_name,
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Invalid {} manifest: {}", clone_name, e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Cannot read {} manifest: {}", clone_name, e);
+                        }
+                    }
+                }
+            }
+
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "status": "ok",
+                    "id": tenant_id,
+                    "name": tenant_name,
+                    "role": "tenant",
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create tenant: {e}")})),
+        ),
+    }
+}
+
+/// GET /api/tenants/{id} — Get a single tenant (admin only).
+pub async fn get_tenant(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+    }
+
+    let tenant_store = state.kernel.memory.tenant();
+    match tenant_store.get_tenant(&id) {
+        Ok(Some(t)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "id": t.id,
+                "name": t.name,
+                "role": t.role.as_str(),
+                "enabled": t.enabled,
+                "created_at": t.created_at,
+                "updated_at": t.updated_at,
+            })),
+        ),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Tenant not found"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to get tenant: {e}")})),
+        ),
+    }
+}
+
+/// PUT /api/tenants/{id} — Update a tenant (admin only).
+pub async fn update_tenant(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Path(id): Path<String>,
+    Json(req): Json<opencarrier_types::tenant::UpdateTenantRequest>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+    }
+
+    let tenant_store = state.kernel.memory.tenant();
+    let mut entry = match tenant_store.get_tenant(&id) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Tenant not found"})),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to get tenant: {e}")})),
+            );
+        }
+    };
+
+    if let Some(name) = req.name {
+        entry.name = name;
+    }
+    if let Some(password) = req.password {
+        entry.password_hash = crate::session_auth::hash_password(&password);
+    }
+    if let Some(enabled) = req.enabled {
+        entry.enabled = enabled;
+    }
+    entry.updated_at = chrono::Utc::now().to_rfc3339();
+
+    match tenant_store.update_tenant(&entry) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "ok",
+                "id": entry.id,
+                "name": entry.name,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to update tenant: {e}")})),
+        ),
+    }
+}
+
+/// DELETE /api/tenants/{id} — Delete a tenant (admin only).
+pub async fn delete_tenant(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+    }
+
+    let tenant_store = state.kernel.memory.tenant();
+    match tenant_store.delete_tenant(&id) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "ok"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to delete tenant: {e}")})),
+        ),
     }
 }
 
@@ -6146,7 +6535,10 @@ pub async fn install_hub_template(
     let hub_api_key = match
         opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
     {
-        Ok(k) => k,
+        Ok(k) => {
+            tracing::info!(key_env = %state.kernel.config.hub.api_key_env, key_prefix = &k[..8.min(k.len())], "Hub API key loaded");
+            k
+        }
         Err(e) => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -6221,4 +6613,303 @@ pub async fn install_hub_template(
             Json(serde_json::json!({"error": e})),
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin system
+// ---------------------------------------------------------------------------
+
+/// GET /api/plugins — list loaded plugin tool status.
+pub async fn plugins_list(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Get plugin status from PluginManager if available
+    let plugin_statuses = if let Some(ref pm) = state.plugin_manager {
+        let pm = pm.lock().await;
+        let statuses = pm.status();
+        drop(pm);
+        statuses
+            .into_iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "version": s.version,
+                    "loaded": s.loaded,
+                    "channels": s.channels,
+                    "tools": s.tools,
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        // Fallback: read from kernel's tool dispatcher
+        let guard = state.kernel.plugin_tool_dispatcher.lock().unwrap();
+        if let Some(ref dispatcher) = *guard {
+            dispatcher
+                .definitions()
+                .into_iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                    })
+                })
+                .collect()
+        } else {
+            vec![]
+        }
+    };
+
+    Json(serde_json::json!({
+        "plugins": plugin_statuses,
+        "count": plugin_statuses.len(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// WeChat iLink Bot — QR code login & status
+// ---------------------------------------------------------------------------
+
+/// WeChat iLink API base URL.
+const WEIXIN_ILINK_BASE: &str = "https://ilinkai.weixin.qq.com";
+/// iLink bot_type for personal account.
+const WEIXIN_BOT_TYPE: u32 = 3;
+
+/// GET `/api/weixin/qrcode` — fetch a fresh QR code for WeChat scanning.
+///
+/// Query params: `?tenant=<name>` (optional, defaults to "default")
+pub async fn weixin_qrcode(
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let tenant = params.get("tenant").map(|s| s.as_str()).unwrap_or("default");
+
+    let url = format!(
+        "{WEIXIN_ILINK_BASE}/ilink/bot/get_bot_qrcode?bot_type={WEIXIN_BOT_TYPE}"
+    );
+
+    let http = reqwest::Client::new();
+    let resp = match http.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(tenant, "get_bot_qrcode request failed: {e}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("iLink request failed: {e}") })),
+            );
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        tracing::error!(tenant, %status, "get_bot_qrcode returned {status}: {body}");
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("iLink HTTP {status}") })),
+        );
+    }
+
+    match resp.json::<serde_json::Value>().await {
+        Ok(data) => (StatusCode::OK, Json(serde_json::json!({
+            "tenant": tenant,
+            "data": data,
+        }))),
+        Err(e) => {
+            tracing::error!(tenant, "get_bot_qrcode parse error: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Parse error: {e}") })),
+            )
+        }
+    }
+}
+
+/// GET `/api/weixin/qrcode-status` — poll QR code scan status.
+///
+/// Query params: `?tenant=<name>&qrcode=<code>`
+///
+/// When status becomes "confirmed", saves the bot_token and registers the tenant.
+pub async fn weixin_qrcode_status(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let tenant = params.get("tenant").map(|s| s.as_str()).unwrap_or("default");
+    let qrcode = match params.get("qrcode") {
+        Some(q) => q.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Missing qrcode parameter" })),
+            );
+        }
+    };
+
+    let url = format!(
+        "{WEIXIN_ILINK_BASE}/ilink/bot/get_qrcode_status?qrcode={}",
+        urlencoding::encode(&qrcode)
+    );
+
+    let http = reqwest::Client::new();
+    let resp = match http
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(40))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(tenant, "get_qrcode_status request failed: {e}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("iLink request failed: {e}") })),
+            );
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        tracing::error!(tenant, %status, "get_qrcode_status returned {status}: {body}");
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("iLink HTTP {status}") })),
+        );
+    }
+
+    // iLink may return application/octet-stream
+    let text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(tenant, "get_qrcode_status read body error: {e}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Read error: {e}") })),
+            );
+        }
+    };
+
+    let data: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(tenant, "get_qrcode_status parse error: {e}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Parse error: {e}") })),
+            );
+        }
+    };
+
+    // Check if scan is confirmed — if so, extract bot_token and register tenant
+    let scan_status = data
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    if scan_status == "confirmed" {
+        let bot_token = data
+            .get("bot_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let baseurl = data
+            .get("baseurl")
+            .and_then(|v| v.as_str())
+            .unwrap_or(WEIXIN_ILINK_BASE);
+        let ilink_bot_id = data
+            .get("ilink_bot_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let ilink_user_id = data.get("ilink_user_id").and_then(|v| v.as_str());
+
+        if !bot_token.is_empty() && !ilink_bot_id.is_empty() {
+            // Save token to disk so plugin can pick it up on restart
+            let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
+            if let Err(e) = std::fs::create_dir_all(&token_dir) {
+                tracing::error!(tenant, "Failed to create weixin token dir: {e}");
+            } else {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                let token_file = serde_json::json!({
+                    "name": tenant,
+                    "bot_token": bot_token,
+                    "baseurl": baseurl,
+                    "ilink_bot_id": ilink_bot_id,
+                    "user_id": ilink_user_id,
+                    "expires_at": now + 86400, // 24h
+                    "bind_agent": null,
+                });
+                let path = token_dir.join(format!("{tenant}.json"));
+                if let Ok(json) = serde_json::to_string_pretty(&token_file) {
+                    if let Err(e) = std::fs::write(&path, json) {
+                        tracing::error!(tenant, "Failed to write weixin token file: {e}");
+                    }
+                }
+            }
+
+            tracing::info!(
+                tenant,
+                ilink_bot_id,
+                "WeChat iLink QR scan confirmed — token saved"
+            );
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "tenant": tenant,
+            "status": scan_status,
+            "data": data,
+        })),
+    )
+}
+
+/// GET `/api/weixin/status` — list all bound WeChat accounts with expiry info.
+pub async fn weixin_status(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
+
+    let mut tenants: Vec<serde_json::Value> = Vec::new();
+
+    if token_dir.exists() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        if let Ok(entries) = std::fs::read_dir(&token_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let expires_at = tf
+                            .get("expires_at")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        let expired = now >= expires_at;
+                        let remaining = (expires_at - now).max(0);
+
+                        tenants.push(serde_json::json!({
+                            "name": tf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                            "ilink_bot_id": tf.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or(""),
+                            "user_id": tf.get("user_id").and_then(|v| v.as_str()),
+                            "expires_at": expires_at,
+                            "remaining_secs": remaining,
+                            "expired": expired,
+                            "bind_agent": tf.get("bind_agent").and_then(|v| v.as_str()),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "tenants": tenants,
+        "count": tenants.len(),
+    }))
 }

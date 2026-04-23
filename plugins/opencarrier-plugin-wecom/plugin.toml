@@ -1,0 +1,35 @@
+[plugin]
+name = "wecom"
+version = "1.0.0"
+abi_version = 1
+description = "WeChat Work (WeCom) channel and tools"
+author = "Yinnhoo"
+
+[[channels]]
+channel_type = "wecom"
+name = "WeChat Work"
+
+[[tools]]
+name = "create_spreadsheet"
+description = "创建企业微信表格"
+parameters_json = '{"type":"object","properties":{"title":{"type":"string","description":"表格标题"},"columns":{"type":"array","items":{"type":"string"},"description":"列标题"}},"required":["title","columns"]}'
+
+[[tools]]
+name = "add_rows"
+description = "向企业微信表格添加行"
+parameters_json = '{"type":"object","properties":{"docid":{"type":"string","description":"文档ID或URL"},"rows":{"type":"array","items":{"type":"array","items":{"type":"string"}},"description":"行数据"}},"required":["docid","rows"]}'
+
+[[tools]]
+name = "query_spreadsheet"
+description = "查询企业微信表格数据"
+parameters_json = '{"type":"object","properties":{"docid":{"type":"string","description":"文档ID"}},"required":["docid"]}'
+
+[[tools]]
+name = "send_wecom_message"
+description = "发送企业微信消息（支持企业应用和微信客服模式）"
+parameters_json = '{"type":"object","properties":{"user_id":{"type":"string","description":"接收人UserID（企业应用为内部UserID，微信客服为external_userid）"},"content":{"type":"string","description":"消息内容"}},"required":["user_id","content"]}'
+
+[[tools]]
+name = "send_webhook_message"
+description = "通过群机器人Webhook发送消息到群聊"
+parameters_json = '{"type":"object","properties":{"content":{"type":"string","description":"消息内容"}},"required":["content"]}'
