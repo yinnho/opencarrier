@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "ai-writer",
+  "description": "AI科技公众号写手 — 热点追踪、文章创作、排版发布全流程",
+  "author": "opencarrier",
+  "tags": ["writing", "wechat", "ai", "publishing"],
+  "exported_at": "1745395200",
+  "knowledge_version": 3
+}
