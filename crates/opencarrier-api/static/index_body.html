@@ -1324,11 +1324,11 @@
           </div>
           <div x-show="!loading && !loadError">
           <div class="tabs" role="tablist">
-            <div class="tab" role="tab" :class="{ active: tab === 'config' }" @click="tab = 'config'; if (!configSchema) loadConfigSchema()">Config</div>
+            <div class="tab" role="tab" :class="{ active: tab === 'config' }" @click="tab = 'config'; stopQrPoll(); if (!configSchema) loadConfigSchema()">Config</div>
             <div class="tabs-separator"></div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'">Tools</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'security' }" @click="tab = 'security'; if (!securityData && !secLoading) loadSecurity()">Security</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'">System</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'; stopQrPoll()">Tools</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'security' }" @click="tab = 'security'; stopQrPoll(); if (!securityData && !secLoading) loadSecurity()">Security</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'; stopQrPoll()">System</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'wechat' }" @click="tab = 'wechat'; if (!wechatData && !wechatLoading) loadWechatBindings()">WeChat</div>
           </div>
 
