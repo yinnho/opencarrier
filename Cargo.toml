@@ -13,6 +13,7 @@ members = [
     "crates/opencarrier-plugin-sdk",
     "plugins/opencarrier-plugin-wecom",
     "plugins/opencarrier-plugin-weixin",
+    "plugins/opencarrier-plugin-feishu",
     "xtask",
 ]
 
