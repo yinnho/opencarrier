@@ -4197,7 +4197,11 @@ mod tests {
         )
         .await;
         assert!(result.is_error);
-        assert!(result.content.contains("traversal"));
+        assert!(
+            result.content.contains("traversal") || result.content.contains("Absolute"),
+            "Expected path rejection, got: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -4312,14 +4316,13 @@ mod tests {
     #[tokio::test]
     async fn test_capability_enforcement_allowed() {
         let allowed = vec!["file_read".to_string()];
-        // Use a cross-platform nonexistent path
-        let bad_path = std::env::temp_dir()
-            .join("opencarrier_test_nonexistent_12345")
-            .join("file.txt");
+        // Use a relative nonexistent path — workspace_root is None so validate_path
+        // will check for traversal/absolute, and this relative path passes that check,
+        // then fails at the actual read (file-not-found).
         let result = execute_tool(
             "test-id",
             "file_read",
-            &serde_json::json!({"path": bad_path.to_str().unwrap()}),
+            &serde_json::json!({"path": "opencarrier_test_nonexistent_12345/file.txt"}),
             None,
             Some(&allowed),
             None,

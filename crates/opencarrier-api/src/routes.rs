@@ -839,9 +839,11 @@ pub async fn list_provider_keys(State(state): State<Arc<AppState>>) -> impl Into
 /// For `jwt` auth type: `{ "params": { "access_key_env": "val", "secret_key_env": "val" } }`
 pub async fn set_provider_key(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     let brain = state.kernel.brain_info();
     let config = brain.config();
 
@@ -923,8 +925,10 @@ pub async fn set_provider_key(
 /// DELETE /api/providers/{name}/key — Remove API key for a provider.
 pub async fn delete_provider_key(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     let brain = state.kernel.brain_info();
     let config = brain.config();
 
@@ -1038,9 +1042,11 @@ pub async fn brain_modality_detail(
 /// PUT /api/brain/providers/{name} — create or update a Brain provider.
 pub async fn set_brain_provider(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     let api_key_env = body["api_key_env"]
         .as_str()
         .unwrap_or("")
@@ -1077,8 +1083,10 @@ pub async fn set_brain_provider(
 /// DELETE /api/brain/providers/{name} — remove a Brain provider.
 pub async fn delete_brain_provider(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     // Check no endpoints reference this provider
     let guard = state.kernel.brain_read();
     {
@@ -1128,9 +1136,11 @@ pub async fn delete_brain_provider(
 /// PUT /api/brain/endpoints/{name} — create or update a Brain endpoint.
 pub async fn set_brain_endpoint(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     let provider = body["provider"]
         .as_str()
         .unwrap_or("")
@@ -1232,8 +1242,10 @@ pub async fn set_brain_endpoint(
 /// DELETE /api/brain/endpoints/{name} — remove a Brain endpoint.
 pub async fn delete_brain_endpoint(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     // Check no modalities reference this endpoint
     let guard = state.kernel.brain_read();
     {
@@ -1283,9 +1295,11 @@ pub async fn delete_brain_endpoint(
 /// PUT /api/brain/modalities/{name} — create or update a Brain modality.
 pub async fn set_brain_modality(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     let primary = body["primary"]
         .as_str()
         .unwrap_or("")
@@ -1361,8 +1375,10 @@ pub async fn set_brain_modality(
 /// DELETE /api/brain/modalities/{name} — remove a Brain modality.
 pub async fn delete_brain_modality(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     // Cannot delete default modality
     let guard = state.kernel.brain_read();
     if guard.config().default_modality == name {
@@ -1401,8 +1417,10 @@ pub async fn delete_brain_modality(
 /// PUT /api/brain/default-modality — set the default modality.
 pub async fn set_brain_default_modality(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     let modality = body["default_modality"]
         .as_str()
         .unwrap_or("")
@@ -1444,7 +1462,8 @@ pub async fn set_brain_default_modality(
 }
 
 /// POST /api/brain/reload — reload Brain from disk.
-pub async fn reload_brain(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn reload_brain(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     match state.kernel.reload_brain() {
         Ok(()) => {
             state.kernel.audit_log.record(
@@ -1466,7 +1485,8 @@ pub async fn reload_brain(State(state): State<Arc<AppState>>) -> impl IntoRespon
 }
 
 /// GET /api/brain/config — Return raw brain.json content.
-pub async fn get_brain_config_raw(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn get_brain_config_raw(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     let path = state.kernel.brain_path();
     match std::fs::read_to_string(path) {
         Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -1486,8 +1506,10 @@ pub async fn get_brain_config_raw(State(state): State<Arc<AppState>>) -> impl In
 /// PUT /api/brain/config — Update brain.json from raw JSON.
 pub async fn put_brain_config_raw(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     // Validate it's a valid BrainConfig before writing
     let config: opencarrier_types::brain::BrainConfig = match serde_json::from_value(body.clone()) {
         Ok(c) => c,
@@ -1541,7 +1563,11 @@ pub async fn put_brain_config_raw(
 }
 
 /// POST /api/shutdown — Graceful shutdown.
-pub async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn shutdown(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> axum::response::Response {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))).into_response();
+    }
     tracing::info!("Shutdown requested via API");
     // SECURITY: Record shutdown in audit trail
     state.kernel.audit_log.record(
@@ -1553,7 +1579,7 @@ pub async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.kernel.shutdown();
     // Signal the HTTP server to initiate graceful shutdown so the process exits.
     state.shutdown_notify.notify_one();
-    Json(serde_json::json!({"status": "shutting_down"}))
+    Json(serde_json::json!({"status": "shutting_down"})).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -2086,7 +2112,11 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
 /// - `opencarrier_tool_calls_total` — total tool calls (per agent)
 /// - `opencarrier_panics_total` — supervisor panic count
 /// - `opencarrier_restarts_total` — supervisor restart count
-pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn prometheus_metrics(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> axum::response::Response {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))).into_response();
+    }
     let mut out = String::with_capacity(2048);
 
     // Uptime
@@ -2160,11 +2190,8 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
             "text/plain; version=0.0.4; charset=utf-8",
         )],
         out,
-    )
+    ).into_response()
 }
-
-// ---------------------------------------------------------------------------
-// Skills endpoints
 // ---------------------------------------------------------------------------
 
 /// GET /api/skills — List installed skills.
@@ -2279,8 +2306,13 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
 /// GET /api/audit/recent — Get recent audit log entries.
 pub async fn audit_recent(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))).into_response();
+    }
     let n: usize = params
         .get("n")
         .and_then(|v| v.parse().ok())
@@ -2309,11 +2341,15 @@ pub async fn audit_recent(
         "entries": items,
         "total": state.kernel.audit_log.len(),
         "tip_hash": tip,
-    }))
+    })).into_response()
 }
 
 /// GET /api/audit/verify — Verify the audit chain integrity.
-pub async fn audit_verify(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn audit_verify(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> axum::response::Response {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))).into_response();
+    }
     let entry_count = state.kernel.audit_log.len();
     match state.kernel.audit_log.verify_integrity() {
         Ok(()) => {
@@ -2324,20 +2360,20 @@ pub async fn audit_verify(State(state): State<Arc<AppState>>) -> impl IntoRespon
                     "entries": 0,
                     "warning": "Audit log is empty — no events have been recorded yet",
                     "tip_hash": state.kernel.audit_log.tip_hash(),
-                }))
+                })).into_response()
             } else {
                 Json(serde_json::json!({
                     "valid": true,
                     "entries": entry_count,
                     "tip_hash": state.kernel.audit_log.tip_hash(),
-                }))
+                })).into_response()
             }
         }
         Err(msg) => Json(serde_json::json!({
             "valid": false,
             "error": msg,
             "entries": entry_count,
-        })),
+        })).into_response(),
     }
 }
 
@@ -2355,8 +2391,13 @@ pub async fn audit_verify(State(state): State<Arc<AppState>>) -> impl IntoRespon
 /// as a backfill so the client has immediate context.
 pub async fn logs_stream(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Query(params): Query<HashMap<String, String>>,
 ) -> axum::response::Response {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))).into_response();
+    }
     use axum::response::sse::{Event, KeepAlive, Sse};
 
     let level_filter = params.get("level").cloned().unwrap_or_default();
@@ -3466,8 +3507,10 @@ pub async fn set_agent_mcp_servers(
 /// POST /api/skills/create — Create a local prompt-only skill.
 pub async fn create_skill(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     let name = match body["name"].as_str() {
         Some(n) if !n.trim().is_empty() => n.trim().to_string(),
         _ => {
@@ -4420,7 +4463,8 @@ pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
 /// Reads the config file, diffs against current config, validates the new config,
 /// and applies hot-reloadable actions (approval policy, cron limits, etc.).
 /// Returns the reload plan showing what changed and what was applied.
-pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn config_reload(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> impl IntoResponse {
+    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
     // SECURITY: Record config reload in audit trail
     state.kernel.audit_log.record(
         "system",
@@ -4461,7 +4505,8 @@ pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoRespo
 // ---------------------------------------------------------------------------
 
 /// GET /api/config/schema — Return a simplified JSON description of the config structure.
-pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn config_schema(State(state): State<Arc<AppState>>, _extensions: axum::http::Extensions) -> impl IntoResponse {
+    // NOTE: admin check requires middleware-level enforcement (mixed return types)
     // Build modality options from Brain config (or legacy model catalog)
     let modalities: Vec<String> = state
         .kernel
@@ -4530,15 +4575,20 @@ pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoRespo
 /// Writes the value to the TOML config file and triggers a reload.
 pub async fn config_set(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))).into_response();
+    }
     let path = match body.get("path").and_then(|v| v.as_str()) {
         Some(p) => p.to_string(),
         None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"status": "error", "error": "missing 'path' field"})),
-            );
+            ).into_response();
         }
     };
     let value = match body.get("value") {
@@ -4547,7 +4597,7 @@ pub async fn config_set(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"status": "error", "error": "missing 'value' field"})),
-            );
+            ).into_response();
         }
     };
 
@@ -4567,7 +4617,7 @@ pub async fn config_set(
                     "status": "error",
                     "error": format!("Cannot modify '{blocked}' via API — edit config.toml directly")
                 })),
-            );
+            ).into_response();
         }
     }
 
@@ -4619,7 +4669,7 @@ pub async fn config_set(
                 Json(
                     serde_json::json!({"status": "error", "error": "path too deep (max 3 levels)"}),
                 ),
-            );
+            ).into_response();
         }
     }
 
@@ -4632,14 +4682,14 @@ pub async fn config_set(
                 Json(
                     serde_json::json!({"status": "error", "error": format!("serialize failed: {e}")}),
                 ),
-            );
+            ).into_response();
         }
     };
     if let Err(e) = std::fs::write(&config_path, &toml_string) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"status": "error", "error": format!("write failed: {e}")})),
-        );
+        ).into_response();
     }
 
     // Trigger reload
@@ -4664,7 +4714,7 @@ pub async fn config_set(
     (
         StatusCode::OK,
         Json(serde_json::json!({"status": reload_status, "path": path})),
-    )
+    ).into_response()
 }
 
 /// Convert a serde_json::Value to a toml::Value.
@@ -4990,16 +5040,11 @@ pub async fn webhook_agent(
             }
         },
         None => {
-            // No agent specified — use the first available agent
-            match state.kernel.registry.list().first() {
-                Some(entry) => entry.id,
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        Json(serde_json::json!({"error": "No agents available"})),
-                    );
-                }
-            }
+            // SECURITY: No default agent — must specify explicitly
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Must specify 'agent' field (name or UUID)"})),
+            );
         }
     };
 
@@ -5132,10 +5177,22 @@ fn validate_webhook_token(headers: &axum::http::HeaderMap, token_env: &str) -> b
 // ---------------------------------------------------------------------------
 
 /// GET /api/comms/topology — Build agent topology graph from registry.
-pub async fn comms_topology(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn comms_topology(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
     use opencarrier_types::comms::{EdgeKind, TopoEdge, TopoNode, Topology};
 
-    let agents = state.kernel.registry.list();
+    let ctx = get_tenant_ctx(&extensions);
+    let all_agents = state.kernel.registry.list();
+    let agents: Vec<_> = if ctx.is_admin() {
+        all_agents
+    } else {
+        all_agents
+            .into_iter()
+            .filter(|a| can_access(&ctx, a.tenant_id.as_deref()))
+            .collect()
+    };
 
     let nodes: Vec<TopoNode> = agents
         .iter()
@@ -5351,15 +5408,25 @@ fn audit_to_comms_event(
 /// and the audit log (for message/spawn/kill events that are always captured).
 pub async fn comms_events(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let limit = params
         .get("limit")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(100)
         .min(500);
 
-    let agents = state.kernel.registry.list();
+    let all_agents = state.kernel.registry.list();
+    let agents: Vec<_> = if ctx.is_admin() {
+        all_agents
+    } else {
+        all_agents
+            .into_iter()
+            .filter(|a| can_access(&ctx, a.tenant_id.as_deref()))
+            .collect()
+    };
 
     // Primary source: event bus (has full source/target context)
     let bus_events = state.kernel.event_bus.history(500).await;
@@ -5391,7 +5458,14 @@ pub async fn comms_events(
 /// GET /api/comms/events/stream — SSE stream of inter-agent communication events.
 ///
 /// Polls the audit log every 500ms for new inter-agent events.
-pub async fn comms_events_stream(State(state): State<Arc<AppState>>) -> axum::response::Response {
+pub async fn comms_events_stream(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> axum::response::Response {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, "Admin only").into_response();
+    }
     use axum::response::sse::{Event, KeepAlive, Sse};
 
     let (tx, rx) = tokio::sync::mpsc::channel::<
@@ -5441,30 +5515,35 @@ pub async fn comms_events_stream(State(state): State<Arc<AppState>>) -> axum::re
 /// POST /api/comms/send — Send a message from one agent to another.
 pub async fn comms_send(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(req): Json<opencarrier_types::comms::CommsSendRequest>,
 ) -> impl IntoResponse {
-    // Validate from agent exists
+    let ctx = get_tenant_ctx(&extensions);
+
+    // Validate from agent exists and tenant can access it
     let from_id = match parse_agent_id(&req.from_agent_id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    if state.kernel.registry.get(from_id).is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Source agent not found"})),
-        );
+    if let Some(from_entry) = state.kernel.registry.get(from_id) {
+        if !can_access(&ctx, from_entry.tenant_id.as_deref()) {
+            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied to source agent"})));
+        }
+    } else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Source agent not found"})));
     }
 
-    // Validate to agent exists
+    // Validate to agent exists and tenant can access it
     let to_id = match parse_agent_id(&req.to_agent_id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    if state.kernel.registry.get(to_id).is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Target agent not found"})),
-        );
+    if let Some(to_entry) = state.kernel.registry.get(to_id) {
+        if !can_access(&ctx, to_entry.tenant_id.as_deref()) {
+            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied to target agent"})));
+        }
+    } else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Target agent not found"})));
     }
 
     // SECURITY: Limit message size
@@ -5495,8 +5574,13 @@ pub async fn comms_send(
 /// POST /api/comms/task — Post a task to the agent task queue.
 pub async fn comms_task(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(req): Json<opencarrier_types::comms::CommsTaskRequest>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    if !ctx.is_admin() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+    }
     if req.title.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -5767,6 +5851,18 @@ fn can_access(ctx: &opencarrier_types::tenant::TenantContext, resource_tenant_id
         (Some(tid), Some(rid)) => tid == rid,
         (Some(_), None) => false, // tenant can't access global resources
         (None, _) => false,        // deny — missing tenant context is not admin
+    }
+}
+
+/// Helper: require admin role, returns FORBIDDEN if not admin.
+/// Usage: `let admin_guard = require_admin(&extensions)?;`
+#[allow(dead_code)]
+fn require_admin(extensions: &axum::http::Extensions) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let ctx = get_tenant_ctx(extensions);
+    if ctx.is_admin() {
+        Ok(())
+    } else {
+        Err((StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))))
     }
 }
 
