@@ -314,6 +314,10 @@ impl OpenCarrierKernel {
         let api_key = std::env::var(&hub.api_key_env)
             .map_err(|_| format!("Environment variable {} not set", hub.api_key_env))?;
 
+        // SECURITY: Validate hub URL before fetching
+        opencarrier_clone::hub::validate_hub_url(&hub.url)
+            .map_err(|e| format!("Invalid hub URL: {e}"))?;
+
         let url = format!("{}/api/brain/config", hub.url.trim_end_matches('/'));
 
         let json_str = {

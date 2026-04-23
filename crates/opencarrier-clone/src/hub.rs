@@ -6,6 +6,61 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
+/// SECURITY: Validate that a Hub URL is safe to fetch (not an internal/metadata endpoint).
+/// Blocks non-HTTP schemes, localhost, link-local, loopback, and known metadata IPs.
+pub fn validate_hub_url(url: &str) -> Result<()> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        bail!("Hub URL must use http:// or https:// scheme");
+    }
+
+    // Extract host portion
+    let no_scheme = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = if no_scheme.starts_with('[') {
+        // IPv6 bracket notation
+        no_scheme.find(']').map(|i| &no_scheme[..=i]).unwrap_or(no_scheme)
+    } else {
+        no_scheme.split(&['/', ':'][..]).next().unwrap_or(no_scheme)
+    }
+    .to_lowercase();
+
+    // Block internal/metadata hostnames and IPs
+    let blocked = [
+        "localhost",
+        "ip6-localhost",
+        "metadata.google.internal",
+        "metadata.aws.internal",
+        "instance-data",
+        "169.254.169.254",
+        "100.100.100.200",
+        "192.0.0.192",
+        "0.0.0.0",
+        "::1",
+        "[::1]",
+    ];
+    for b in &blocked {
+        if host == *b {
+            bail!("Hub URL blocked: internal/metadata address '{}' is not allowed", host);
+        }
+    }
+
+    // Block RFC1918 private IPs (10.x, 172.16-31.x, 192.168.x)
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() == 4 {
+        if parts[0] == "10" { bail!("Hub URL blocked: private IP '{}'", host); }
+        if parts[0] == "172" {
+            if let Ok(second) = parts[1].parse::<u8>() {
+                if (16..=31).contains(&second) { bail!("Hub URL blocked: private IP '{}'", host); }
+            }
+        }
+        if parts[0] == "192" && parts[1] == "168" { bail!("Hub URL blocked: private IP '{}'", host); }
+        if parts[0] == "127" { bail!("Hub URL blocked: loopback IP '{}'", host); }
+    }
+
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct SearchResponse {
     templates: Vec<TemplateItem>,
@@ -25,6 +80,7 @@ struct TemplateItem {
 
 /// Search templates on Hub. Returns formatted table string.
 pub async fn search(hub_url: &str, api_key: &str, query: &str) -> Result<String> {
+    validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
     let url = if query.is_empty() {
         format!("{}/api/templates?limit=20", base)
@@ -79,6 +135,7 @@ pub async fn install(
     workspace_dir: &Path,
     device_id: &str,
 ) -> Result<String> {
+    validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
     let url = if let Some(v) = version {
         format!("{}/api/templates/{}/download/{}", base, urlencoding::encode(name), urlencoding::encode(v))
@@ -165,6 +222,7 @@ pub async fn publish(
     category: Option<&str>,
     visibility: Option<&str>,
 ) -> Result<String> {
+    validate_hub_url(hub_url)?;
     use base64::Engine;
     let base = hub_url.trim_end_matches('/');
     let url = format!("{}/api/templates", base);

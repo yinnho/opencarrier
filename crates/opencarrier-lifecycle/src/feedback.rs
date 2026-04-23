@@ -9,9 +9,49 @@
 //! The kernel calls `build_anonymize_prompt()` → sends to LLM →
 //! `parse_anonymize_response()` → `save_feedback()` → `push_feedback_to_hub()`.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// SECURITY: Validate that a Hub URL is not an internal/metadata endpoint.
+/// Minimal version matching opencarrier_clone::hub::validate_hub_url.
+fn validate_hub_url(url: &str) -> Result<()> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        bail!("Hub URL must use http:// or https:// scheme");
+    }
+    let no_scheme = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = if no_scheme.starts_with('[') {
+        no_scheme.find(']').map(|i| &no_scheme[..=i]).unwrap_or(no_scheme)
+    } else {
+        no_scheme.split(&['/', ':'][..]).next().unwrap_or(no_scheme)
+    }
+    .to_lowercase();
+
+    let blocked = [
+        "localhost", "ip6-localhost", "metadata.google.internal",
+        "metadata.aws.internal", "instance-data", "169.254.169.254",
+        "100.100.100.200", "192.0.0.192", "0.0.0.0", "::1", "[::1]",
+    ];
+    for b in &blocked {
+        if host == *b {
+            bail!("Hub URL blocked: internal/metadata address '{}'", host);
+        }
+    }
+
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() == 4 {
+        if parts[0] == "10" || parts[0] == "127" { bail!("Hub URL blocked: private/loopback IP '{}'", host); }
+        if parts[0] == "172" {
+            if let Ok(second) = parts[1].parse::<u8>() {
+                if (16..=31).contains(&second) { bail!("Hub URL blocked: private IP '{}'", host); }
+            }
+        }
+        if parts[0] == "192" && parts[1] == "168" { bail!("Hub URL blocked: private IP '{}'", host); }
+    }
+    Ok(())
+}
 
 /// A single anonymized feedback entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +188,9 @@ pub async fn push_feedback_to_hub(
     api_key: &str,
     entries: &[FeedbackEntry],
 ) -> Result<Vec<String>> {
+    // SECURITY: Validate hub URL is not internal/metadata
+    validate_hub_url(hub_url)?;
+
     let client = reqwest::Client::new();
     let base = hub_url.trim_end_matches('/');
     let url = format!("{}/api/feedback", base);

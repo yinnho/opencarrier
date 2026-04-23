@@ -6798,6 +6798,10 @@ pub async fn clone_verify(
 /// GET /api/hub/templates — List templates from the connected Hub.
 pub async fn list_hub_templates(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let hub_url = state.kernel.config.hub.url.clone();
+    // SECURITY: Validate hub URL before fetching
+    if let Err(e) = opencarrier_clone::hub::validate_hub_url(&hub_url) {
+        return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()})));
+    }
     let hub_api_key = match
         opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
     {
@@ -6856,6 +6860,10 @@ pub async fn install_hub_template(
     let ctx = get_tenant_ctx(&extensions);
     let _ = &ctx; // Will be used when clone_install kernel tool accepts tenant_id
     let hub_url = state.kernel.config.hub.url.clone();
+    // SECURITY: Validate hub URL before fetching
+    if let Err(e) = opencarrier_clone::hub::validate_hub_url(&hub_url) {
+        return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()})));
+    }
     let hub_api_key = match
         opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
     {
