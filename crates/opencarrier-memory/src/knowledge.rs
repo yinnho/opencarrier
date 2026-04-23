@@ -134,7 +134,7 @@ impl KnowledgeStore {
                     s_props: row.get(3)?,
                     s_created: row.get(4)?,
                     s_updated: row.get(5)?,
-                    r_id: row.get(6)?,
+                    _r_id: row.get(6)?,
                     r_source: row.get(7)?,
                     r_type: row.get(8)?,
                     r_target: row.get(9)?,
@@ -193,7 +193,7 @@ struct RawGraphRow {
     s_props: String,
     s_created: String,
     s_updated: String,
-    r_id: String,
+    _r_id: String,
     r_source: String,
     r_type: String,
     r_target: String,
@@ -206,14 +206,6 @@ struct RawGraphRow {
     t_props: String,
     t_created: String,
     t_updated: String,
-}
-
-// Suppress the unused field warning — r_id is part of the schema
-impl RawGraphRow {
-    #[allow(dead_code)]
-    fn relation_id(&self) -> &str {
-        &self.r_id
-    }
 }
 
 fn parse_entity(

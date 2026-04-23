@@ -420,9 +420,6 @@ pub async fn send_message(
         );
     }
 
-    // Check agent exists before processing
-    match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(_) => (), Err(r) => return r };
-
     // Resolve file attachments into image content blocks
     if !req.attachments.is_empty() {
         let image_blocks = resolve_attachments(&req.attachments);
@@ -1727,20 +1724,10 @@ pub async fn send_message_stream(
             .into_response();
     }
 
-    let agent_id = match parse_agent_id(&id) {
-        Ok(id) => id,
-        Err(resp) => return resp.into_response(),
-    };
-
-    // Tenant access check
     let ctx = get_tenant_ctx(&extensions);
-    match get_agent_or_404(&state.kernel.registry, &agent_id) {
-        Ok(entry) => {
-            if !can_access(&ctx, entry.tenant_id.as_deref()) {
-                return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"}))).into_response();
-            }
-        }
-        Err(r) => return r.into_response(),
+    let agent_id = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok((aid, _)) => aid,
+        Err(resp) => return resp.into_response(),
     };
 
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
@@ -5851,18 +5838,6 @@ fn can_access(ctx: &opencarrier_types::tenant::TenantContext, resource_tenant_id
         (Some(tid), Some(rid)) => tid == rid,
         (Some(_), None) => false, // tenant can't access global resources
         (None, _) => false,        // deny — missing tenant context is not admin
-    }
-}
-
-/// Helper: require admin role, returns FORBIDDEN if not admin.
-/// Usage: `let admin_guard = require_admin(&extensions)?;`
-#[allow(dead_code)]
-fn require_admin(extensions: &axum::http::Extensions) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    let ctx = get_tenant_ctx(extensions);
-    if ctx.is_admin() {
-        Ok(())
-    } else {
-        Err((StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))))
     }
 }
 

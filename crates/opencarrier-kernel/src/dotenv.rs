@@ -83,23 +83,6 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// List key names (without values) from `~/.opencarrier/.env`.
-#[allow(dead_code)]
-pub fn list_env_keys() -> Vec<String> {
-    let path = match env_file_path() {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-
-    read_env_file(&path).into_keys().collect()
-}
-
-/// Check if the `.env` file exists.
-#[allow(dead_code)]
-pub fn env_file_exists() -> bool {
-    env_file_path().map(|p| p.exists()).unwrap_or(false)
-}
-
 /// Delete a key from `~/.opencarrier/.env`.
 ///
 /// Also removes the key from the current process environment.
