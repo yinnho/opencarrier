@@ -22,6 +22,8 @@ pub struct Session {
     pub context_window_tokens: u64,
     /// Optional human-readable session label.
     pub label: Option<String>,
+    /// Owning tenant ID (for multi-tenant isolation).
+    pub tenant_id: Option<String>,
 }
 
 /// Session store backed by SQLite.
@@ -67,6 +69,7 @@ impl SessionStore {
                     messages,
                     context_window_tokens: tokens as u64,
                     label,
+                    tenant_id: None,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -83,10 +86,11 @@ impl SessionStore {
         let messages_blob = rmp_serde::to_vec_named(&session.messages)
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
+        let tenant_id_str = session.tenant_id.as_deref().unwrap_or("");
         conn.execute(
-            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
-             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, updated_at = ?6",
+            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, updated_at = ?6, tenant_id = ?7",
             rusqlite::params![
                 session.id.0.to_string(),
                 session.agent_id.0.to_string(),
@@ -94,6 +98,7 @@ impl SessionStore {
                 session.context_window_tokens as i64,
                 session.label.as_deref(),
                 now,
+                tenant_id_str,
             ],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -143,53 +148,77 @@ impl SessionStore {
     }
 
     /// List all sessions with metadata (session_id, agent_id, message_count, created_at).
-    pub fn list_sessions(&self) -> OpenCarrierResult<Vec<serde_json::Value>> {
+    ///
+    /// If `tenant_id` is provided, only sessions belonging to that tenant are returned.
+    pub fn list_sessions(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<serde_json::Value>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
+
+        let sql = if tenant_id.is_some() {
+            "SELECT id, agent_id, messages, created_at, label FROM sessions WHERE tenant_id = ? ORDER BY created_at DESC"
+        } else {
+            "SELECT id, agent_id, messages, created_at, label FROM sessions ORDER BY created_at DESC"
+        };
         let mut stmt = conn
-            .prepare(
-                "SELECT id, agent_id, messages, created_at, label FROM sessions ORDER BY created_at DESC",
-            )
+            .prepare(sql)
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-        let rows = stmt
-            .query_map([], |row| {
-                let session_id: String = row.get(0)?;
-                let agent_id: String = row.get(1)?;
-                let messages_blob: Vec<u8> = row.get(2)?;
-                let created_at: String = row.get(3)?;
-                let label: Option<String> = row.get(4)?;
-                // Deserialize just to count messages
-                let msg_count = rmp_serde::from_slice::<Vec<Message>>(&messages_blob)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                Ok(serde_json::json!({
-                    "session_id": session_id,
-                    "agent_id": agent_id,
-                    "message_count": msg_count,
-                    "created_at": created_at,
-                    "label": label,
-                }))
+        let row_data: Vec<rusqlite::Result<serde_json::Value>> = if let Some(tid) = tenant_id {
+            stmt.query_map(rusqlite::params![tid], |row| {
+                Self::session_row_to_json(row)
             })
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+            .collect()
+        } else {
+            stmt.query_map([], |row| {
+                Self::session_row_to_json(row)
+            })
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+            .collect()
+        };
 
         let mut sessions = Vec::new();
-        for row in rows {
+        for row in row_data {
             sessions.push(row.map_err(|e| OpenCarrierError::Memory(e.to_string()))?);
         }
         Ok(sessions)
     }
 
+    /// Helper to map a session row to JSON.
+    fn session_row_to_json(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+        let session_id: String = row.get(0)?;
+        let agent_id: String = row.get(1)?;
+        let messages_blob: Vec<u8> = row.get(2)?;
+        let created_at: String = row.get(3)?;
+        let label: Option<String> = row.get(4)?;
+        let msg_count = rmp_serde::from_slice::<Vec<Message>>(&messages_blob)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        Ok(serde_json::json!({
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "message_count": msg_count,
+            "created_at": created_at,
+            "label": label,
+        }))
+    }
+
     /// Create a new empty session for an agent.
     pub fn create_session(&self, agent_id: AgentId) -> OpenCarrierResult<Session> {
+        self.create_session_with_tenant(agent_id, None)
+    }
+
+    /// Create a new empty session for an agent with a tenant ID.
+    pub fn create_session_with_tenant(&self, agent_id: AgentId, tenant_id: Option<String>) -> OpenCarrierResult<Session> {
         let session = Session {
             id: SessionId::new(),
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            tenant_id,
         };
         self.save_session(&session)?;
         Ok(session)
@@ -251,6 +280,7 @@ impl SessionStore {
                     messages,
                     context_window_tokens: tokens as u64,
                     label: lbl,
+                    tenant_id: None,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -312,6 +342,7 @@ impl SessionStore {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: label.map(|s| s.to_string()),
+            tenant_id: None,
         };
         self.save_session(&session)?;
         Ok(session)

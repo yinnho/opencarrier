@@ -384,7 +384,20 @@ pub async fn build_router(
             "/api/weixin/qrcode-status",
             axum::routing::get(routes::weixin_qrcode_status),
         )
-        .route("/api/weixin/status", axum::routing::get(routes::weixin_status));
+        .route("/api/weixin/status", axum::routing::get(routes::weixin_status))
+        // Unified channels management
+        .route(
+            "/api/channels/status",
+            axum::routing::get(routes::channels_status),
+        )
+        .route(
+            "/api/channels/wecom/tenants",
+            axum::routing::post(routes::wecom_add_tenant),
+        )
+        .route(
+            "/api/channels/feishu/tenants",
+            axum::routing::post(routes::feishu_add_tenant),
+        );
 
     // Split into a second router chunk to stay within axum's type nesting limit.
     let app = app

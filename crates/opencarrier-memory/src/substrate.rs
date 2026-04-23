@@ -111,13 +111,18 @@ impl MemorySubstrate {
     }
 
     /// Load all agent entries from persistent storage.
-    pub fn load_all_agents(&self) -> OpenCarrierResult<Vec<AgentEntry>> {
-        self.structured.load_all_agents()
+    ///
+    /// If `tenant_id` is provided, only agents belonging to that tenant (or global
+    /// agents with no tenant_id) are returned.
+    pub fn load_all_agents(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<AgentEntry>> {
+        self.structured.load_all_agents(tenant_id)
     }
 
     /// List all saved agents.
-    pub fn list_agents(&self) -> OpenCarrierResult<Vec<(String, String, String)>> {
-        self.structured.list_agents()
+    ///
+    /// If `tenant_id` is provided, only agents belonging to that tenant are listed.
+    pub fn list_agents(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<(String, String, String)>> {
+        self.structured.list_agents(tenant_id)
     }
 
     /// Synchronous get from the structured store (for kernel handle use).
@@ -178,8 +183,8 @@ impl MemorySubstrate {
     }
 
     /// List all sessions with metadata.
-    pub fn list_sessions(&self) -> OpenCarrierResult<Vec<serde_json::Value>> {
-        self.sessions.list_sessions()
+    pub fn list_sessions(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<serde_json::Value>> {
+        self.sessions.list_sessions(tenant_id)
     }
 
     /// Delete a session by ID.
@@ -298,7 +303,7 @@ impl MemorySubstrate {
         embedding: Option<&[f32]>,
     ) -> OpenCarrierResult<MemoryId> {
         self.semantic
-            .remember_with_embedding(agent_id, content, source, scope, metadata, embedding)
+            .remember_with_embedding(agent_id, content, source, scope, metadata, embedding, None)
     }
 
     /// Recall memories using vector similarity when a query embedding is provided.
@@ -358,6 +363,7 @@ impl MemorySubstrate {
                 &scope,
                 metadata,
                 embedding_owned.as_deref(),
+                None,
             )
         })
         .await

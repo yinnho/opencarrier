@@ -274,9 +274,10 @@ pub async fn execute_tool(
         "agent_list" => tool_agent_list(kernel),
         "agent_kill" => tool_agent_kill(input, kernel),
 
-        // Shared memory tools
-        "memory_store" => tool_memory_store(input, kernel),
-        "memory_recall" => tool_memory_recall(input, kernel),
+        // Memory tools (scoped to caller's agent namespace)
+        "memory_store" => tool_memory_store(input, kernel, caller_agent_id),
+        "memory_recall" => tool_memory_recall(input, kernel, caller_agent_id),
+        "memory_list" => tool_memory_list(input, kernel, caller_agent_id),
 
         // Collaboration tools
         "agent_find" => tool_agent_find(input, kernel),
@@ -287,9 +288,9 @@ pub async fn execute_tool(
         "event_publish" => tool_event_publish(input, kernel).await,
 
         // Scheduling tools
-        "schedule_create" => tool_schedule_create(input, kernel).await,
-        "schedule_list" => tool_schedule_list(kernel).await,
-        "schedule_delete" => tool_schedule_delete(input, kernel).await,
+        "schedule_create" => tool_schedule_create(input, kernel, caller_agent_id).await,
+        "schedule_list" => tool_schedule_list(kernel, caller_agent_id).await,
+        "schedule_delete" => tool_schedule_delete(input, kernel, caller_agent_id).await,
 
         // Knowledge graph tools
         "knowledge_add_entity" => tool_knowledge_add_entity(input, kernel).await,
@@ -800,10 +801,10 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["agent_id"]
             }),
         },
-        // --- Shared memory tools ---
+        // --- Memory tools (per-agent namespace) ---
         ToolDefinition {
             name: "memory_store".to_string(),
-            description: "Store a value in shared memory accessible by all agents. Use for cross-agent coordination and data sharing.".to_string(),
+            description: "Store a key-value pair in your own memory. Data persists across conversations.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -815,13 +816,21 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "memory_recall".to_string(),
-            description: "Recall a value from shared memory by key.".to_string(),
+            description: "Recall a value from your memory by key. Use memory_list first if you're unsure what keys exist.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "key": { "type": "string", "description": "The storage key to recall" }
                 },
                 "required": ["key"]
+            }),
+        },
+        ToolDefinition {
+            name: "memory_list".to_string(),
+            description: "List all keys and values stored in your memory. Use this before memory_recall to see what's available.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
             }),
         },
         // --- Collaboration tools ---
@@ -2571,24 +2580,50 @@ fn tool_agent_kill(
 fn tool_memory_store(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let aid = caller_agent_id.ok_or("No agent context for memory_store")?;
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
     let value = input.get("value").ok_or("Missing 'value' parameter")?;
-    kh.memory_store(key, value.clone())?;
+    kh.memory_store(aid, key, value.clone())?;
     Ok(format!("Stored value under key '{key}'."))
 }
 
 fn tool_memory_recall(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let aid = caller_agent_id.ok_or("No agent context for memory_recall")?;
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
-    match kh.memory_recall(key)? {
+    match kh.memory_recall(aid, key)? {
         Some(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
         None => Ok(format!("No value found for key '{key}'.")),
     }
+}
+
+fn tool_memory_list(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let _ = input; // no parameters needed
+    let kh = require_kernel(kernel)?;
+    let aid = caller_agent_id.ok_or("No agent context for memory_list")?;
+    let pairs = kh.memory_list(aid)?;
+    if pairs.is_empty() {
+        return Ok("No keys stored.".to_string());
+    }
+    let lines: Vec<String> = pairs
+        .iter()
+        .map(|(k, v)| {
+            let val_str = serde_json::to_string(v).unwrap_or_else(|_| v.to_string());
+            format!("- {}: {}", k, val_str)
+        })
+        .collect();
+    Ok(lines.join("\n"))
 }
 
 // ---------------------------------------------------------------------------
@@ -2964,8 +2999,10 @@ const SCHEDULES_KEY: &str = "__opencarrier_schedules";
 async fn tool_schedule_create(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let aid = caller_agent_id.ok_or("No agent context for schedule_create")?;
     let description = input["description"]
         .as_str()
         .ok_or("Missing 'description' parameter")?;
@@ -2987,24 +3024,25 @@ async fn tool_schedule_create(
         "enabled": true,
     });
 
-    // Load existing schedules from shared memory
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
+    // Load existing schedules from agent's memory
+    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
 
     schedules.push(entry);
-    kh.memory_store(SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.memory_store(aid, SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
     ))
 }
 
-async fn tool_schedule_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, String> {
+async fn tool_schedule_list(kernel: Option<&Arc<dyn KernelHandle>>, caller_agent_id: Option<&str>) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let aid = caller_agent_id.ok_or("No agent context for schedule_list")?;
 
-    let schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
+    let schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -3033,11 +3071,13 @@ async fn tool_schedule_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<St
 async fn tool_schedule_delete(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let aid = caller_agent_id.ok_or("No agent context for schedule_delete")?;
     let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
 
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -3049,7 +3089,7 @@ async fn tool_schedule_delete(
         return Err(format!("Schedule '{id}' not found."));
     }
 
-    kh.memory_store(SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.memory_store(aid, SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 

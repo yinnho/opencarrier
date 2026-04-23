@@ -221,6 +221,13 @@ impl AcpSessionStore {
         Ok(())
     }
 
+    /// Get session metadata by ID.
+    pub fn get_session_meta(&self, session_id: &str) -> Option<SessionMeta> {
+        let (_, meta_path) = self.find_session_paths(session_id)?;
+        let content = std::fs::read_to_string(&meta_path).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
     /// Read messages from JSONL, returning the last `limit` entries in aginx format.
     pub fn get_messages(
         &self,

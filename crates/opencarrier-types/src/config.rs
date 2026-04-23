@@ -1077,6 +1077,17 @@ impl KernelConfig {
             .unwrap_or_else(|| self.home_dir.join("workspaces"))
     }
 
+    /// Resolved workspaces root directory scoped to a specific tenant.
+    ///
+    /// Returns `tenants/{tenant_id}/workspaces/` under the home directory.
+    /// Falls back to `effective_workspaces_dir()` if tenant_id is None.
+    pub fn tenant_workspaces_dir(&self, tenant_id: Option<&str>) -> PathBuf {
+        match tenant_id {
+            Some(tid) => self.home_dir.join("tenants").join(tid).join("workspaces"),
+            None => self.effective_workspaces_dir(),
+        }
+    }
+
     /// Resolve the API key env var name for a provider.
     ///
     /// Checks: 1) explicit `provider_api_keys` mapping, 2) `auth_profiles` first entry,

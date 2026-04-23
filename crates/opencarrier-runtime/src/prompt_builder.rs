@@ -33,7 +33,7 @@ pub struct PromptContext {
     pub memory_md: Option<String>,
     /// Cross-channel canonical context summary.
     pub canonical_context: Option<String>,
-    /// Known user name (from shared memory).
+    /// Known user name (from agent's own KV namespace).
     pub user_name: Option<String>,
     /// Channel type (telegram, discord, web, etc.).
     pub channel_type: Option<String>,

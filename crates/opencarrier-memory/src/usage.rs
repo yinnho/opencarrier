@@ -20,6 +20,8 @@ pub struct UsageRecord {
     pub output_tokens: u64,
     /// Number of tool calls in this interaction.
     pub tool_calls: u32,
+    /// Owning tenant ID (for multi-tenant isolation).
+    pub tenant_id: Option<String>,
 }
 
 /// Summary of usage over a period.
@@ -79,9 +81,10 @@ impl UsageStore {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
+        let tenant_id_str = record.tenant_id.as_deref().unwrap_or("");
         conn.execute(
-            "INSERT INTO usage_events (id, agent_id, timestamp, model, input_tokens, output_tokens, cost_usd, tool_calls)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO usage_events (id, agent_id, timestamp, model, input_tokens, output_tokens, cost_usd, tool_calls, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 id,
                 record.agent_id.0.to_string(),
@@ -89,41 +92,43 @@ impl UsageStore {
                 record.model,
                 record.input_tokens as i64,
                 record.output_tokens as i64,
-                0.0f64, // cost_usd column still exists in DB schema; always write 0.0
+                0.0f64,
                 record.tool_calls as i64,
+                tenant_id_str,
             ],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 
-    /// Query usage summary, optionally filtered by agent.
-    pub fn query_summary(&self, agent_id: Option<AgentId>) -> OpenCarrierResult<UsageSummary> {
+    /// Query usage summary, optionally filtered by agent and/or tenant.
+    pub fn query_summary(&self, agent_id: Option<AgentId>, tenant_id: Option<&str>) -> OpenCarrierResult<UsageSummary> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
 
-        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match agent_id {
-            Some(aid) => (
-                "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-                        COUNT(*), COALESCE(SUM(tool_calls), 0)
-                 FROM usage_events WHERE agent_id = ?1",
-                vec![Box::new(aid.0.to_string())],
-            ),
-            None => (
-                "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-                        COUNT(*), COALESCE(SUM(tool_calls), 0)
-                 FROM usage_events",
-                vec![],
-            ),
-        };
+        let mut sql = String::from(
+            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+                    COUNT(*), COALESCE(SUM(tool_calls), 0)
+             FROM usage_events WHERE 1=1",
+        );
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(aid) = agent_id {
+            sql.push_str(" AND agent_id = ?");
+            params.push(Box::new(aid.0.to_string()));
+        }
+        if let Some(tid) = tenant_id {
+            sql.push_str(" AND tenant_id = ?");
+            params.push(Box::new(tid.to_string()));
+        }
 
         let params_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|p| p.as_ref()).collect();
 
         let summary = conn
-            .query_row(sql, params_refs.as_slice(), |row| {
+            .query_row(&sql, params_refs.as_slice(), |row| {
                 Ok(UsageSummary {
                     total_input_tokens: row.get::<_, i64>(0)? as u64,
                     total_output_tokens: row.get::<_, i64>(1)? as u64,
@@ -136,23 +141,28 @@ impl UsageStore {
         Ok(summary)
     }
 
-    /// Query usage grouped by model.
-    pub fn query_by_model(&self) -> OpenCarrierResult<Vec<ModelUsage>> {
+    /// Query usage grouped by model, optionally filtered by tenant.
+    pub fn query_by_model(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<ModelUsage>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
 
+        let sql = if tenant_id.is_some() {
+            "SELECT model, COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0), COUNT(*)
+             FROM usage_events WHERE tenant_id = ? GROUP BY model ORDER BY SUM(input_tokens + output_tokens) DESC"
+        } else {
+            "SELECT model, COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0), COUNT(*)
+             FROM usage_events GROUP BY model ORDER BY SUM(input_tokens + output_tokens) DESC"
+        };
         let mut stmt = conn
-            .prepare(
-                "SELECT model, COALESCE(SUM(input_tokens), 0),
-                        COALESCE(SUM(output_tokens), 0), COUNT(*)
-                 FROM usage_events GROUP BY model ORDER BY SUM(input_tokens + output_tokens) DESC",
-            )
+            .prepare(sql)
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-        let rows = stmt
-            .query_map([], |row| {
+        let row_data: Vec<rusqlite::Result<ModelUsage>> = if let Some(tid) = tenant_id {
+            stmt.query_map(rusqlite::params![tid], |row| {
                 Ok(ModelUsage {
                     model: row.get(0)?,
                     total_input_tokens: row.get::<_, i64>(1)? as u64,
@@ -160,35 +170,49 @@ impl UsageStore {
                     call_count: row.get::<_, i64>(3)? as u64,
                 })
             })
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+            .collect()
+        } else {
+            stmt.query_map([], |row| {
+                Ok(ModelUsage {
+                    model: row.get(0)?,
+                    total_input_tokens: row.get::<_, i64>(1)? as u64,
+                    total_output_tokens: row.get::<_, i64>(2)? as u64,
+                    call_count: row.get::<_, i64>(3)? as u64,
+                })
+            })
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+            .collect()
+        };
 
         let mut results = Vec::new();
-        for row in rows {
+        for row in row_data {
             results.push(row.map_err(|e| OpenCarrierError::Memory(e.to_string()))?);
         }
         Ok(results)
     }
 
-    /// Query daily usage breakdown for the last N days.
-    pub fn query_daily_breakdown(&self, days: u32) -> OpenCarrierResult<Vec<DailyBreakdown>> {
+    /// Query daily usage breakdown for the last N days, optionally filtered by tenant.
+    pub fn query_daily_breakdown(&self, days: u32, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<DailyBreakdown>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
 
+        let tenant_filter = tenant_id.map(|tid| format!(" AND tenant_id = '{}'", tid.replace('\'', "''"))).unwrap_or_default();
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT date(timestamp) as day,
                             COALESCE(SUM(input_tokens) + SUM(output_tokens), 0),
                             COUNT(*)
                      FROM usage_events
-                     WHERE timestamp > datetime('now', '-{days} days')
+                     WHERE timestamp > datetime('now', '-{days} days'){tenant_filter}
                      GROUP BY day
                      ORDER BY day ASC"
             ))
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-        let rows = stmt
+        let row_data: Vec<rusqlite::Result<DailyBreakdown>> = stmt
             .query_map([], |row| {
                 Ok(DailyBreakdown {
                     date: row.get(0)?,
@@ -196,10 +220,11 @@ impl UsageStore {
                     calls: row.get::<_, i64>(2)? as u64,
                 })
             })
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+            .collect();
 
         let mut results = Vec::new();
-        for row in rows {
+        for row in row_data {
             results.push(row.map_err(|e| OpenCarrierError::Memory(e.to_string()))?);
         }
         Ok(results)
@@ -260,6 +285,7 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 50,
                 tool_calls: 2,
+                tenant_id: None,
             })
             .unwrap();
 
@@ -270,10 +296,11 @@ mod tests {
                 input_tokens: 500,
                 output_tokens: 200,
                 tool_calls: 1,
+                tenant_id: None,
             })
             .unwrap();
 
-        let summary = store.query_summary(Some(agent_id)).unwrap();
+        let summary = store.query_summary(Some(agent_id), None).unwrap();
         assert_eq!(summary.call_count, 2);
         assert_eq!(summary.total_input_tokens, 600);
         assert_eq!(summary.total_output_tokens, 250);
@@ -293,6 +320,7 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 50,
                 tool_calls: 0,
+                tenant_id: None,
             })
             .unwrap();
 
@@ -303,10 +331,11 @@ mod tests {
                 input_tokens: 200,
                 output_tokens: 100,
                 tool_calls: 1,
+                tenant_id: None,
             })
             .unwrap();
 
-        let summary = store.query_summary(None).unwrap();
+        let summary = store.query_summary(None, None).unwrap();
         assert_eq!(summary.call_count, 2);
         assert_eq!(summary.total_input_tokens, 300);
     }
@@ -324,6 +353,7 @@ mod tests {
                     input_tokens: 100,
                     output_tokens: 50,
                     tool_calls: 0,
+                    tenant_id: None,
                 })
                 .unwrap();
         }
@@ -335,10 +365,11 @@ mod tests {
                 input_tokens: 500,
                 output_tokens: 200,
                 tool_calls: 1,
+                tenant_id: None,
             })
             .unwrap();
 
-        let by_model = store.query_by_model().unwrap();
+        let by_model = store.query_by_model(None).unwrap();
         assert_eq!(by_model.len(), 2);
         // sonnet should be first (highest total tokens)
         assert_eq!(by_model[0].model, "sonnet");
@@ -358,6 +389,7 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 50,
                 tool_calls: 0,
+                tenant_id: None,
             })
             .unwrap();
 
@@ -365,14 +397,14 @@ mod tests {
         let deleted = store.cleanup_old(1).unwrap();
         assert_eq!(deleted, 0);
 
-        let summary = store.query_summary(None).unwrap();
+        let summary = store.query_summary(None, None).unwrap();
         assert_eq!(summary.call_count, 1);
     }
 
     #[test]
     fn test_empty_summary() {
         let store = setup();
-        let summary = store.query_summary(None).unwrap();
+        let summary = store.query_summary(None, None).unwrap();
         assert_eq!(summary.call_count, 0);
     }
 }

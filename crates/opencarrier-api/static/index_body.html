@@ -1329,7 +1329,7 @@
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'; stopQrPoll()">Tools</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'security' }" @click="tab = 'security'; stopQrPoll(); if (!securityData && !secLoading) loadSecurity()">Security</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'; stopQrPoll()">System</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'wechat' }" @click="tab = 'wechat'; if (!wechatData && !wechatLoading) loadWechatBindings()">WeChat</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'channels' }" @click="tab = 'channels'; if (!channelsData && !channelsLoading) loadChannels()">Channels</div>
           </div>
 
           <!-- System Info tab -->
@@ -1601,45 +1601,34 @@
             </div>
           </div>
 
-          <!-- WeChat Binding tab -->
-          <div x-show="tab === 'wechat'">
+          <!-- Channels tab (unified) -->
+          <div x-show="tab === 'channels'">
             <div class="info-card">
-              <h4>WeChat iLink Binding</h4>
-              <p>Bind your WeChat personal account by scanning a QR code. Each binding is valid for 24 hours, after which you must re-scan. Bound accounts receive and reply to messages via the iLink Bot API.</p>
+              <h4>Channel Management</h4>
+              <p>Manage all messaging channels: WeChat personal account, WeChat Work (WeCom), and Feishu/Lark bots.</p>
             </div>
 
-            <!-- QR Code Login -->
+            <!-- WeChat iLink section -->
             <div class="card mt-4" style="border-left:3px solid #07c160">
-              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
-                <span>Bind New Account</span>
-                <button class="btn btn-sm" :disabled="wechatPolling" @click="startQrLogin()">
-                  <span x-show="!wechatPolling">Get QR Code</span>
-                  <span x-show="wechatPolling">Polling...</span>
-                </button>
-              </div>
+              <div class="card-header">WeChat iLink</div>
               <div class="card-body" style="padding-top:8px">
-                <div x-show="wechatQrCode" style="text-align:center;padding:16px">
-                  <img :src="'data:image/png;base64,' + wechatQrCode" style="width:200px;height:200px;border-radius:8px;border:1px solid var(--border)">
-                  <p style="font-size:12px;color:var(--text-dim);margin-top:8px">
+                <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Bind your WeChat personal account via QR scan. Each binding is valid for 24 hours.</p>
+                <div style="display:flex;gap:8px;margin-bottom:12px">
+                  <button class="btn btn-sm" :disabled="wechatPolling" @click="startQrLogin()">
+                    <span x-show="!wechatPolling">Get QR Code</span>
+                    <span x-show="wechatPolling">Polling...</span>
+                  </button>
+                  <button class="btn btn-sm btn-ghost" @click="loadChannels()">Refresh</button>
+                </div>
+                <div x-show="wechatQrCode" style="text-align:center;padding:12px">
+                  <img :src="'data:image/png;base64,' + wechatQrCode" style="width:180px;height:180px;border-radius:8px;border:1px solid var(--border)">
+                  <p style="font-size:12px;color:var(--text-dim);margin-top:6px">
                     Scan with WeChat &middot; <span x-text="wechatQrStatus || 'Waiting...'"></span>
                   </p>
                   <p x-show="wechatQrStatus === 'expired'" style="font-size:12px;color:var(--error)">QR code expired. Click "Get QR Code" again.</p>
                 </div>
-                <div x-show="!wechatQrCode && !wechatPolling" style="font-size:12px;color:var(--text-dim);padding:8px">
-                  Click "Get QR Code" to generate a WeChat login QR code.
-                </div>
-              </div>
-            </div>
-
-            <!-- Bound Accounts List -->
-            <div class="card mt-4" style="border-left:3px solid var(--accent-light)">
-              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
-                <span>Bound Accounts</span>
-                <button class="btn btn-sm btn-ghost" @click="loadWechatBindings()">Refresh</button>
-              </div>
-              <div class="card-body" style="padding-top:8px">
-                <div x-show="!wechatData || wechatData.length === 0" style="font-size:12px;color:var(--text-dim)">No WeChat accounts bound yet.</div>
-                <table x-show="wechatData && wechatData.length > 0" style="width:100%;font-size:12px;border-collapse:collapse">
+                <div x-show="!channelsData || (channelsData.weixin && channelsData.weixin.tenants.length === 0) && !wechatQrCode" style="font-size:12px;color:var(--text-dim);padding:4px 0">No WeChat accounts bound yet.</div>
+                <table x-show="channelsData && channelsData.weixin && channelsData.weixin.tenants.length > 0" style="width:100%;font-size:12px;border-collapse:collapse">
                   <thead>
                     <tr style="border-bottom:1px solid var(--border)">
                       <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
@@ -1649,7 +1638,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    <template x-for="item in (wechatData || [])" :key="item.name">
+                    <template x-for="item in (channelsData && channelsData.weixin ? channelsData.weixin.tenants : [])" :key="item.name">
                       <tr style="border-bottom:1px solid var(--border)">
                         <td style="padding:6px 8px" x-text="item.name"></td>
                         <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.ilink_bot_id || '-'"></td>
@@ -1661,6 +1650,85 @@
                     </template>
                   </tbody>
                 </table>
+              </div>
+            </div>
+
+            <!-- WeCom section -->
+            <div class="card mt-4" style="border-left:3px solid #2b7ce9">
+              <div class="card-header">WeChat Work (WeCom)</div>
+              <div class="card-body" style="padding-top:8px">
+                <div x-show="channelsData && channelsData.wecom && channelsData.wecom.tenants.length > 0" style="margin-bottom:12px">
+                  <table style="width:100%;font-size:12px;border-collapse:collapse">
+                    <thead>
+                      <tr style="border-bottom:1px solid var(--border)">
+                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
+                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Mode</th>
+                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Corp ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="item in (channelsData && channelsData.wecom ? channelsData.wecom.tenants : [])" :key="item.name">
+                        <tr style="border-bottom:1px solid var(--border)">
+                          <td style="padding:6px 8px" x-text="item.name"></td>
+                          <td style="padding:6px 8px"><span class="badge" style="background:#2b7ce9;color:#fff;font-size:10px" x-text="item.mode"></span></td>
+                          <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.corp_id || '-'"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+                <div x-show="!channelsData || !channelsData.wecom || channelsData.wecom.tenants.length === 0" style="font-size:12px;color:var(--text-dim);margin-bottom:12px">No WeCom tenants configured yet.</div>
+                <details style="margin-top:8px">
+                  <summary style="font-size:12px;cursor:pointer;color:var(--accent-light)">Add WeCom Tenant</summary>
+                  <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+                    <div><label style="color:var(--text-dim)">Name *</label><input class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.name" placeholder="default"></div>
+                    <div><label style="color:var(--text-dim)">Mode</label><select class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.mode"><option value="smartbot">SmartBot</option><option value="app">App</option><option value="kf">KF</option></select></div>
+                    <div><label style="color:var(--text-dim)">Corp ID *</label><input class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.corp_id" placeholder="ww..."></div>
+                    <div><label style="color:var(--text-dim)">Bot ID</label><input class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.bot_id" placeholder="bot_id"></div>
+                    <div><label style="color:var(--text-dim)">Secret *</label><input class="form-input" type="password" style="width:100%;font-size:12px" x-model="wecomForm.secret" placeholder="secret"></div>
+                    <div><label style="color:var(--text-dim)">Webhook Port</label><input class="form-input" type="number" style="width:100%;font-size:12px" x-model.number="wecomForm.webhook_port" placeholder="8454"></div>
+                    <div style="grid-column:span 2"><label style="color:var(--text-dim)">Encoding AES Key</label><input class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.encoding_aes_key" placeholder="optional"></div>
+                    <div style="grid-column:span 2"><button class="btn btn-sm" :disabled="wecomSaving" @click="wecomAddTenant()"><span x-show="!wecomSaving">Add Tenant</span><span x-show="wecomSaving">Saving...</span></button></div>
+                  </div>
+                </details>
+              </div>
+            </div>
+
+            <!-- Feishu/Lark section -->
+            <div class="card mt-4" style="border-left:3px solid #3370ff">
+              <div class="card-header">Feishu / Lark</div>
+              <div class="card-body" style="padding-top:8px">
+                <div x-show="channelsData && channelsData.feishu && channelsData.feishu.tenants.length > 0" style="margin-bottom:12px">
+                  <table style="width:100%;font-size:12px;border-collapse:collapse">
+                    <thead>
+                      <tr style="border-bottom:1px solid var(--border)">
+                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
+                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">App ID</th>
+                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Brand</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="item in (channelsData && channelsData.feishu ? channelsData.feishu.tenants : [])" :key="item.name">
+                        <tr style="border-bottom:1px solid var(--border)">
+                          <td style="padding:6px 8px" x-text="item.name"></td>
+                          <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.app_id || '-'"></td>
+                          <td style="padding:6px 8px"><span class="badge" style="background:#3370ff;color:#fff;font-size:10px" x-text="item.brand"></span></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+                <div x-show="!channelsData || !channelsData.feishu || channelsData.feishu.tenants.length === 0" style="font-size:12px;color:var(--text-dim);margin-bottom:12px">No Feishu tenants configured yet.</div>
+                <details style="margin-top:8px">
+                  <summary style="font-size:12px;cursor:pointer;color:var(--accent-light)">Add Feishu Tenant</summary>
+                  <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+                    <div><label style="color:var(--text-dim)">Name *</label><input class="form-input" style="width:100%;font-size:12px" x-model="feishuForm.name" placeholder="default"></div>
+                    <div><label style="color:var(--text-dim)">Brand</label><select class="form-input" style="width:100%;font-size:12px" x-model="feishuForm.brand"><option value="feishu">Feishu (China)</option><option value="lark">Lark (International)</option></select></div>
+                    <div><label style="color:var(--text-dim)">App ID *</label><input class="form-input" style="width:100%;font-size:12px" x-model="feishuForm.app_id" placeholder="cli_..."></div>
+                    <div><label style="color:var(--text-dim)">App Secret *</label><input class="form-input" type="password" style="width:100%;font-size:12px" x-model="feishuForm.app_secret" placeholder="secret"></div>
+                    <div style="grid-column:span 2"><button class="btn btn-sm" :disabled="feishuSaving" @click="feishuAddTenant()"><span x-show="!feishuSaving">Add Tenant</span><span x-show="feishuSaving">Saving...</span></button></div>
+                  </div>
+                </details>
               </div>
             </div>
           </div>

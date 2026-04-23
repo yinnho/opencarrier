@@ -24,12 +24,12 @@ impl MeteringEngine {
 
     /// Get a usage summary, optionally filtered by agent.
     pub fn get_summary(&self, agent_id: Option<AgentId>) -> OpenCarrierResult<UsageSummary> {
-        self.store.query_summary(agent_id)
+        self.store.query_summary(agent_id, None)
     }
 
     /// Get usage grouped by model.
     pub fn get_by_model(&self) -> OpenCarrierResult<Vec<opencarrier_memory::usage::ModelUsage>> {
-        self.store.query_by_model()
+        self.store.query_by_model(None)
     }
 
     /// Clean up old usage records.
@@ -61,6 +61,7 @@ mod tests {
                 input_tokens: 500,
                 output_tokens: 200,
                 tool_calls: 3,
+                tenant_id: None,
             })
             .unwrap();
 
