@@ -91,6 +91,15 @@ impl TenantContext {
         }
     }
 
+    /// Create a deny-all context (no access). Used as safe fallback when
+    /// auth middleware fails to inject a proper context.
+    pub fn deny_all() -> Self {
+        Self {
+            tenant_id: Some("__deny__".to_string()),
+            role: TenantRole::Tenant,
+        }
+    }
+
     /// Check if this context has admin privileges.
     pub fn is_admin(&self) -> bool {
         self.role == TenantRole::Admin

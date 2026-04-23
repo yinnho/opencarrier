@@ -561,6 +561,10 @@ fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
 /// Read user profile for multi-tenancy context injection.
 /// Returns a short summary string suitable for the system prompt.
 fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<String> {
+    // SECURITY: sanitize sender_id to prevent path traversal
+    if sender_id.contains('/') || sender_id.contains('\\') || sender_id.contains("..") || sender_id.is_empty() {
+        return None;
+    }
     let profile_path = workspace.join("users").join(sender_id).join("profile.json");
     if !profile_path.exists() {
         return None;
@@ -601,6 +605,10 @@ fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<String
 
 /// Update user profile after a conversation (touch last_seen, increment count).
 fn touch_user_profile(workspace: &Path, sender_id: &str) {
+    // SECURITY: sanitize sender_id to prevent path traversal
+    if sender_id.contains('/') || sender_id.contains('\\') || sender_id.contains("..") || sender_id.is_empty() {
+        return;
+    }
     let profile_path = workspace.join("users").join(sender_id).join("profile.json");
     let mut profile: serde_json::Value = if profile_path.exists() {
         std::fs::read_to_string(&profile_path)
@@ -1428,6 +1436,15 @@ impl OpenCarrierKernel {
         let agent_id = fixed_id.unwrap_or_default();
         let session_id = SessionId::new();
         let name = manifest.name.clone();
+
+        // SECURITY: Validate agent name doesn't contain path traversal characters
+        if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
+            return Err(KernelError::OpenCarrier(
+                opencarrier_types::error::OpenCarrierError::InvalidInput(
+                    format!("Invalid agent name {:?}: must not contain path separators or '..'", name),
+                ),
+            ));
+        }
 
         info!(agent = %name, id = %agent_id, parent = ?parent, "Spawning agent");
 

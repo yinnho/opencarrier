@@ -1375,14 +1375,46 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
 // Filesystem tools
 // ---------------------------------------------------------------------------
 
-/// SECURITY: Reject path traversal attempts. Forbids `..` components in file paths.
+/// SECURITY: Reject path traversal attempts and absolute paths.
+/// Forbids `..` components, absolute paths (leading `/`), and root references.
 fn validate_path(path: &str) -> Result<&str, String> {
     for component in std::path::Path::new(path).components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err("Path traversal denied: '..' components are forbidden".to_string());
+        match component {
+            std::path::Component::ParentDir => {
+                return Err("Path traversal denied: '..' components are forbidden".to_string());
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err("Absolute paths are forbidden".to_string());
+            }
+            _ => {}
         }
     }
     Ok(path)
+}
+
+/// SECURITY: Sanitize a string before using it as a single path component.
+/// Rejects empty strings, path separators, `..`, and other dangerous characters.
+fn sanitize_path_component(name: &str) -> Result<&str, String> {
+    if name.is_empty() {
+        return Err("Empty path component".to_string());
+    }
+    // Reject path separators and parent directory references
+    if name.contains('/') || name.contains('\\') || name == ".." || name.contains("..") {
+        return Err(format!("Invalid path component: {:?}", name));
+    }
+    // Reject any component that would be interpreted specially
+    for component in std::path::Path::new(name).components() {
+        match component {
+            std::path::Component::ParentDir => {
+                return Err(format!("Path traversal denied in component: {:?}", name));
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(format!("Absolute path denied in component: {:?}", name));
+            }
+            _ => {}
+        }
+    }
+    Ok(name)
 }
 
 /// Validate a clone name: only lowercase alphanumeric and hyphens allowed.
@@ -1801,6 +1833,7 @@ async fn tool_train_read(
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
+    validate_path(path)?;
     let full_path = target_root.join(path);
     if !full_path.starts_with(&target_root) {
         return Err("Path traversal denied".to_string());
@@ -1816,6 +1849,7 @@ async fn tool_train_write(
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
+    validate_path(path)?;
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
@@ -1844,6 +1878,7 @@ async fn tool_train_list(
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel)?;
     let sub_path = input["path"].as_str().unwrap_or(".");
+    validate_path(sub_path)?;
     let full_path = target_root.join(sub_path);
     if !full_path.starts_with(&target_root) {
         return Err("Path traversal denied".to_string());
@@ -1952,6 +1987,7 @@ async fn tool_user_profile(
 ) -> Result<String, String> {
     let sender = sender_id.ok_or("user_profile requires a sender context (sender_id). This tool is only available when a user identity is provided.")?;
     let root = workspace_root.ok_or("user_profile requires a workspace root")?;
+    let sender = sanitize_path_component(sender)?;
 
     let action = input["action"].as_str().unwrap_or("read");
     let profile_path = root.join("users").join(sender).join("profile.json");

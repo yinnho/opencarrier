@@ -196,10 +196,11 @@ pub async fn agent_ws(
         }
     };
 
-    // Verify agent exists
-    // TODO: Add tenant ownership check once WS auth carries session cookies.
-    //       Currently WS uses API-key auth which is admin-level, so tenant
-    //       filtering doesn't apply here yet.
+    // Verify agent exists.
+    // NOTE: WebSocket uses global API-key auth which grants admin-level access.
+    // All connected WS clients can see and interact with any agent.
+    // This is by design — the WS is for the admin dashboard, not tenant-facing.
+    // For tenant-scoped access, use the REST API with tenant-aware auth.
     if state.kernel.registry.get(agent_id).is_none() {
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }
