@@ -199,21 +199,43 @@ impl UsageStore {
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
 
-        let tenant_filter = tenant_id.map(|tid| format!(" AND tenant_id = '{}'", tid.replace('\'', "''"))).unwrap_or_default();
-        let mut stmt = conn
-            .prepare(&format!(
-                "SELECT date(timestamp) as day,
+        // SECURITY: Use parameterized query for tenant_id to prevent SQL injection.
+        // `days` is u32, safe to format directly as it produces only digits.
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(tid) = tenant_id {
+            (
+                format!(
+                    "SELECT date(timestamp) as day,
                             COALESCE(SUM(input_tokens) + SUM(output_tokens), 0),
                             COUNT(*)
                      FROM usage_events
-                     WHERE timestamp > datetime('now', '-{days} days'){tenant_filter}
+                     WHERE timestamp > datetime('now', '-{days} days') AND tenant_id = ?1
                      GROUP BY day
                      ORDER BY day ASC"
-            ))
+                ),
+                vec![Box::new(tid.to_string())],
+            )
+        } else {
+            (
+                format!(
+                    "SELECT date(timestamp) as day,
+                            COALESCE(SUM(input_tokens) + SUM(output_tokens), 0),
+                            COUNT(*)
+                     FROM usage_events
+                     WHERE timestamp > datetime('now', '-{days} days')
+                     GROUP BY day
+                     ORDER BY day ASC"
+                ),
+                vec![],
+            )
+        };
+
+        let mut stmt = conn
+            .prepare(&sql)
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let row_data: Vec<rusqlite::Result<DailyBreakdown>> = stmt
-            .query_map([], |row| {
+            .query_map(param_refs.as_slice(), |row| {
                 Ok(DailyBreakdown {
                     date: row.get(0)?,
                     tokens: row.get::<_, i64>(1)? as u64,

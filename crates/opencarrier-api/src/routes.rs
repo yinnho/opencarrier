@@ -6144,6 +6144,17 @@ pub async fn install_clone(
         }
     };
 
+    // SECURITY: Reject oversized clone payloads (max 50MB decoded)
+    const MAX_CLONE_PAYLOAD: usize = 50 * 1024 * 1024;
+    if raw_data.len() > MAX_CLONE_PAYLOAD {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "error": format!("Clone payload too large: {} bytes (max 50MB)", raw_data.len())
+            })),
+        );
+    }
+
     // Write uploaded bytes to temp file
     let tmp_dir = std::env::temp_dir().join(format!("opencarrier-clone-{}", uuid::Uuid::new_v4()));
     if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
