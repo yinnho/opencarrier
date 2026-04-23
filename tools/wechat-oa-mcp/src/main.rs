@@ -1,16 +1,15 @@
-//! wechat-oa-mcp — WeChat Official Account MCP Server
+//! wechat-oa-mcp — WeChat Official Account MCP Server (multi-tenant)
 //!
-//! Exposes draft management, media upload, and publishing tools via the
-//! Model Context Protocol (stdio transport).  Designed to run as a child
-//! process of OpenCarrier's MCP client.
+//! Each tool call carries `app_id` and `app_secret`, allowing a single MCP
+//! server process to serve multiple WeChat Official Accounts simultaneously.
 //!
-//! # Configuration (environment variables)
+//! Tokens are cached per `app_id` and auto-refreshed before expiry.
 //!
-//! | Variable                | Description                |
-//! |-------------------------|----------------------------|
-//! | `WECHAT_OA_APP_ID`     | 公众号 AppID               |
-//! | `WECHAT_OA_APP_SECRET` | 公众号 AppSecret            |
-//! | `WECHAT_OA_MCP_LOG`    | Log level (default `warn`)  |
+//! # Usage
+//!
+//! No environment variables needed — credentials are passed per tool call.
+//! Each OpenCarrier clone stores its own WeChat OA credentials in its
+//! knowledge/config and passes them when invoking tools.
 
 mod wechat;
 
@@ -26,20 +25,34 @@ use wechat::WeChatClient;
 
 // ================================================================== //
 //  Tool parameter structs                                              //
+//  Every struct carries app_id + app_secret for multi-tenant support. //
 // ================================================================== //
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct UploadMediaParams {
+macro_rules! define_params {
+    ($name:ident { $($field:tt)* }) => {
+        #[derive(Debug, Deserialize, JsonSchema)]
+        struct $name {
+            #[schemars(description = "公众号 AppID")]
+            app_id: String,
+            #[schemars(description = "公众号 AppSecret")]
+            app_secret: String,
+            $($field)*
+        }
+    };
+}
+
+define_params!(GetAccessTokenParams {});
+
+define_params!(UploadMediaParams {
     #[schemars(description = "Media type: image, voice, video, thumb")]
     media_type: String,
     #[schemars(description = "Filename (e.g. cover.jpg)")]
     filename: String,
     #[schemars(description = "Base64-encoded media data")]
     data_base64: String,
-}
+});
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CreateDraftParams {
+define_params!(CreateDraftParams {
     #[schemars(description = "Article title")]
     title: String,
     #[schemars(description = "Article HTML content")]
@@ -50,61 +63,54 @@ struct CreateDraftParams {
     content_source_url: Option<String>,
     #[schemars(description = "Article digest / summary")]
     digest: Option<String>,
-    #[schemars(description = "Cover image media_id (upload_media returns this)")]
+    #[schemars(description = "Cover image media_id (from upload_media)")]
     thumb_media_id: Option<String>,
     #[schemars(description = "Show cover in article body (1=yes 0=no, default 1)")]
     need_open_comment: Option<i32>,
-}
+});
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GetDraftParams {
+define_params!(GetDraftParams {
     #[schemars(description = "Draft media_id")]
     media_id: String,
-}
+});
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ListDraftsParams {
+define_params!(ListDraftsParams {
     #[schemars(description = "Page offset (0-based, default 0)")]
     offset: Option<i32>,
     #[schemars(description = "Page size (max 20, default 20)")]
     count: Option<i32>,
     #[schemars(description = "Set to 1 to omit article content (saves bandwidth)")]
     no_content: Option<i32>,
-}
+});
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct DeleteDraftParams {
+define_params!(DeleteDraftParams {
     #[schemars(description = "Draft media_id to delete")]
     media_id: String,
-}
+});
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct PublishDraftParams {
+define_params!(PublishDraftParams {
     #[schemars(description = "Draft media_id to publish")]
     media_id: String,
-}
+});
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GetPublishStatusParams {
+define_params!(GetPublishStatusParams {
     #[schemars(description = "publish_id returned by publish_draft")]
     publish_id: String,
-}
+});
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ListMaterialsParams {
+define_params!(ListMaterialsParams {
     #[schemars(description = "Material type: image, video, voice, news")]
     r#type: String,
     #[schemars(description = "Page offset (0-based, default 0)")]
     offset: Option<i32>,
     #[schemars(description = "Page size (max 20, default 20)")]
     count: Option<i32>,
-}
+});
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct DeleteMaterialParams {
+define_params!(DeleteMaterialParams {
     #[schemars(description = "Material media_id to delete")]
     media_id: String,
-}
+});
 
 // ================================================================== //
 //  MCP Server                                                         //
@@ -119,9 +125,12 @@ struct WeChatOaServer {
 impl WeChatOaServer {
     // ---- Token ----
 
-    #[tool(description = "Get WeChat OA access token (auto-refreshed, cached for ~2 hours)")]
-    async fn get_access_token(&self) -> String {
-        match self.client.get_token().await {
+    #[tool(description = "Get WeChat OA access token for a specific account (auto-refreshed, cached ~2h)")]
+    async fn get_access_token(
+        &self,
+        Parameters(params): Parameters<GetAccessTokenParams>,
+    ) -> String {
+        match self.client.get_token(&params.app_id, &params.app_secret).await {
             Ok(token) => serde_json::json!({ "access_token": token }).to_string(),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -129,7 +138,7 @@ impl WeChatOaServer {
 
     // ---- Media ----
 
-    #[tool(description = "Upload image/media to WeChat OA permanent material library. Returns media_id and url.")]
+    #[tool(description = "Upload image/media to a WeChat OA account's permanent material library. Returns media_id and url.")]
     async fn upload_media(
         &self,
         Parameters(params): Parameters<UploadMediaParams>,
@@ -140,7 +149,7 @@ impl WeChatOaServer {
         };
         match self
             .client
-            .upload_media(&params.media_type, &params.filename, &data)
+            .upload_media(&params.app_id, &params.app_secret, &params.media_type, &params.filename, &data)
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -166,7 +175,7 @@ impl WeChatOaServer {
             "only_fans_can_comment": 0,
         });
         let body = serde_json::json!({ "articles": [article] });
-        match self.client.api_post("/cgi-bin/draft/add", &body).await {
+        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/add", &body).await {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -178,7 +187,7 @@ impl WeChatOaServer {
         Parameters(params): Parameters<GetDraftParams>,
     ) -> String {
         let body = serde_json::json!({ "media_id": params.media_id });
-        match self.client.api_post("/cgi-bin/draft/get", &body).await {
+        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/get", &body).await {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -194,7 +203,7 @@ impl WeChatOaServer {
             "count": params.count.unwrap_or(20),
             "no_content": params.no_content.unwrap_or(0),
         });
-        match self.client.api_post("/cgi-bin/draft/batchget", &body).await {
+        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/batchget", &body).await {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -206,7 +215,7 @@ impl WeChatOaServer {
         Parameters(params): Parameters<DeleteDraftParams>,
     ) -> String {
         let body = serde_json::json!({ "media_id": params.media_id });
-        match self.client.api_post("/cgi-bin/draft/delete", &body).await {
+        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/delete", &body).await {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -222,7 +231,7 @@ impl WeChatOaServer {
         let body = serde_json::json!({ "media_id": params.media_id });
         match self
             .client
-            .api_post("/cgi-bin/freepublish/submit", &body)
+            .api_post(&params.app_id, &params.app_secret, "/cgi-bin/freepublish/submit", &body)
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -236,7 +245,7 @@ impl WeChatOaServer {
         Parameters(params): Parameters<GetPublishStatusParams>,
     ) -> String {
         let body = serde_json::json!({ "publish_id": params.publish_id });
-        match self.client.api_post("/cgi-bin/freepublish/get", &body).await {
+        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/freepublish/get", &body).await {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -256,7 +265,7 @@ impl WeChatOaServer {
         });
         match self
             .client
-            .api_post("/cgi-bin/material/batchget_material", &body)
+            .api_post(&params.app_id, &params.app_secret, "/cgi-bin/material/batchget_material", &body)
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -272,7 +281,7 @@ impl WeChatOaServer {
         let body = serde_json::json!({ "media_id": params.media_id });
         match self
             .client
-            .api_post("/cgi-bin/material/del_material", &body)
+            .api_post(&params.app_id, &params.app_secret, "/cgi-bin/material/del_material", &body)
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -304,17 +313,12 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let app_id = std::env::var("WECHAT_OA_APP_ID")
-        .map_err(|_| anyhow::anyhow!("WECHAT_OA_APP_ID env var not set"))?;
-    let app_secret = std::env::var("WECHAT_OA_APP_SECRET")
-        .map_err(|_| anyhow::anyhow!("WECHAT_OA_APP_SECRET env var not set"))?;
-
-    let client = WeChatClient::new(app_id, app_secret);
+    let client = WeChatClient::new();
     let server = WeChatOaServer {
         client: Arc::new(client),
     };
 
-    tracing::info!("wechat-oa-mcp starting (stdio transport)");
+    tracing::info!("wechat-oa-mcp starting (stdio, multi-tenant)");
     let service = server.serve(stdio_transport()).await?;
     service.waiting().await?;
 

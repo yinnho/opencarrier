@@ -1,8 +1,10 @@
-//! WeChat Official Account API client.
+//! WeChat Official Account API client (multi-tenant).
 //!
-//! Handles access_token lifecycle (fetch + cache + auto-refresh) and
-//! provides thin wrappers around the WeChat REST endpoints.
+//! Each tool call carries its own `app_id` / `app_secret`, allowing a single
+//! MCP server process to serve multiple WeChat Official Accounts
+//! simultaneously.  Access tokens are cached per `app_id` and auto-refreshed.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,16 +21,17 @@ const TOKEN_EXPIRY_MARGIN: Duration = Duration::from_secs(300);
 // Public types
 // ---------------------------------------------------------------------------
 
+/// Multi-tenant WeChat API client.  Token cache keyed by `app_id`.
 #[derive(Clone)]
 pub struct WeChatClient {
-    app_id: String,
-    app_secret: String,
     http: reqwest::Client,
-    token: Arc<Mutex<Option<CachedToken>>>,
+    /// app_id → (access_token, expires_at)
+    tokens: Arc<Mutex<HashMap<String, CachedToken>>>,
 }
 
 struct CachedToken {
     access_token: String,
+    secret: String,
     expires_at: Instant,
 }
 
@@ -49,22 +52,22 @@ struct TokenResponse {
 // ---------------------------------------------------------------------------
 
 impl WeChatClient {
-    pub fn new(app_id: String, app_secret: String) -> Self {
+    pub fn new() -> Self {
         Self {
-            app_id,
-            app_secret,
             http: reqwest::Client::new(),
-            token: Arc::new(Mutex::new(None)),
+            tokens: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Obtain a valid access_token, refreshing from WeChat when needed.
-    pub async fn get_token(&self) -> Result<String> {
-        // Fast path — cached and not about to expire.
+    /// Obtain a valid access_token for the given account, refreshing when needed.
+    pub async fn get_token(&self, app_id: &str, app_secret: &str) -> Result<String> {
+        // Fast path — cached and not about to expire AND secret unchanged.
         {
-            let guard = self.token.lock().await;
-            if let Some(cached) = guard.as_ref() {
-                if cached.expires_at > Instant::now() + TOKEN_EXPIRY_MARGIN {
+            let guard = self.tokens.lock().await;
+            if let Some(cached) = guard.get(app_id) {
+                if cached.secret == app_secret
+                    && cached.expires_at > Instant::now() + TOKEN_EXPIRY_MARGIN
+                {
                     return Ok(cached.access_token.clone());
                 }
             }
@@ -73,7 +76,7 @@ impl WeChatClient {
         // Slow path — hit the WeChat API.
         let url = format!(
             "{}/cgi-bin/token?grant_type=client_credential&appid={}&secret={}",
-            WECHAT_API_BASE, self.app_id, self.app_secret
+            WECHAT_API_BASE, app_id, app_secret
         );
         let resp: TokenResponse = self.http.get(&url).send().await?.json().await?;
 
@@ -91,11 +94,15 @@ impl WeChatClient {
         let expires_in = resp.expires_in.unwrap_or(7200);
 
         {
-            let mut guard = self.token.lock().await;
-            *guard = Some(CachedToken {
-                access_token: access_token.clone(),
-                expires_at: Instant::now() + Duration::from_secs(expires_in),
-            });
+            let mut guard = self.tokens.lock().await;
+            guard.insert(
+                app_id.to_string(),
+                CachedToken {
+                    access_token: access_token.clone(),
+                    secret: app_secret.to_string(),
+                    expires_at: Instant::now() + Duration::from_secs(expires_in),
+                },
+            );
         }
 
         Ok(access_token)
@@ -104,10 +111,12 @@ impl WeChatClient {
     /// POST JSON body with auto-injected access_token.
     pub async fn api_post(
         &self,
+        app_id: &str,
+        app_secret: &str,
         path: &str,
         body: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let token = self.get_token().await?;
+        let token = self.get_token(app_id, app_secret).await?;
         let url = format!("{}{}?access_token={}", WECHAT_API_BASE, path, token);
         let json: serde_json::Value = self
             .http
@@ -124,11 +133,13 @@ impl WeChatClient {
     /// Upload binary media via multipart/form-data.
     pub async fn upload_media(
         &self,
+        app_id: &str,
+        app_secret: &str,
         media_type: &str,
         filename: &str,
         data: &[u8],
     ) -> Result<serde_json::Value> {
-        let token = self.get_token().await?;
+        let token = self.get_token(app_id, app_secret).await?;
         let url = format!(
             "{}{}?access_token={}&type={}",
             WECHAT_API_BASE, "/cgi-bin/material/add_material", token, media_type
