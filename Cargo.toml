@@ -15,6 +15,7 @@ members = [
     "plugins/opencarrier-plugin-weixin",
     "plugins/opencarrier-plugin-feishu",
     "xtask",
+    "tools/wechat-oa-mcp",
 ]
 
 [workspace.package]
