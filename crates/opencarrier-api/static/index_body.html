@@ -1329,6 +1329,7 @@
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'">Tools</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'security' }" @click="tab = 'security'; if (!securityData && !secLoading) loadSecurity()">Security</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'">System</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'wechat' }" @click="tab = 'wechat'; if (!wechatData && !wechatLoading) loadWechatBindings()">WeChat</div>
           </div>
 
           <!-- System Info tab -->
@@ -1597,6 +1598,70 @@
                 <code style="color:var(--accent-light)">governor</code> rate limiting
               </div>
             </div>
+            </div>
+          </div>
+
+          <!-- WeChat Binding tab -->
+          <div x-show="tab === 'wechat'">
+            <div class="info-card">
+              <h4>WeChat iLink Binding</h4>
+              <p>Bind your WeChat personal account by scanning a QR code. Each binding is valid for 24 hours, after which you must re-scan. Bound accounts receive and reply to messages via the iLink Bot API.</p>
+            </div>
+
+            <!-- QR Code Login -->
+            <div class="card mt-4" style="border-left:3px solid #07c160">
+              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <span>Bind New Account</span>
+                <button class="btn btn-sm" :disabled="wechatPolling" @click="startQrLogin()">
+                  <span x-show="!wechatPolling">Get QR Code</span>
+                  <span x-show="wechatPolling">Polling...</span>
+                </button>
+              </div>
+              <div class="card-body" style="padding-top:8px">
+                <div x-show="wechatQrCode" style="text-align:center;padding:16px">
+                  <img :src="'data:image/png;base64,' + wechatQrCode" style="width:200px;height:200px;border-radius:8px;border:1px solid var(--border)">
+                  <p style="font-size:12px;color:var(--text-dim);margin-top:8px">
+                    Scan with WeChat &middot; <span x-text="wechatQrStatus || 'Waiting...'"></span>
+                  </p>
+                  <p x-show="wechatQrStatus === 'expired'" style="font-size:12px;color:var(--error)">QR code expired. Click "Get QR Code" again.</p>
+                </div>
+                <div x-show="!wechatQrCode && !wechatPolling" style="font-size:12px;color:var(--text-dim);padding:8px">
+                  Click "Get QR Code" to generate a WeChat login QR code.
+                </div>
+              </div>
+            </div>
+
+            <!-- Bound Accounts List -->
+            <div class="card mt-4" style="border-left:3px solid var(--accent-light)">
+              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <span>Bound Accounts</span>
+                <button class="btn btn-sm btn-ghost" @click="loadWechatBindings()">Refresh</button>
+              </div>
+              <div class="card-body" style="padding-top:8px">
+                <div x-show="!wechatData || wechatData.length === 0" style="font-size:12px;color:var(--text-dim)">No WeChat accounts bound yet.</div>
+                <table x-show="wechatData && wechatData.length > 0" style="width:100%;font-size:12px;border-collapse:collapse">
+                  <thead>
+                    <tr style="border-bottom:1px solid var(--border)">
+                      <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
+                      <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Bot ID</th>
+                      <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Status</th>
+                      <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Expires In</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="item in (wechatData || [])" :key="item.name">
+                      <tr style="border-bottom:1px solid var(--border)">
+                        <td style="padding:6px 8px" x-text="item.name"></td>
+                        <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.ilink_bot_id || '-'"></td>
+                        <td style="padding:6px 8px">
+                          <span class="badge" :style="'background:' + (item.expired ? 'var(--error)' : '#07c160') + ';color:#fff;font-size:10px'" x-text="item.expired ? 'Expired' : 'Active'"></span>
+                        </td>
+                        <td style="padding:6px 8px" x-text="item.expired ? 'Re-scan needed' : formatWechatExpiry(item.remaining_secs)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 

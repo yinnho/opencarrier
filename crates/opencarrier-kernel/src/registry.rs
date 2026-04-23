@@ -12,6 +12,8 @@ pub struct AgentRegistry {
     name_index: DashMap<String, AgentId>,
     /// Tag index: tag → list of agent IDs.
     tag_index: DashMap<String, Vec<AgentId>>,
+    /// Tenant index: tenant_id → list of agent IDs.
+    tenant_index: DashMap<String, Vec<AgentId>>,
 }
 
 impl AgentRegistry {
@@ -21,6 +23,7 @@ impl AgentRegistry {
             agents: DashMap::new(),
             name_index: DashMap::new(),
             tag_index: DashMap::new(),
+            tenant_index: DashMap::new(),
         }
     }
 
@@ -33,6 +36,9 @@ impl AgentRegistry {
         self.name_index.insert(entry.name.clone(), id);
         for tag in &entry.tags {
             self.tag_index.entry(tag.clone()).or_default().push(id);
+        }
+        if let Some(ref tid) = entry.tenant_id {
+            self.tenant_index.entry(tid.clone()).or_default().push(id);
         }
         self.agents.insert(id, entry);
         Ok(())
@@ -93,6 +99,11 @@ impl AgentRegistry {
                 ids.retain(|&agent_id| agent_id != id);
             }
         }
+        if let Some(ref tid) = entry.tenant_id {
+            if let Some(mut ids) = self.tenant_index.get_mut(tid) {
+                ids.retain(|&agent_id| agent_id != id);
+            }
+        }
         Ok(entry)
     }
 
@@ -101,10 +112,39 @@ impl AgentRegistry {
         self.agents.iter().map(|e| e.value().clone()).collect()
     }
 
+    /// List agents belonging to a specific tenant.
+    pub fn list_by_tenant(&self, tenant_id: &str) -> Vec<AgentEntry> {
+        self.tenant_index
+            .get(tenant_id)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| self.agents.get(id).map(|e| e.value().clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Add a child agent ID to a parent's children list.
     pub fn add_child(&self, parent_id: AgentId, child_id: AgentId) {
         if let Some(mut entry) = self.agents.get_mut(&parent_id) {
             entry.children.push(child_id);
+        }
+    }
+
+    /// Set the tenant_id on an agent entry (used after spawn to assign ownership).
+    pub fn set_tenant_id(&self, agent_id: AgentId, tenant_id: Option<String>) {
+        if let Some(mut entry) = self.agents.get_mut(&agent_id) {
+            let old_tid = entry.tenant_id.clone();
+            entry.tenant_id = tenant_id.clone();
+            // Update tenant_index
+            if let Some(ref old) = old_tid {
+                if let Some(mut ids) = self.tenant_index.get_mut(old) {
+                    ids.retain(|id| *id != agent_id);
+                }
+            }
+            if let Some(ref tid) = tenant_id {
+                self.tenant_index.entry(tid.clone()).or_default().push(agent_id);
+            }
         }
     }
 
@@ -344,6 +384,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
         }
     }
 

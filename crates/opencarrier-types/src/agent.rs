@@ -585,6 +585,9 @@ pub struct AgentEntry {
     /// When onboarding was completed.
     #[serde(default)]
     pub onboarding_completed_at: Option<DateTime<Utc>>,
+    /// Owning tenant ID (None for admin/global agents).
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -867,6 +870,7 @@ mod tests {
             identity: AgentIdentity::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: AgentEntry = serde_json::from_str(&json).unwrap();
@@ -929,6 +933,7 @@ mod tests {
             },
             onboarding_completed: false,
             onboarding_completed_at: None,
+            tenant_id: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: AgentEntry = serde_json::from_str(&json).unwrap();

@@ -79,6 +79,7 @@ async fn start_test_server() -> TestServer {
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache::new(),
+        plugin_manager: None,
     });
 
     let app = Router::new()

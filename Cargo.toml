@@ -10,6 +10,9 @@ members = [
     "crates/opencarrier-skills",
     "crates/opencarrier-clone",
     "crates/opencarrier-lifecycle",
+    "crates/opencarrier-plugin-sdk",
+    "plugins/opencarrier-plugin-wecom",
+    "plugins/opencarrier-plugin-weixin",
     "xtask",
 ]
 
@@ -86,6 +89,9 @@ tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip",
 
 # Home directory resolution
 dirs = "6"
+
+# Dynamic library loading (plugin system)
+libloading = "0.8"
 
 # YAML parsing
 serde_yaml = "0.9"

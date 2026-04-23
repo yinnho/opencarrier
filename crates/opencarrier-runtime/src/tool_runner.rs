@@ -417,8 +417,26 @@ pub async fn execute_tool(
                         }
                         Err(e) => Err(format!("Skill execution failed: {e}")),
                     }
+                } else if let Some(kh) = kernel {
+                    // Fallback 3: Plugin tools (dlopen-loaded shared libraries)
+                    let s_id = sender_id.unwrap_or("");
+                    let a_id = caller_agent_id.unwrap_or("");
+                    match kh.execute_plugin_tool(other, input, s_id, a_id).await {
+                        Ok(result) => Ok(result),
+                        Err(e) if e.starts_with("Unknown tool:") => Err(e),
+                        Err(e) => Err(format!("Plugin tool execution failed: {e}")),
+                    }
                 } else {
                     Err(format!("Unknown tool: {other}"))
+                }
+            } else if let Some(kh) = kernel {
+                // Fallback 3: Plugin tools (dlopen-loaded shared libraries)
+                let s_id = sender_id.unwrap_or("");
+                let a_id = caller_agent_id.unwrap_or("");
+                match kh.execute_plugin_tool(other, input, s_id, a_id).await {
+                    Ok(result) => Ok(result),
+                    Err(e) if e.starts_with("Unknown tool:") => Err(e),
+                    Err(e) => Err(format!("Plugin tool execution failed: {e}")),
                 }
             } else {
                 Err(format!("Unknown tool: {other}"))
@@ -2498,7 +2516,7 @@ async fn tool_agent_send(
 
     AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message).await
+            kh.send_to_agent(agent_id, message, None, None).await
         })
         .await
 }

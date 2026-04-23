@@ -35,7 +35,14 @@ pub trait KernelHandle: Send + Sync {
     ) -> Result<(String, String), String>;
 
     /// Send a message to another agent and get the response.
-    async fn send_to_agent(&self, agent_id: &str, message: &str) -> Result<String, String>;
+    /// `sender_id` and `sender_name` identify the originating user (e.g. WeChat user).
+    async fn send_to_agent(
+        &self,
+        agent_id: &str,
+        message: &str,
+        sender_id: Option<&str>,
+        sender_name: Option<&str>,
+    ) -> Result<String, String>;
 
     /// List all running agents.
     fn list_agents(&self) -> Vec<AgentInfo>;
@@ -178,5 +185,18 @@ pub trait KernelHandle: Send + Sync {
         // The kernel MUST override this with real enforcement
         let _ = parent_caps;
         self.spawn_agent(manifest_toml, parent_id).await
+    }
+
+    /// Execute a plugin tool (loaded via dlopen).
+    /// Returns Err if no plugin provides the tool or plugin system is not initialized.
+    async fn execute_plugin_tool(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        sender_id: &str,
+        agent_id: &str,
+    ) -> Result<String, String> {
+        let _ = (tool_name, args, sender_id, agent_id);
+        Err("Plugin tools not available".to_string())
     }
 }

@@ -57,6 +57,18 @@ function settingsPage() {
     formatUptime(secs) { if (!secs) return '-'; var h = Math.floor(secs / 3600); var m = Math.floor((secs % 3600) / 60); var s = secs % 60; if (h > 0) return h + 'h ' + m + 'm'; if (m > 0) return m + 'm ' + s + 's'; return s + 's'; },
     async loadSecurity() { this.secLoading = true; try { this.securityData = await OpenCarrierAPI.get('/api/security'); } catch(e) { this.securityData = null; } this.secLoading = false; },
     isActive(key) { if (!this.securityData) return true; var core = this.securityData.core_protections || {}; return core[key] !== undefined ? core[key] : true; },
-    async verifyAuditChain() { this.verifyingChain = true; this.chainResult = null; try { var res = await OpenCarrierAPI.get('/api/audit/verify'); this.chainResult = res; } catch(e) { this.chainResult = { valid: false, error: e.message }; } this.verifyingChain = false; }
+    async verifyAuditChain() { this.verifyingChain = true; this.chainResult = null; try { var res = await OpenCarrierAPI.get('/api/audit/verify'); this.chainResult = res; } catch(e) { this.chainResult = { valid: false, error: e.message }; } this.verifyingChain = false; },
+    // WeChat iLink binding
+    wechatData: null,
+    wechatLoading: false,
+    wechatQrCode: null,
+    wechatQrRaw: null,
+    wechatQrStatus: null,
+    wechatPolling: false,
+    async loadWechatBindings() { this.wechatLoading = true; try { var res = await OpenCarrierAPI.get('/api/weixin/status'); this.wechatData = res.tenants || []; } catch(e) { this.wechatData = []; } this.wechatLoading = false; },
+    async startQrLogin() { this.wechatQrCode = null; this.wechatQrRaw = null; this.wechatQrStatus = null; this.wechatPolling = true; try { var res = await OpenCarrierAPI.get('/api/weixin/qrcode?tenant=default'); if (res.data && res.data.qrcode_img_content) { this.wechatQrCode = res.data.qrcode_img_content; this.wechatQrRaw = res.data.qrcode; this.pollQrStatus(); } else { OpenCarrierToast.error('QR code not available'); this.wechatPolling = false; } } catch(e) { OpenCarrierToast.error('Failed to get QR code: ' + (e.message || e)); this.wechatPolling = false; } },
+    async pollQrStatus() { if (!this.wechatQrRaw || !this.wechatPolling) return; try { var res = await OpenCarrierAPI.get('/api/weixin/qrcode-status?tenant=default&qrcode=' + encodeURIComponent(this.wechatQrRaw)); this.wechatQrStatus = res.status; if (res.status === 'confirmed') { this.wechatPolling = false; OpenCarrierToast.success('WeChat bound successfully!'); await this.loadWechatBindings(); return; } if (res.status === 'expired') { this.wechatPolling = false; return; } } catch(e) { /* retry on network error */ } var self = this; setTimeout(function() { self.pollQrStatus(); }, 3000); },
+    stopQrPoll() { this.wechatPolling = false; },
+    formatWechatExpiry(secs) { if (!secs || secs <= 0) return '-'; var h = Math.floor(secs / 3600); var m = Math.floor((secs % 3600) / 60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; }
   };
 }

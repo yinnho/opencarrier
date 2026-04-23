@@ -9,6 +9,7 @@ use crate::migration::run_migrations;
 use crate::semantic::SemanticStore;
 use crate::session::{Session, SessionStore};
 use crate::structured::StructuredStore;
+use crate::tenant::TenantStore;
 use crate::usage::UsageStore;
 
 use async_trait::async_trait;
@@ -33,6 +34,7 @@ pub struct MemorySubstrate {
     sessions: SessionStore,
     consolidation: ConsolidationEngine,
     usage: UsageStore,
+    tenant: TenantStore,
 }
 
 impl MemorySubstrate {
@@ -52,7 +54,8 @@ impl MemorySubstrate {
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
             usage: UsageStore::new(Arc::clone(&shared)),
-            consolidation: ConsolidationEngine::new(shared, decay_rate),
+            consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
+            tenant: TenantStore::new(Arc::clone(&shared)),
         })
     }
 
@@ -70,13 +73,19 @@ impl MemorySubstrate {
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
             usage: UsageStore::new(Arc::clone(&shared)),
-            consolidation: ConsolidationEngine::new(shared, decay_rate),
+            consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
+            tenant: TenantStore::new(Arc::clone(&shared)),
         })
     }
 
     /// Get a reference to the usage store.
     pub fn usage(&self) -> &UsageStore {
         &self.usage
+    }
+
+    /// Get a reference to the tenant store.
+    pub fn tenant(&self) -> &TenantStore {
+        &self.tenant
     }
 
     /// Get the shared database connection (for constructing stores from outside).

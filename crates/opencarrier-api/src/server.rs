@@ -7,6 +7,7 @@ use crate::webchat;
 use crate::ws;
 use axum::Router;
 use opencarrier_kernel::OpenCarrierKernel;
+use opencarrier_runtime::plugin::PluginManager;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -35,12 +36,14 @@ pub struct DaemonInfo {
 pub async fn build_router(
     kernel: Arc<OpenCarrierKernel>,
     listen_addr: SocketAddr,
+    plugin_manager: Option<PluginManager>,
 ) -> (Router<()>, Arc<AppState>) {
     let state = Arc::new(AppState {
         kernel: kernel.clone(),
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         provider_probe_cache: opencarrier_runtime::provider_health::ProbeCache::new(),
+        plugin_manager: plugin_manager.map(|pm| Arc::new(tokio::sync::Mutex::new(pm))),
     });
 
     // CORS: allow localhost origins by default. If API key is set, the API
@@ -373,7 +376,15 @@ pub async fn build_router(
             axum::routing::get(routes::comms_events_stream),
         )
         .route("/api/comms/send", axum::routing::post(routes::comms_send))
-        .route("/api/comms/task", axum::routing::post(routes::comms_task));
+        .route("/api/comms/task", axum::routing::post(routes::comms_task))
+        .route("/api/plugins", axum::routing::get(routes::plugins_list))
+        // WeChat iLink Bot — QR code binding
+        .route("/api/weixin/qrcode", axum::routing::get(routes::weixin_qrcode))
+        .route(
+            "/api/weixin/qrcode-status",
+            axum::routing::get(routes::weixin_qrcode_status),
+        )
+        .route("/api/weixin/status", axum::routing::get(routes::weixin_status));
 
     // Split into a second router chunk to stay within axum's type nesting limit.
     let app = app
@@ -465,6 +476,17 @@ pub async fn build_router(
         .route("/api/auth/login", axum::routing::post(routes::auth_login))
         .route("/api/auth/logout", axum::routing::post(routes::auth_logout))
         .route("/api/auth/check", axum::routing::get(routes::auth_check))
+        // Tenant management endpoints (admin only)
+        .route(
+            "/api/tenants",
+            axum::routing::get(routes::list_tenants).post(routes::create_tenant),
+        )
+        .route(
+            "/api/tenants/{id}",
+            axum::routing::get(routes::get_tenant)
+                .put(routes::update_tenant)
+                .delete(routes::delete_tenant),
+        )
         .layer(axum::middleware::from_fn_with_state(
             auth_state,
             middleware::auth,
@@ -497,6 +519,38 @@ pub async fn run_daemon(
     kernel.set_self_handle();
     kernel.start_background_agents();
 
+    // ── Plugin loading ──────────────────────────────────────────────
+    let plugin_manager = if let Some(ref plugins_dir) = kernel.config.plugins_dir {
+        // Resolve: absolute path as-is, relative path joined to opencarrier home_dir
+        let resolved = if plugins_dir.is_absolute() {
+            plugins_dir.clone()
+        } else {
+            kernel.config.home_dir.join(plugins_dir)
+        };
+        if resolved.exists() {
+            let kernel_handle: Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle> = kernel.clone();
+            let mut pm = PluginManager::new(kernel_handle);
+            pm.load_all(&resolved);
+            pm.start(&resolved).await;
+
+            // Inject tool dispatcher into kernel
+            {
+                let dispatcher = pm.tool_dispatcher();
+                let mut guard = kernel.plugin_tool_dispatcher.lock().unwrap();
+                *guard = Some(dispatcher);
+            }
+
+            let tool_count = pm.tool_definitions().len();
+            info!("Plugins loaded: {} tools available", tool_count);
+            Some(pm)
+        } else {
+            info!("Plugin directory does not exist, skipping: {}", resolved.display());
+            None
+        }
+    } else {
+        None
+    };
+
     // Config file hot-reload watcher (polls every 30 seconds)
     {
         let k = kernel.clone();
@@ -528,7 +582,7 @@ pub async fn run_daemon(
         });
     }
 
-    let (app, state) = build_router(kernel.clone(), addr).await;
+    let (app, state) = build_router(kernel.clone(), addr, plugin_manager).await;
 
     // Write daemon info file
     if let Some(info_path) = daemon_info_path {

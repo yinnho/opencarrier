@@ -1,0 +1,11 @@
+[package]
+name = "opencarrier-plugin-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SDK for writing OpenCarrier plugins in Rust"
+
+[dependencies]
+opencarrier-types = { path = "../opencarrier-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }

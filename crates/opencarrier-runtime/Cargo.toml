@@ -33,6 +33,8 @@ dashmap = { workspace = true }
 regex-lite = { workspace = true }
 rusqlite = { workspace = true }
 dirs = { workspace = true }
+libloading = { workspace = true }
+toml = { workspace = true }
 tokio-tungstenite = "0.24"
 shlex = "1"
 
