@@ -1267,7 +1267,7 @@ impl OpenCarrierKernel {
         };
 
         // Restore persisted agents from SQLite
-        match kernel.memory.load_all_agents() {
+        match kernel.memory.load_all_agents(None) {
             Ok(agents) => {
                 let count = agents.len();
                 for entry in agents {
@@ -1285,7 +1285,7 @@ impl OpenCarrierKernel {
                         .join("agent.toml");
                     let workspaces_path = kernel
                         .config
-                        .effective_workspaces_dir()
+                        .tenant_workspaces_dir(entry.tenant_id.as_deref())
                         .join(&name)
                         .join("agent.toml");
                     let toml_path = if agents_path.exists() {
@@ -1412,16 +1412,18 @@ impl OpenCarrierKernel {
 
     /// Spawn a new agent from a manifest, optionally linking to a parent agent.
     pub fn spawn_agent(&self, manifest: AgentManifest) -> KernelResult<AgentId> {
-        self.spawn_agent_with_parent(manifest, None, None)
+        self.spawn_agent_with_parent(manifest, None, None, None)
     }
 
     /// Spawn a new agent with an optional parent for lineage tracking.
     /// If fixed_id is provided, use it instead of generating a new UUID.
+    /// If tenant_id is provided, the agent and its workspace are scoped to that tenant.
     pub fn spawn_agent_with_parent(
         &self,
         manifest: AgentManifest,
         parent: Option<AgentId>,
         fixed_id: Option<AgentId>,
+        tenant_id: Option<&str>,
     ) -> KernelResult<AgentId> {
         let agent_id = fixed_id.unwrap_or_default();
         let session_id = SessionId::new();
@@ -1450,7 +1452,7 @@ impl OpenCarrierKernel {
         let workspace_dir = manifest
             .workspace
             .clone()
-            .unwrap_or_else(|| self.config.effective_workspaces_dir().join(&name));
+            .unwrap_or_else(|| self.config.tenant_workspaces_dir(tenant_id).join(&name));
         ensure_workspace(&workspace_dir)?;
         if manifest.generate_identity_files {
             generate_identity_files(&workspace_dir, &manifest);
@@ -1482,7 +1484,7 @@ impl OpenCarrierKernel {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: None,
+            tenant_id: tenant_id.map(|s| s.to_string()),
         };
         self.registry
             .register(entry.clone())
@@ -1777,6 +1779,7 @@ impl OpenCarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
+                    tenant_id: None,
                 })
         };
 
@@ -1998,6 +2001,7 @@ impl OpenCarrierKernel {
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
                             tool_calls: result.iterations.saturating_sub(1),
+                            tenant_id: None,
                         });
 
                     let _ = kernel_clone
@@ -2225,6 +2229,7 @@ impl OpenCarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
+                    tenant_id: None,
                 })
         };
 
@@ -2391,6 +2396,7 @@ impl OpenCarrierKernel {
                 input_tokens: result.total_usage.input_tokens,
                 output_tokens: result.total_usage.output_tokens,
                 tool_calls: result.iterations.saturating_sub(1),
+                tenant_id: None,
             });
 
         Ok(result)
@@ -2792,6 +2798,7 @@ impl OpenCarrierKernel {
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
+                tenant_id: None,
             });
 
         let config = CompactionConfig::default();
@@ -2876,6 +2883,7 @@ impl OpenCarrierKernel {
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
+                tenant_id: None,
             });
 
         let system_prompt = &entry.manifest.model.system_prompt;
@@ -4127,7 +4135,10 @@ impl OpenCarrierKernel {
         context: &str,
     ) {
         if manifest.workspace.is_none() {
-            let workspace_dir = self.config.effective_workspaces_dir().join(&manifest.name);
+            // Look up tenant_id from the registry entry to scope workspace correctly
+            let tid = self.registry.get(*agent_id)
+                .and_then(|e| e.tenant_id.clone());
+            let workspace_dir = self.config.tenant_workspaces_dir(tid.as_deref()).join(&manifest.name);
             if let Err(e) = ensure_workspace(&workspace_dir) {
                 warn!(agent_id = %agent_id, "Failed to backfill workspace ({context}): {e}");
             } else {
@@ -4150,13 +4161,14 @@ impl OpenCarrierKernel {
         sender_name: Option<String>,
     ) {
         let mcp_tool_count = self.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
-        let shared_id = shared_memory_agent_id();
+        // Read user_name from the agent's own KV namespace (per-agent memory)
         let user_name = self
             .memory
-            .structured_get(shared_id, "user_name")
+            .structured_get(*agent_id, "user_name")
             .ok()
             .flatten()
-            .and_then(|v| v.as_str().map(String::from));
+            .and_then(|v| v.as_str().map(String::from))
+            .or_else(|| sender_name.clone());
 
         let peer_agents: Vec<(String, String, String)> = self
             .registry
@@ -4375,16 +4387,6 @@ fn default_embedding_model_for_provider(provider: &str) -> &'static str {
 }
 
 
-
-/// A well-known agent ID used for shared memory operations across agents.
-/// This is a fixed UUID so all agents read/write to the same namespace.
-pub fn shared_memory_agent_id() -> AgentId {
-    AgentId(uuid::Uuid::from_bytes([
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x01,
-    ]))
-}
-
 /// Deliver a cron job's agent response to the configured delivery target.
 async fn cron_deliver_response(
     _kernel: &OpenCarrierKernel,
@@ -4438,7 +4440,7 @@ impl KernelHandle for OpenCarrierKernel {
         let name = manifest.name.clone();
         let parent = parent_id.and_then(|pid| pid.parse::<AgentId>().ok());
         let id = self
-            .spawn_agent_with_parent(manifest, parent, None)
+            .spawn_agent_with_parent(manifest, parent, None, None)
             .map_err(|e| format!("Spawn failed: {e}"))?;
         Ok((id.to_string(), name))
     }
@@ -4498,18 +4500,25 @@ impl KernelHandle for OpenCarrierKernel {
         OpenCarrierKernel::kill_agent(self, id).map_err(|e| format!("Kill failed: {e}"))
     }
 
-    fn memory_store(&self, key: &str, value: serde_json::Value) -> Result<(), String> {
-        let agent_id = shared_memory_agent_id();
+    fn memory_store(&self, agent_id: &str, key: &str, value: serde_json::Value) -> Result<(), String> {
+        let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
-            .structured_set(agent_id, key, value)
+            .structured_set(aid, key, value)
             .map_err(|e| format!("Memory store failed: {e}"))
     }
 
-    fn memory_recall(&self, key: &str) -> Result<Option<serde_json::Value>, String> {
-        let agent_id = shared_memory_agent_id();
+    fn memory_recall(&self, agent_id: &str, key: &str) -> Result<Option<serde_json::Value>, String> {
+        let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
-            .structured_get(agent_id, key)
+            .structured_get(aid, key)
             .map_err(|e| format!("Memory recall failed: {e}"))
+    }
+
+    fn memory_list(&self, agent_id: &str) -> Result<Vec<(String, serde_json::Value)>, String> {
+        let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
+        self.memory
+            .list_kv(aid)
+            .map_err(|e| format!("Memory list failed: {e}"))
     }
 
     fn find_agents(&self, query: &str) -> Vec<kernel_handle::AgentInfo> {
@@ -4797,8 +4806,8 @@ impl KernelHandle for OpenCarrierKernel {
         }
 
         // Verify workspace path doesn't escape workspaces root
-        let workspace_dir = self.config.effective_workspaces_dir().join(name);
-        if !workspace_dir.starts_with(self.config.effective_workspaces_dir()) {
+        let workspace_dir = self.config.tenant_workspaces_dir(None).join(name);
+        if !workspace_dir.starts_with(self.config.tenant_workspaces_dir(None)) {
             return Err("Path traversal denied".to_string());
         }
 

@@ -197,6 +197,9 @@ pub async fn agent_ws(
     };
 
     // Verify agent exists
+    // TODO: Add tenant ownership check once WS auth carries session cookies.
+    //       Currently WS uses API-key auth which is admin-level, so tenant
+    //       filtering doesn't apply here yet.
     if state.kernel.registry.get(agent_id).is_none() {
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }

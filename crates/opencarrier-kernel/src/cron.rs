@@ -219,6 +219,17 @@ impl CronScheduler {
         self.jobs.iter().map(|r| r.value().job.clone()).collect()
     }
 
+    /// List all jobs belonging to a specific tenant.
+    pub fn list_all_jobs_by_tenant(&self, tenant_id: &str) -> Vec<CronJob> {
+        self.jobs
+            .iter()
+            .filter(|r| {
+                r.value().job.tenant_id.as_deref() == Some(tenant_id)
+            })
+            .map(|r| r.value().job.clone())
+            .collect()
+    }
+
     /// Reassign all cron jobs from `old_agent_id` to `new_agent_id`.
     ///
     /// Used when a hand agent is respawned (e.g. after daemon restart) and

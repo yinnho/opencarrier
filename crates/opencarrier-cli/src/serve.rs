@@ -10,7 +10,7 @@ use opencarrier_memory::acp_session::AcpSessionStore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
 
 use crate::acp;
@@ -62,11 +62,20 @@ pub(crate) const METHOD_NOT_FOUND: i32 = -32601;
 pub(crate) const INVALID_PARAMS: i32 = -32602;
 pub(crate) const INTERNAL_ERROR: i32 = -32603;
 
+/// Shared writer type for concurrent stdout access.
+pub(crate) type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
 // ---------------------------------------------------------------------------
 // Serve Mode Entry Point
 // ---------------------------------------------------------------------------
 
 /// Run ACP mode: read from stdin, process, write to stdout.
+///
+/// Architecture:
+/// - Stdin reader runs in a background thread, sending lines via channel
+/// - Main loop dispatches requests to ACP handlers
+/// - `session/prompt` spawns a worker thread (non-blocking, supports cancel)
+/// - Stdout is shared via `Arc<Mutex<>>` for concurrent writes
 pub fn run_acp_mode(config_path: Option<std::path::PathBuf>) {
     // All logs to stderr
     eprintln!("[acp] Starting opencarrier ACP mode");
@@ -81,13 +90,15 @@ pub fn run_acp_mode(config_path: Option<std::path::PathBuf>) {
     };
 
     // Create tokio runtime for async operations
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("[acp] Failed to create runtime: {e}");
-            std::process::exit(1);
-        }
-    };
+    let rt: Arc<tokio::runtime::Runtime> = Arc::new(
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("[acp] Failed to create runtime: {e}");
+                std::process::exit(1);
+            }
+        },
+    );
 
     // Initialize ACP session store for conversation persistence
     let acp_store = init_acp_session_store(&kernel);
@@ -97,91 +108,89 @@ pub fn run_acp_mode(config_path: Option<std::path::PathBuf>) {
 
     eprintln!("[acp] Kernel booted, ready for requests");
 
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut reader = stdin.lock();
-    let mut writer = stdout.lock();
+    // Shared stdout writer — prompt threads and main loop both write here
+    let writer: SharedWriter = Arc::new(Mutex::new(Box::new(io::stdout())));
 
-    // Main request loop
-    loop {
+    // Stdin reader thread — sends lines to main loop via channel
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut reader = std::io::BufReader::new(stdin.lock());
         let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                // EOF
-                debug!("[acp] EOF received, exiting");
-                break;
-            }
-            Ok(_) => {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    let trimmed = line.trim().to_string();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if tx.send(trimmed).is_err() {
+                        break; // Main loop exited
+                    }
                 }
+                Err(_) => break,
+            }
+        }
+    });
 
-                debug!("[acp] Received: {}", &trimmed[..trimmed.len().min(200)]);
+    // Main dispatch loop
+    while let Ok(line) = rx.recv() {
+        debug!("[acp] Received: {}", &line[..line.len().min(200)]);
 
-                let response = match serde_json::from_str::<JsonRpcRequest>(trimmed) {
-                    Ok(req) => {
-                        if acp::is_acp_method(&req.method) {
-                            // ACP protocol methods
-                            acp::handle_acp_request(
-                                &kernel,
-                                &rt,
-                                &req,
-                                &mut acp_state,
-                                &mut writer,
-                                &acp_store,
-                            )
-                        } else {
-                            Some(jsonrpc_error(
-                                req.id.clone(),
-                                METHOD_NOT_FOUND,
-                                &format!("Method not found: {}", req.method),
-                            ))
-                        }
-                    }
-                    Err(e) => {
-                        // Parse error
-                        error!("[acp] Parse error: {e}");
-                        Some(jsonrpc_error(
-                            None,
-                            PARSE_ERROR,
-                            &format!("Parse error: {e}"),
-                        ))
-                    }
-                };
-
-                // Write response
-                if let Some(resp) = response {
-                    let resp_json = match resp {
-                        Response::Success(r) => serde_json::to_string(&r),
-                        Response::Error(r) => serde_json::to_string(&r),
-                    };
-
-                    match resp_json {
-                        Ok(json) => {
-                            if let Err(e) = writeln!(writer, "{}", json) {
-                                error!("[acp] Write error: {e}");
-                                break;
-                            }
-                            if let Err(e) = writer.flush() {
-                                error!("[acp] Flush error: {e}");
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error!("[acp] Serialize error: {e}");
-                        }
-                    }
+        let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
+            Ok(req) => {
+                if acp::is_acp_method(&req.method) {
+                    acp::handle_acp_request(
+                        &kernel,
+                        &rt,
+                        &req,
+                        &mut acp_state,
+                        &writer,
+                        &acp_store,
+                    )
+                } else {
+                    Some(jsonrpc_error(
+                        req.id.clone(),
+                        METHOD_NOT_FOUND,
+                        &format!("Method not found: {}", req.method),
+                    ))
                 }
             }
             Err(e) => {
-                error!("[acp] Read error: {e}");
-                break;
+                error!("[acp] Parse error: {e}");
+                Some(jsonrpc_error(
+                    None,
+                    PARSE_ERROR,
+                    &format!("Parse error: {e}"),
+                ))
             }
+        };
+
+        // Write response (if any — session/prompt returns None, writes its own)
+        if let Some(resp) = response {
+            write_response(&writer, resp);
         }
     }
 
     info!("[acp] ACP mode exiting");
+}
+
+/// Write a JSON-RPC response to the shared writer.
+pub(crate) fn write_response(writer: &SharedWriter, resp: Response) {
+    let json = match resp {
+        Response::Success(r) => serde_json::to_string(&r),
+        Response::Error(r) => serde_json::to_string(&r),
+    };
+    match json {
+        Ok(j) => {
+            let mut w = writer.lock().unwrap();
+            let _ = writeln!(w, "{}", j);
+            let _ = w.flush();
+        }
+        Err(e) => error!("[acp] Serialize error: {e}"),
+    }
 }
 
 /// Response type (success or error)

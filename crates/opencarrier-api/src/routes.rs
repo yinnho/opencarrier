@@ -2,6 +2,7 @@
 
 use crate::types::*;
 use axum::extract::{Path, Query, State};
+use fs4::fs_std::FileExt;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -44,6 +45,17 @@ fn parse_agent_id(id: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Val
             Json(serde_json::json!({"error": "Invalid agent ID"})),
         )
     })
+}
+
+/// Parse agent ID, look up agent, and check tenant ownership.
+/// Returns just the AgentId on success (for handlers that don't need the entry).
+fn parse_agent_id_with_tenant(
+    id: &str,
+    registry: &opencarrier_kernel::registry::AgentRegistry,
+    ctx: &opencarrier_types::tenant::TenantContext,
+) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
+    let (agent_id, _entry) = parse_and_get_agent_with_tenant(id, registry, ctx)?;
+    Ok(agent_id)
 }
 
 /// Look up an agent in the registry, returning NOT_FOUND if missing.
@@ -104,6 +116,22 @@ fn get_clone_workspace(
             Json(serde_json::json!({"error": "Agent has no workspace"})),
         )
     })?;
+    Ok((entry, workspace))
+}
+
+/// Look up a clone by name, check tenant ownership, and extract its workspace path.
+fn get_clone_workspace_with_tenant(
+    name: &str,
+    registry: &opencarrier_kernel::registry::AgentRegistry,
+    ctx: &opencarrier_types::tenant::TenantContext,
+) -> Result<(opencarrier_types::agent::AgentEntry, std::path::PathBuf), (StatusCode, Json<serde_json::Value>)> {
+    let (entry, workspace) = get_clone_workspace(name, registry)?;
+    if !can_access(ctx, entry.tenant_id.as_deref()) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
+        ));
+    }
     Ok((entry, workspace))
 }
 
@@ -356,6 +384,7 @@ pub fn inject_attachments_into_session(
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            tenant_id: None,
         },
     };
 
@@ -462,9 +491,11 @@ pub async fn send_message(
 /// GET /api/agents/:id/session — Get agent session (conversation history).
 pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -665,9 +696,11 @@ pub async fn kill_agent(
 /// Returns the agent's new state.
 pub async fn restart_agent(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -705,11 +738,18 @@ pub async fn restart_agent(
 }
 
 /// GET /api/status — Kernel status.
-pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agents: Vec<serde_json::Value> = state
-        .kernel
-        .registry
-        .list()
+pub async fn status(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let all_agents = state.kernel.registry.list();
+    let agents_owned = if ctx.is_admin() {
+        all_agents
+    } else {
+        all_agents.into_iter().filter(|e| can_access(&ctx, e.tenant_id.as_deref())).collect()
+    };
+    let agents: Vec<serde_json::Value> = agents_owned
         .into_iter()
         .map(|e| {
             let (modality, model) = state.kernel.resolve_model_label(&e.manifest.model.modality);
@@ -1549,10 +1589,12 @@ pub async fn list_profiles() -> impl IntoResponse {
 /// PUT /api/agents/:id/mode — Change an agent's operational mode.
 pub async fn set_agent_mode(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(body): Json<SetModeRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -1641,6 +1683,7 @@ pub async fn get_agent(
 /// POST /api/agents/:id/message/stream — SSE streaming response.
 pub async fn send_message_stream(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<MessageRequest>,
 ) -> axum::response::Response {
@@ -1663,7 +1706,16 @@ pub async fn send_message_stream(
         Err(resp) => return resp.into_response(),
     };
 
-    match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(_) => (), Err(r) => return r.into_response() };
+    // Tenant access check
+    let ctx = get_tenant_ctx(&extensions);
+    match get_agent_or_404(&state.kernel.registry, &agent_id) {
+        Ok(entry) => {
+            if !can_access(&ctx, entry.tenant_id.as_deref()) {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"}))).into_response();
+            }
+        }
+        Err(r) => return r.into_response(),
+    };
 
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
     let (rx, _handle) = match state.kernel.send_message_streaming(
@@ -1849,14 +1901,16 @@ pub async fn get_template(Path(name): Path<String>) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 /// GET /api/memory/agents/:id/kv — List KV pairs for an agent.
-///
-/// Note: memory_store tool writes to a shared namespace, so we read from that
-/// same namespace regardless of which agent ID is in the URL.
 pub async fn get_agent_kv(
     State(state): State<Arc<AppState>>,
-    Path(_id): Path<String>,
+    extensions: axum::http::Extensions,
+    Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = opencarrier_kernel::kernel::shared_memory_agent_id();
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, _entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match state.kernel.memory.list_kv(agent_id) {
         Ok(pairs) => {
@@ -1879,9 +1933,14 @@ pub async fn get_agent_kv(
 /// GET /api/memory/agents/:id/kv/:key — Get a specific KV value.
 pub async fn get_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    Path((_id, key)): Path<(String, String)>,
+    extensions: axum::http::Extensions,
+    Path((id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id = opencarrier_kernel::kernel::shared_memory_agent_id();
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, _entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match state.kernel.memory.structured_get(agent_id, &key) {
         Ok(Some(val)) => (
@@ -1905,10 +1964,15 @@ pub async fn get_agent_kv_key(
 /// PUT /api/memory/agents/:id/kv/:key — Set a KV value.
 pub async fn set_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    Path((_id, key)): Path<(String, String)>,
+    extensions: axum::http::Extensions,
+    Path((id, key)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = opencarrier_kernel::kernel::shared_memory_agent_id();
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, _entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     let value = body.get("value").cloned().unwrap_or(body);
 
@@ -1930,9 +1994,14 @@ pub async fn set_agent_kv_key(
 /// DELETE /api/memory/agents/:id/kv/:key — Delete a KV value.
 pub async fn delete_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    Path((_id, key)): Path<(String, String)>,
+    extensions: axum::http::Extensions,
+    Path((id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id = opencarrier_kernel::kernel::shared_memory_agent_id();
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, _entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match state.kernel.memory.structured_delete(agent_id, &key) {
         Ok(()) => (
@@ -2441,11 +2510,18 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
 // ---------------------------------------------------------------------------
 
 /// GET /api/usage — Get per-agent usage statistics.
-pub async fn usage_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agents: Vec<serde_json::Value> = state
-        .kernel
-        .registry
-        .list()
+pub async fn usage_stats(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let all_agents = state.kernel.registry.list();
+    let agents_filtered: Vec<_> = if ctx.is_admin() {
+        all_agents
+    } else {
+        all_agents.into_iter().filter(|e| can_access(&ctx, e.tenant_id.as_deref())).collect()
+    };
+    let agents: Vec<serde_json::Value> = agents_filtered
         .iter()
         .map(|e| {
             let (tokens, tool_calls) = state.kernel.scheduler.get_usage(e.id).unwrap_or((0, 0));
@@ -2466,8 +2542,13 @@ pub async fn usage_stats(State(state): State<Arc<AppState>>) -> impl IntoRespons
 // ---------------------------------------------------------------------------
 
 /// GET /api/usage/summary — Get overall usage summary from UsageStore.
-pub async fn usage_summary(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.kernel.memory.usage().query_summary(None) {
+pub async fn usage_summary(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let tid = if ctx.is_admin() { None } else { ctx.tenant_id.clone() };
+    match state.kernel.memory.usage().query_summary(None, tid.as_deref()) {
         Ok(s) => Json(serde_json::json!({
             "total_input_tokens": s.total_input_tokens,
             "total_output_tokens": s.total_output_tokens,
@@ -2484,8 +2565,13 @@ pub async fn usage_summary(State(state): State<Arc<AppState>>) -> impl IntoRespo
 }
 
 /// GET /api/usage/by-model — Get usage grouped by model.
-pub async fn usage_by_model(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.kernel.memory.usage().query_by_model() {
+pub async fn usage_by_model(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let tid = if ctx.is_admin() { None } else { ctx.tenant_id.clone() };
+    match state.kernel.memory.usage().query_by_model(tid.as_deref()) {
         Ok(models) => {
             let list: Vec<serde_json::Value> = models
                 .iter()
@@ -2505,8 +2591,13 @@ pub async fn usage_by_model(State(state): State<Arc<AppState>>) -> impl IntoResp
 }
 
 /// GET /api/usage/daily — Get daily usage breakdown for the last 7 days.
-pub async fn usage_daily(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let days = state.kernel.memory.usage().query_daily_breakdown(7);
+pub async fn usage_daily(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let tid = if ctx.is_admin() { None } else { ctx.tenant_id.clone() };
+    let days = state.kernel.memory.usage().query_daily_breakdown(7, tid.as_deref());
     let first_event = state.kernel.memory.usage().query_first_event_date();
 
     let days_list = match days {
@@ -2534,8 +2625,13 @@ pub async fn usage_daily(State(state): State<Arc<AppState>>) -> impl IntoRespons
 // ---------------------------------------------------------------------------
 
 /// GET /api/sessions — List all sessions with metadata.
-pub async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.kernel.memory.list_sessions() {
+pub async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let tid = if ctx.is_admin() { None } else { ctx.tenant_id.as_deref() };
+    match state.kernel.memory.list_sessions(tid) {
         Ok(sessions) => Json(serde_json::json!({"sessions": sessions})),
         Err(_) => Json(serde_json::json!({"sessions": []})),
     }
@@ -2661,11 +2757,12 @@ pub async fn find_session_by_label(
 /// PUT /api/agents/:id — Update an agent (currently: re-set manifest fields).
 pub async fn update_agent(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(_req): Json<AgentUpdateRequest>,
 ) -> impl IntoResponse {
-    // Validate agent exists
-    let _ = parse_and_get_agent(&id, &state.kernel.registry);
+    let ctx = get_tenant_ctx(&extensions);
+    let _ = parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx);
 
     (
         StatusCode::GONE,
@@ -2679,10 +2776,12 @@ pub async fn update_agent(
 /// PATCH /api/agents/{id} — Partial update of agent fields (name, description, model, system_prompt).
 pub async fn patch_agent(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, _entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -2936,9 +3035,11 @@ pub async fn mcp_http(
 /// GET /api/agents/{id}/sessions — List all sessions for an agent.
 pub async fn list_agent_sessions(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -2957,10 +3058,12 @@ pub async fn list_agent_sessions(
 /// POST /api/agents/{id}/sessions — Create a new session for an agent.
 pub async fn create_agent_session(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -2977,9 +3080,11 @@ pub async fn create_agent_session(
 /// POST /api/agents/{id}/sessions/{session_id}/switch — Switch to an existing session.
 pub async fn switch_agent_session(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path((id, session_id_str)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3009,9 +3114,11 @@ pub async fn switch_agent_session(
 /// POST /api/agents/{id}/session/reset — Reset an agent's session.
 pub async fn reset_session(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3030,9 +3137,11 @@ pub async fn reset_session(
 /// DELETE /api/agents/{id}/history — Clear ALL conversation history for an agent.
 pub async fn clear_agent_history(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, _entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -3051,9 +3160,11 @@ pub async fn clear_agent_history(
 /// POST /api/agents/{id}/session/compact — Trigger LLM session compaction.
 pub async fn compact_session(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3072,9 +3183,11 @@ pub async fn compact_session(
 /// POST /api/agents/{id}/stop — Cancel an agent's current LLM run.
 pub async fn stop_agent(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3097,10 +3210,12 @@ pub async fn stop_agent(
 /// PUT /api/agents/{id}/model — Switch an agent's model.
 pub async fn set_model(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3144,9 +3259,11 @@ pub async fn set_model(
 /// GET /api/agents/{id}/tools — Get an agent's tool allowlist/blocklist.
 pub async fn get_agent_tools(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -3162,10 +3279,12 @@ pub async fn get_agent_tools(
 /// PUT /api/agents/{id}/tools — Update an agent's tool allowlist/blocklist.
 pub async fn set_agent_tools(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3210,9 +3329,11 @@ pub async fn set_agent_tools(
 /// GET /api/agents/{id}/skills — Get an agent's skill assignment info.
 pub async fn get_agent_skills(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -3240,10 +3361,12 @@ pub async fn get_agent_skills(
 /// PUT /api/agents/{id}/skills — Update an agent's skill allowlist.
 pub async fn set_agent_skills(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3270,9 +3393,11 @@ pub async fn set_agent_skills(
 /// GET /api/agents/{id}/mcp_servers — Get an agent's MCP server assignment info.
 pub async fn get_agent_mcp_servers(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -3306,10 +3431,12 @@ pub async fn get_agent_mcp_servers(
 /// PUT /api/agents/{id}/mcp_servers — Update an agent's MCP server allowlist.
 pub async fn set_agent_mcp_servers(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3440,10 +3567,12 @@ pub struct UpdateIdentityRequest {
 /// PATCH /api/agents/{id}/identity — Update an agent's visual identity.
 pub async fn update_agent_identity(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<UpdateIdentityRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3522,10 +3651,12 @@ pub struct PatchAgentConfigRequest {
 /// PATCH /api/agents/{id}/config — Hot-update agent name, description, system prompt, and identity.
 pub async fn patch_agent_config(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<PatchAgentConfigRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3715,10 +3846,12 @@ pub struct CloneAgentRequest {
 /// POST /api/agents/{id}/clone — Clone an agent with its workspace files.
 pub async fn clone_agent(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<CloneAgentRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3811,9 +3944,11 @@ const KNOWN_IDENTITY_FILES: &[&str] = &[
 /// GET /api/agents/{id}/files — List workspace identity files.
 pub async fn list_agent_files(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -3850,9 +3985,11 @@ pub async fn list_agent_files(
 /// GET /api/agents/{id}/files/{filename} — Read a workspace identity file.
 pub async fn get_agent_file(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path((id, filename)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -3936,10 +4073,12 @@ pub struct SetAgentFileRequest {
 /// Immutable files (SOUL.md) cannot be overwritten once created.
 pub async fn set_agent_file(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path((id, filename)): Path<(String, String)>,
     Json(req): Json<SetAgentFileRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -4092,12 +4231,14 @@ fn is_allowed_content_type(ct: &str) -> bool {
 /// - `X-Filename` header (original filename)
 pub async fn upload_file(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    // Validate agent ID format
-    let _agent_id = match parse_agent_id(&id) {
+    let ctx = get_tenant_ctx(&extensions);
+    // Validate agent ID format and tenant ownership
+    let _agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -4554,13 +4695,20 @@ fn json_to_toml_value(value: &serde_json::Value) -> toml::Value {
 /// GET /api/cron/jobs — List all cron jobs, optionally filtered by agent_id.
 pub async fn list_cron_jobs(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let jobs = if let Some(agent_id_str) = params.get("agent_id") {
         match uuid::Uuid::parse_str(agent_id_str) {
             Ok(uuid) => {
                 let aid = AgentId(uuid);
-                state.kernel.cron_scheduler.list_jobs(aid)
+                let jobs = state.kernel.cron_scheduler.list_jobs(aid);
+                if ctx.is_admin() {
+                    jobs
+                } else {
+                    jobs.into_iter().filter(|j| can_access(&ctx, j.tenant_id.as_deref())).collect()
+                }
             }
             Err(_) => {
                 return (
@@ -4569,8 +4717,10 @@ pub async fn list_cron_jobs(
                 );
             }
         }
-    } else {
+    } else if ctx.is_admin() {
         state.kernel.cron_scheduler.list_all_jobs()
+    } else {
+        state.kernel.cron_scheduler.list_all_jobs_by_tenant(ctx.tenant_id.as_deref().unwrap_or(""))
     };
     let total = jobs.len();
     let jobs_json: Vec<serde_json::Value> = jobs
@@ -4586,9 +4736,19 @@ pub async fn list_cron_jobs(
 /// POST /api/cron/jobs — Create a new cron job.
 pub async fn create_cron_job(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let agent_id = body["agent_id"].as_str().unwrap_or("");
+    // Verify tenant owns the target agent
+    if let Ok(aid) = agent_id.parse::<AgentId>() {
+        if let Some(entry) = state.kernel.registry.get(aid) {
+            if !can_access(&ctx, entry.tenant_id.as_deref()) {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+            }
+        }
+    }
     match state.kernel.cron_create(agent_id, body.clone()).await {
         Ok(result) => (
             StatusCode::CREATED,
@@ -4604,11 +4764,19 @@ pub async fn create_cron_job(
 /// DELETE /api/cron/jobs/{id} — Delete a cron job.
 pub async fn delete_cron_job(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
+            // Tenant ownership check
+            if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
+                if !can_access(&ctx, job.tenant_id.as_deref()) {
+                    return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+                }
+            }
             match state.kernel.cron_scheduler.remove_job(job_id) {
                 Ok(_) => {
                     let _ = state.kernel.cron_scheduler.persist();
@@ -4633,13 +4801,21 @@ pub async fn delete_cron_job(
 /// PUT /api/cron/jobs/{id}/enable — Enable or disable a cron job.
 pub async fn toggle_cron_job(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let enabled = body["enabled"].as_bool().unwrap_or(true);
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
+            // Tenant ownership check
+            if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
+                if !can_access(&ctx, job.tenant_id.as_deref()) {
+                    return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+                }
+            }
             match state.kernel.cron_scheduler.set_enabled(job_id, enabled) {
                 Ok(()) => {
                     let _ = state.kernel.cron_scheduler.persist();
@@ -4664,11 +4840,19 @@ pub async fn toggle_cron_job(
 /// GET /api/cron/jobs/{id}/status — Get status of a specific cron job.
 pub async fn cron_job_status(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
+            // Tenant ownership check
+            if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
+                if !can_access(&ctx, job.tenant_id.as_deref()) {
+                    return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+                }
+            }
             match state.kernel.cron_scheduler.get_meta(job_id) {
                 Some(meta) => (
                     StatusCode::OK,
@@ -5847,9 +6031,11 @@ pub async fn delete_tenant(
 /// POST /api/clones/install — Install a .agx clone from uploaded bytes.
 pub async fn install_clone(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(req): Json<InstallCloneRequest>,
 ) -> impl IntoResponse {
     use opencarrier_clone::{load_agx, install_clone_to_workspace, convert_to_manifest};
+    let ctx = get_tenant_ctx(&extensions);
 
     // Decode base64 data
     let raw_data = match req.decode_data() {
@@ -5901,8 +6087,8 @@ pub async fn install_clone(
         );
     }
 
-    // Create workspace directory
-    let workspace_dir = state.kernel.config.effective_workspaces_dir().join(&clone_data.name);
+    // Create workspace directory (tenant-scoped)
+    let workspace_dir = state.kernel.config.tenant_workspaces_dir(ctx.tenant_id.as_deref()).join(&clone_data.name);
     if workspace_dir.exists() {
         return (
             StatusCode::CONFLICT,
@@ -5923,11 +6109,12 @@ pub async fn install_clone(
     let mut manifest = convert_to_manifest(&clone_data);
     manifest.workspace = Some(workspace_dir.clone());
 
-    // Spawn agent
+    // Spawn agent (tenant-scoped)
     let name = manifest.name.clone();
     let warnings = clone_data.security_warnings.clone();
+    let tid = ctx.tenant_id.as_deref();
 
-    match state.kernel.spawn_agent(manifest) {
+    match state.kernel.spawn_agent_with_parent(manifest, None, None, tid) {
         Ok(id) => {
             tracing::info!("Clone '{}' installed and spawned: {}", name, id);
             (
@@ -5953,8 +6140,14 @@ pub async fn install_clone(
 /// GET /api/clones — List installed clones (agents with clone_source).
 pub async fn list_clones(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let agents = state.kernel.registry.list();
+    let ctx = get_tenant_ctx(&extensions);
+    let agents = if ctx.is_admin() {
+        state.kernel.registry.list()
+    } else {
+        state.kernel.registry.list_by_tenant(ctx.tenant_id.as_deref().unwrap_or(""))
+    };
     let clones: Vec<serde_json::Value> = agents
         .into_iter()
         .filter(|e| e.manifest.clone_source.is_some())
@@ -5979,14 +6172,17 @@ pub async fn list_clones(
 /// POST /api/clones/{name}/start — Start a stopped clone.
 pub async fn start_clone(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let entry = match state.kernel.registry.find_by_name(&name) {
         Some(e) => e,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"})));
-        }
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
+    if !can_access(&ctx, entry.tenant_id.as_deref()) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+    }
 
     if entry.manifest.clone_source.is_none() {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
@@ -6001,14 +6197,17 @@ pub async fn start_clone(
 /// POST /api/clones/{name}/stop — Stop a running clone.
 pub async fn stop_clone(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let entry = match state.kernel.registry.find_by_name(&name) {
         Some(e) => e,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"})));
-        }
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
+    if !can_access(&ctx, entry.tenant_id.as_deref()) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+    }
 
     if entry.manifest.clone_source.is_none() {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
@@ -6023,14 +6222,17 @@ pub async fn stop_clone(
 /// DELETE /api/clones/{name} — Uninstall a clone.
 pub async fn uninstall_clone(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let entry = match state.kernel.registry.find_by_name(&name) {
         Some(e) => e,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"})));
-        }
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
+    if !can_access(&ctx, entry.tenant_id.as_deref()) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+    }
 
     if entry.manifest.clone_source.is_none() {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
@@ -6081,9 +6283,11 @@ impl InstallCloneRequest {
 /// and compression on the clone's knowledge directory.
 pub async fn clone_compile(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let (entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -6168,10 +6372,12 @@ pub async fn clone_compile(
 /// issues when `?fix=true` is passed.
 pub async fn clone_health(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (_entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -6205,9 +6411,11 @@ pub async fn clone_health(
 /// to the configured Hub.
 pub async fn clone_feedback_push(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (_entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -6269,10 +6477,12 @@ pub async fn clone_feedback_push(
 /// GET /api/clones/{name}/evaluate?mode=deterministic|full
 pub async fn clone_evaluate(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let (entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+    let ctx = get_tenant_ctx(&extensions);
+    let (entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -6403,9 +6613,11 @@ pub async fn clone_evaluate(
 /// Body: { "filename": "refund-policy.md" }
 pub async fn clone_rollback(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let filename = match body["filename"].as_str() {
         Some(f) => f.to_string(),
         None => {
@@ -6416,7 +6628,7 @@ pub async fn clone_rollback(
         }
     };
 
-    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+    let (_entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -6442,9 +6654,11 @@ pub async fn clone_rollback(
 /// Body: { "filename": "refund-policy.md" }
 pub async fn clone_verify(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let filename = match body["filename"].as_str() {
         Some(f) => f.to_string(),
         None => {
@@ -6455,7 +6669,7 @@ pub async fn clone_verify(
         }
     };
 
-    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+    let (_entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -6529,8 +6743,11 @@ pub async fn list_hub_templates(State(state): State<Arc<AppState>>) -> impl Into
 /// POST /api/hub/templates/{name}/install — Download and install a template from Hub.
 pub async fn install_hub_template(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let _ = &ctx; // Will be used when clone_install kernel tool accepts tenant_id
     let hub_url = state.kernel.config.hub.url.clone();
     let hub_api_key = match
         opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
@@ -6701,9 +6918,13 @@ fn weixin_validate_baseurl(url: &str) -> bool {
         || url.starts_with("https://ilinkai.weixin.qq.com/")
 }
 
-/// Atomic file write: write to `.tmp` then rename over target.
+/// Atomic file write: write to `<path>.tmp` then rename over target.
 fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {
-    let tmp_path = path.with_extension("json.tmp");
+    let tmp_path = {
+        let mut s = path.as_os_str().to_owned();
+        s.push(".tmp");
+        std::path::PathBuf::from(s)
+    };
     std::fs::write(&tmp_path, content)?;
     std::fs::rename(&tmp_path, path)
 }
@@ -6989,4 +7210,361 @@ pub async fn weixin_status(
         "tenants": tenants,
         "count": tenants.len(),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Channels — unified status + tenant management
+// ---------------------------------------------------------------------------
+
+/// GET `/api/channels/status` — aggregate status for all channel plugins.
+///
+/// Reads WeChat token files, WeCom and Feishu plugin.toml tenants.
+pub async fn channels_status(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let home = &state.kernel.config.home_dir;
+
+    // ── WeChat iLink ──────────────────────────────────────────────────
+    let weixin_dir = home.join("weixin-tokens");
+    let mut weixin_tenants: Vec<serde_json::Value> = Vec::new();
+
+    if weixin_dir.exists() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        if let Ok(entries) = std::fs::read_dir(&weixin_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let expires_at = tf.get("expires_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let expired = now >= expires_at;
+                        let remaining = (expires_at - now).max(0);
+                        weixin_tenants.push(serde_json::json!({
+                            "name": tf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                            "ilink_bot_id": tf.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or(""),
+                            "expired": expired,
+                            "remaining_secs": remaining,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // ── WeCom ──────────────────────────────────────────────────────────
+    let wecom_toml = home.join("plugins").join("opencarrier-plugin-wecom").join("plugin.toml");
+    let mut wecom_tenants: Vec<serde_json::Value> = Vec::new();
+    if let Ok(content) = std::fs::read_to_string(&wecom_toml) {
+        if let Ok(doc) = content.parse::<toml::Value>() {
+            if let Some(arr) = doc.get("tenants").and_then(|v| v.as_array()) {
+                for tenant in arr {
+                    let cfg = tenant.get("config").cloned().unwrap_or(toml::Value::Table(Default::default()));
+                    wecom_tenants.push(serde_json::json!({
+                        "name": tenant.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                        "mode": cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot"),
+                        "corp_id": cfg.get("corp_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    }));
+                }
+            }
+        }
+    }
+
+    // ── Feishu/Lark ────────────────────────────────────────────────────
+    let feishu_toml = home.join("plugins").join("opencarrier-plugin-feishu").join("plugin.toml");
+    let mut feishu_tenants: Vec<serde_json::Value> = Vec::new();
+    if let Ok(content) = std::fs::read_to_string(&feishu_toml) {
+        if let Ok(doc) = content.parse::<toml::Value>() {
+            if let Some(arr) = doc.get("tenants").and_then(|v| v.as_array()) {
+                for tenant in arr {
+                    let cfg = tenant.get("config").cloned().unwrap_or(toml::Value::Table(Default::default()));
+                    feishu_tenants.push(serde_json::json!({
+                        "name": tenant.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                        "app_id": cfg.get("app_id").and_then(|v| v.as_str()).unwrap_or(""),
+                        "brand": cfg.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu"),
+                    }));
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "weixin": { "tenants": weixin_tenants, "count": weixin_tenants.len() },
+        "wecom": { "tenants": wecom_tenants, "count": wecom_tenants.len() },
+        "feishu": { "tenants": feishu_tenants, "count": feishu_tenants.len() },
+    }))
+}
+
+/// Sanitize tenant name for plugin.toml entries.
+fn channel_sanitize_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return None;
+    }
+    if trimmed.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+/// Maximum length for config string fields (corp_id, secret, etc.).
+const CHANNEL_FIELD_MAX_LEN: usize = 512;
+
+/// Validate a config string field: non-empty after trim, max length, no control chars.
+fn channel_validate_field(value: &str, field_name: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field_name} is required"));
+    }
+    if trimmed.len() > CHANNEL_FIELD_MAX_LEN {
+        return Err(format!("{field_name} exceeds max length ({CHANNEL_FIELD_MAX_LEN} chars)"));
+    }
+    if trimmed.chars().any(|c| c.is_control() && c != ' ') {
+        return Err(format!("{field_name} contains invalid characters"));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Read-modify-write a plugin.toml, appending a new [[tenants]] entry.
+/// Uses file locking to prevent concurrent write races.
+fn plugin_toml_add_tenant(
+    toml_path: &std::path::Path,
+    tenant_name: &str,
+    config: toml::Value,
+) -> Result<(), String> {
+    // Use file-based lock to prevent TOCTOU race on concurrent writes.
+    // The lock file is adjacent to the target toml file.
+    let lock_path = {
+        let mut s = toml_path.as_os_str().to_owned();
+        s.push(".lock");
+        std::path::PathBuf::from(s)
+    };
+
+    // Create parent dir if needed
+    if let Some(parent) = toml_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|_| "Failed to create plugin directory".to_string())?;
+    }
+
+    // Acquire exclusive lock
+    let lock_file = std::fs::File::create(&lock_path)
+        .map_err(|_| "Failed to create lock file".to_string())?;
+    lock_file.lock_exclusive()
+        .map_err(|_| "Failed to acquire config lock".to_string())?;
+
+    let result = plugin_toml_add_tenant_locked(toml_path, tenant_name, config);
+
+    // Release lock (drop closes the file)
+    drop(lock_file);
+    let _ = std::fs::remove_file(&lock_path);
+
+    result
+}
+
+/// Inner implementation (caller must hold the lock).
+fn plugin_toml_add_tenant_locked(
+    toml_path: &std::path::Path,
+    tenant_name: &str,
+    config: toml::Value,
+) -> Result<(), String> {
+    let mut doc = if toml_path.exists() {
+        let content = std::fs::read_to_string(toml_path)
+            .map_err(|_| "Failed to read plugin config".to_string())?;
+        content
+            .parse::<toml::Value>()
+            .map_err(|_| "Failed to parse plugin config".to_string())?
+    } else {
+        toml::Value::Table(Default::default())
+    };
+
+    let table = doc.as_table_mut().ok_or("Invalid plugin config structure".to_string())?;
+    if !table.contains_key("tenants") {
+        table.insert("tenants".into(), toml::Value::Array(Vec::new()));
+    }
+    let tenants = table
+        .get_mut("tenants")
+        .and_then(|v| v.as_array_mut())
+        .ok_or("Invalid tenants section".to_string())?;
+
+    // Check for duplicate name
+    if tenants.iter().any(|t| {
+        t.get("name").and_then(|v| v.as_str()) == Some(tenant_name)
+    }) {
+        return Err(format!("Tenant '{tenant_name}' already exists"));
+    }
+
+    let mut entry = toml::value::Table::new();
+    entry.insert("name".into(), toml::Value::String(tenant_name.to_string()));
+    entry.insert("config".into(), config);
+    tenants.push(toml::Value::Table(entry));
+
+    let content = toml::to_string_pretty(&doc)
+        .map_err(|_| "Failed to serialize plugin config".to_string())?;
+    atomic_write(toml_path, &content)
+        .map_err(|_| "Failed to write plugin config".to_string())?;
+
+    Ok(())
+}
+
+/// POST `/api/channels/wecom/tenants` — add a WeCom tenant to plugin.toml.
+///
+/// Body: `{ "name": "...", "mode": "smartbot"|"app"|"kf", "corp_id": "...", "bot_id": "...", "secret": "...", "webhook_port": 8454, "encoding_aes_key": "..." }`
+pub async fn wecom_add_tenant(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let name = match body.get("name").and_then(|v| v.as_str()) {
+        Some(n) => match channel_sanitize_name(n) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "Invalid tenant name: use only alphanumeric, hyphen, underscore (max 64 chars)" })),
+                );
+            }
+        },
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Missing 'name' field" })),
+            );
+        }
+    };
+
+    let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot");
+    if !["smartbot", "app", "kf"].contains(&mode) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid mode: must be smartbot, app, or kf" })),
+        );
+    }
+
+    let corp_id = match channel_validate_field(
+        body.get("corp_id").and_then(|v| v.as_str()).unwrap_or(""), "corp_id",
+    ) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))),
+    };
+    let secret = match channel_validate_field(
+        body.get("secret").and_then(|v| v.as_str()).unwrap_or(""), "secret",
+    ) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))),
+    };
+    let bot_id = body.get("bot_id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if bot_id.len() > CHANNEL_FIELD_MAX_LEN || bot_id.chars().any(|c| c.is_control() && c != ' ') {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid bot_id" })));
+    }
+    let webhook_port = body.get("webhook_port").and_then(|v| v.as_u64()).unwrap_or(8454);
+    if !(1..=65535).contains(&webhook_port) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "webhook_port must be between 1 and 65535" })),
+        );
+    }
+    let encoding_aes_key = body.get("encoding_aes_key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if encoding_aes_key.len() > CHANNEL_FIELD_MAX_LEN || encoding_aes_key.chars().any(|c| c.is_control() && c != ' ') {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid encoding_aes_key" })));
+    }
+
+    // Build config as toml::Value
+    let mut cfg = toml::value::Table::new();
+    cfg.insert("mode".into(), toml::Value::String(mode.to_string()));
+    cfg.insert("corp_id".into(), toml::Value::String(corp_id.to_string()));
+    if !bot_id.is_empty() {
+        cfg.insert("bot_id".into(), toml::Value::String(bot_id.to_string()));
+    }
+    cfg.insert("secret".into(), toml::Value::String(secret.to_string()));
+    cfg.insert("webhook_port".into(), toml::Value::Integer(webhook_port as i64));
+    if !encoding_aes_key.is_empty() {
+        cfg.insert("encoding_aes_key".into(), toml::Value::String(encoding_aes_key.to_string()));
+    }
+
+    let toml_path = state.kernel.config.home_dir
+        .join("plugins")
+        .join("opencarrier-plugin-wecom")
+        .join("plugin.toml");
+
+    if let Err(e) = plugin_toml_add_tenant(&toml_path, &name, toml::Value::Table(cfg)) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        );
+    }
+
+    tracing::info!(tenant = %name, mode, "WeCom tenant added via dashboard");
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "name": name })))
+}
+
+/// POST `/api/channels/feishu/tenants` — add a Feishu tenant to plugin.toml.
+///
+/// Body: `{ "name": "...", "app_id": "...", "app_secret": "...", "brand": "feishu"|"lark" }`
+pub async fn feishu_add_tenant(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let name = match body.get("name").and_then(|v| v.as_str()) {
+        Some(n) => match channel_sanitize_name(n) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "Invalid tenant name: use only alphanumeric, hyphen, underscore (max 64 chars)" })),
+                );
+            }
+        },
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Missing 'name' field" })),
+            );
+        }
+    };
+
+    let app_id = match channel_validate_field(
+        body.get("app_id").and_then(|v| v.as_str()).unwrap_or(""), "app_id",
+    ) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))),
+    };
+    let app_secret = match channel_validate_field(
+        body.get("app_secret").and_then(|v| v.as_str()).unwrap_or(""), "app_secret",
+    ) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))),
+    };
+    let brand = body.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu");
+
+    if !["feishu", "lark"].contains(&brand) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid brand: must be feishu or lark" })),
+        );
+    }
+
+    let mut cfg = toml::value::Table::new();
+    cfg.insert("app_id".into(), toml::Value::String(app_id.to_string()));
+    cfg.insert("app_secret".into(), toml::Value::String(app_secret.to_string()));
+    cfg.insert("brand".into(), toml::Value::String(brand.to_string()));
+
+    let toml_path = state.kernel.config.home_dir
+        .join("plugins")
+        .join("opencarrier-plugin-feishu")
+        .join("plugin.toml");
+
+    if let Err(e) = plugin_toml_add_tenant(&toml_path, &name, toml::Value::Table(cfg)) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        );
+    }
+
+    tracing::info!(tenant = %name, brand, "Feishu tenant added via dashboard");
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "name": name })))
 }

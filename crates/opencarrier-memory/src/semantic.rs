@@ -37,10 +37,11 @@ impl SemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
     ) -> OpenCarrierResult<MemoryId> {
-        self.remember_with_embedding(agent_id, content, source, scope, metadata, None)
+        self.remember_with_embedding(agent_id, content, source, scope, metadata, None, None)
     }
 
-    /// Store a new memory fragment with an optional embedding vector.
+    /// Store a new memory fragment with an optional embedding vector and tenant ID.
+    #[allow(clippy::too_many_arguments)]
     pub fn remember_with_embedding(
         &self,
         agent_id: AgentId,
@@ -49,6 +50,7 @@ impl SemanticStore {
         scope: &str,
         metadata: HashMap<String, serde_json::Value>,
         embedding: Option<&[f32]>,
+        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<MemoryId> {
         let conn = self
             .conn
@@ -61,10 +63,11 @@ impl SemanticStore {
         let meta_str = serde_json::to_string(&metadata)
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
         let embedding_bytes: Option<Vec<u8>> = embedding.map(embedding_to_bytes);
+        let tid = tenant_id.unwrap_or("");
 
         conn.execute(
-            "INSERT INTO memories (id, agent_id, content, source, scope, confidence, metadata, created_at, accessed_at, access_count, deleted, embedding)
-             VALUES (?1, ?2, ?3, ?4, ?5, 1.0, ?6, ?7, ?7, 0, 0, ?8)",
+            "INSERT INTO memories (id, agent_id, content, source, scope, confidence, metadata, created_at, accessed_at, access_count, deleted, embedding, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1.0, ?6, ?7, ?7, 0, 0, ?8, ?9)",
             rusqlite::params![
                 id.0.to_string(),
                 agent_id.0.to_string(),
@@ -74,6 +77,7 @@ impl SemanticStore {
                 meta_str,
                 now,
                 embedding_bytes,
+                tid,
             ],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -128,6 +132,11 @@ impl SemanticStore {
 
         // Apply filters
         if let Some(ref f) = filter {
+            if let Some(ref tid) = f.tenant_id {
+                sql.push_str(&format!(" AND tenant_id = ?{param_idx}"));
+                params.push(Box::new(tid.clone()));
+                param_idx += 1;
+            }
             if let Some(agent_id) = f.agent_id {
                 sql.push_str(&format!(" AND agent_id = ?{param_idx}"));
                 params.push(Box::new(agent_id.0.to_string()));
@@ -432,6 +441,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&embedding),
+                None,
             )
             .unwrap();
         assert_ne!(id.0.to_string(), "");
@@ -455,6 +465,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&emb_rust),
+                None,
             )
             .unwrap();
         store
@@ -465,6 +476,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&emb_python),
+                None,
             )
             .unwrap();
         store
@@ -475,6 +487,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&emb_mixed),
+                None,
             )
             .unwrap();
 
@@ -533,6 +546,7 @@ mod tests {
                 "episodic",
                 HashMap::new(),
                 Some(&[1.0, 0.0]),
+                None,
             )
             .unwrap();
         store

@@ -58,17 +58,26 @@ function settingsPage() {
     async loadSecurity() { this.secLoading = true; try { this.securityData = await OpenCarrierAPI.get('/api/security'); } catch(e) { this.securityData = null; } this.secLoading = false; },
     isActive(key) { if (!this.securityData) return true; var core = this.securityData.core_protections || {}; return core[key] !== undefined ? core[key] : true; },
     async verifyAuditChain() { this.verifyingChain = true; this.chainResult = null; try { var res = await OpenCarrierAPI.get('/api/audit/verify'); this.chainResult = res; } catch(e) { this.chainResult = { valid: false, error: e.message }; } this.verifyingChain = false; },
-    // WeChat iLink binding
-    wechatData: null,
-    wechatLoading: false,
+    // Unified channels
+    channelsData: null,
+    channelsLoading: false,
+    // WeChat QR (from original wechat)
     wechatQrCode: null,
     wechatQrRaw: null,
     wechatQrStatus: null,
     wechatPolling: false,
-    async loadWechatBindings() { this.wechatLoading = true; try { var res = await OpenCarrierAPI.get('/api/weixin/status'); this.wechatData = res.tenants || []; } catch(e) { this.wechatData = []; } this.wechatLoading = false; },
+    // WeCom form
+    wecomForm: { name: '', mode: 'smartbot', corp_id: '', bot_id: '', secret: '', webhook_port: 8454, encoding_aes_key: '' },
+    wecomSaving: false,
+    // Feishu form
+    feishuForm: { name: '', app_id: '', app_secret: '', brand: 'feishu' },
+    feishuSaving: false,
+    async loadChannels() { this.channelsLoading = true; try { this.channelsData = await OpenCarrierAPI.get('/api/channels/status'); } catch(e) { this.channelsData = null; OpenCarrierToast.error('Failed to load channels: ' + (e.message || e)); } this.channelsLoading = false; },
     async startQrLogin() { this.wechatQrCode = null; this.wechatQrRaw = null; this.wechatQrStatus = null; this.wechatPolling = true; try { var res = await OpenCarrierAPI.get('/api/weixin/qrcode?tenant=default'); if (res.data && res.data.qrcode_img_content) { this.wechatQrCode = res.data.qrcode_img_content; this.wechatQrRaw = res.data.qrcode; this.pollQrStatus(); } else { OpenCarrierToast.error('QR code not available'); this.wechatPolling = false; } } catch(e) { OpenCarrierToast.error('Failed to get QR code: ' + (e.message || e)); this.wechatPolling = false; } },
-    async pollQrStatus() { if (!this.wechatQrRaw || !this.wechatPolling) return; try { var res = await OpenCarrierAPI.get('/api/weixin/qrcode-status?tenant=default&qrcode=' + encodeURIComponent(this.wechatQrRaw)); this.wechatQrStatus = res.status; if (res.status === 'confirmed') { this.wechatPolling = false; OpenCarrierToast.success('WeChat bound successfully!'); await this.loadWechatBindings(); return; } if (res.status === 'expired') { this.wechatPolling = false; return; } } catch(e) { /* retry on network error */ } var self = this; setTimeout(function() { self.pollQrStatus(); }, 3000); },
+    async pollQrStatus() { if (!this.wechatQrRaw || !this.wechatPolling) return; try { var res = await OpenCarrierAPI.get('/api/weixin/qrcode-status?tenant=default&qrcode=' + encodeURIComponent(this.wechatQrRaw)); this.wechatQrStatus = res.status; if (res.status === 'confirmed') { this.wechatPolling = false; OpenCarrierToast.success('WeChat bound successfully!'); await this.loadChannels(); return; } if (res.status === 'expired') { this.wechatPolling = false; return; } } catch(e) { /* retry on network error */ } var self = this; setTimeout(function() { self.pollQrStatus(); }, 3000); },
     stopQrPoll() { this.wechatPolling = false; },
+    async wecomAddTenant() { var f = this.wecomForm; if (!f.name.trim() || !f.corp_id.trim() || !f.secret.trim()) { OpenCarrierToast.error('Name, Corp ID, and Secret are required'); return; } this.wecomSaving = true; try { await OpenCarrierAPI.post('/api/channels/wecom/tenants', { name: f.name.trim(), mode: f.mode, corp_id: f.corp_id.trim(), bot_id: f.bot_id.trim(), secret: f.secret.trim(), webhook_port: f.webhook_port || 8454, encoding_aes_key: f.encoding_aes_key.trim() }); OpenCarrierToast.success('WeCom tenant added'); this.wecomForm = { name: '', mode: 'smartbot', corp_id: '', bot_id: '', secret: '', webhook_port: 8454, encoding_aes_key: '' }; await this.loadChannels(); } catch(e) { OpenCarrierToast.error('Failed to add tenant: ' + (e.message || e)); } this.wecomSaving = false; },
+    async feishuAddTenant() { var f = this.feishuForm; if (!f.name.trim() || !f.app_id.trim() || !f.app_secret.trim()) { OpenCarrierToast.error('Name, App ID, and App Secret are required'); return; } this.feishuSaving = true; try { await OpenCarrierAPI.post('/api/channels/feishu/tenants', { name: f.name.trim(), app_id: f.app_id.trim(), app_secret: f.app_secret.trim(), brand: f.brand }); OpenCarrierToast.success('Feishu tenant added'); this.feishuForm = { name: '', app_id: '', app_secret: '', brand: 'feishu' }; await this.loadChannels(); } catch(e) { OpenCarrierToast.error('Failed to add tenant: ' + (e.message || e)); } this.feishuSaving = false; },
     formatWechatExpiry(secs) { if (!secs || secs <= 0) return '-'; var h = Math.floor(secs / 3600); var m = Math.floor((secs % 3600) / 60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; }
   };
 }

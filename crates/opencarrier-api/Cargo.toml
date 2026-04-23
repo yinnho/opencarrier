@@ -38,6 +38,7 @@ socket2 = { workspace = true }
 reqwest = { workspace = true }
 urlencoding = "2"
 anyhow = { workspace = true }
+fs4 = "0.12"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

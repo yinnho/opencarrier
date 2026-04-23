@@ -50,11 +50,14 @@ pub trait KernelHandle: Send + Sync {
     /// Kill an agent by ID.
     fn kill_agent(&self, agent_id: &str) -> Result<(), String>;
 
-    /// Store a value in shared memory (cross-agent accessible).
-    fn memory_store(&self, key: &str, value: serde_json::Value) -> Result<(), String>;
+    /// Store a key-value pair in the agent's own memory namespace.
+    fn memory_store(&self, agent_id: &str, key: &str, value: serde_json::Value) -> Result<(), String>;
 
-    /// Recall a value from shared memory.
-    fn memory_recall(&self, key: &str) -> Result<Option<serde_json::Value>, String>;
+    /// Recall a value from the agent's own memory namespace.
+    fn memory_recall(&self, agent_id: &str, key: &str) -> Result<Option<serde_json::Value>, String>;
+
+    /// List all keys in the agent's own memory namespace.
+    fn memory_list(&self, agent_id: &str) -> Result<Vec<(String, serde_json::Value)>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
     fn find_agents(&self, query: &str) -> Vec<AgentInfo>;

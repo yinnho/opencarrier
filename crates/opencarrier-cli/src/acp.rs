@@ -7,6 +7,7 @@
 //! See: https://agentclientprotocol.com
 
 use opencarrier_kernel::OpenCarrierKernel;
+use opencarrier_memory::acp_session::AcpSessionStore;
 use opencarrier_runtime::llm_driver::StreamEvent;
 use opencarrier_types::agent::AgentId;
 use opencarrier_types::message::StopReason;
@@ -14,11 +15,14 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
-use crate::serve::{jsonrpc_error, jsonrpc_success, JsonRpcRequest, Response, INTERNAL_ERROR,
-                    INVALID_PARAMS, METHOD_NOT_FOUND};
+use crate::serve::{
+    jsonrpc_error, jsonrpc_success, write_response, JsonRpcRequest, Response, SharedWriter,
+    INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
+};
 
 // ---------------------------------------------------------------------------
 // ACP Types
@@ -67,6 +71,14 @@ pub struct AcpSession {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Tracks an in-flight `session/prompt` for cancellation.
+pub struct ActivePrompt {
+    /// Set by `session/cancel` to signal the prompt thread to stop.
+    pub cancelled: Arc<AtomicBool>,
+    /// Set by the prompt thread when it finishes (normally or by cancellation).
+    pub completed: Arc<AtomicBool>,
+}
+
 /// Connection-level state for the ACP protocol.
 #[derive(Default)]
 pub struct AcpConnectionState {
@@ -74,6 +86,8 @@ pub struct AcpConnectionState {
     pub sessions: HashMap<String, AcpSession>,
     /// Whether initialize handshake completed.
     pub initialized: bool,
+    /// Active prompt threads: session_id -> cancel/completed flags.
+    pub active_prompts: HashMap<String, ActivePrompt>,
 }
 
 // ---------------------------------------------------------------------------
@@ -106,13 +120,17 @@ pub fn is_acp_method(method: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Handle an ACP protocol request.
+///
+/// Returns `None` when the handler writes its own response (session/prompt,
+/// session/cancel). Returns `Some(Response)` for synchronous handlers whose
+/// response the main loop should write.
 pub fn handle_acp_request(
     kernel: &Arc<OpenCarrierKernel>,
-    rt: &tokio::runtime::Runtime,
+    rt: &Arc<tokio::runtime::Runtime>,
     req: &JsonRpcRequest,
     state: &mut AcpConnectionState,
-    writer: &mut dyn Write,
-    store: &opencarrier_memory::acp_session::AcpSessionStore,
+    writer: &SharedWriter,
+    store: &AcpSessionStore,
 ) -> Option<Response> {
     // Validate jsonrpc version
     if req.jsonrpc != "2.0" {
@@ -140,6 +158,8 @@ pub fn handle_acp_request(
         }
         "session/new" => acp_session_new(kernel, req, state, store),
         "session/prompt" => acp_session_prompt(kernel, rt, req, state, writer, store),
+        "session/load" => acp_session_load(kernel, req, state, writer, store),
+        "session/cancel" => acp_session_cancel(req, state),
         "session/list" => acp_session_list(req, store),
         "session/set_mode" => acp_session_set_mode(req),
         "session/request_permission" => Some(jsonrpc_error(
@@ -147,20 +167,14 @@ pub fn handle_acp_request(
             METHOD_NOT_FOUND,
             "session/request_permission not supported",
         )),
-        "session/cancel" => Some(jsonrpc_error(
-            req.id.clone(),
-            METHOD_NOT_FOUND,
-            "session/cancel not yet supported (Phase 2)",
-        )),
-        "session/load" => Some(jsonrpc_error(
-            req.id.clone(),
-            METHOD_NOT_FOUND,
-            "session/load not yet supported (Phase 2)",
-        )),
         "_aginx/listAgents" | "listAgents" => acp_aginx_list_agents(kernel, req),
-        "_aginx/listConversations" | "listConversations" => acp_aginx_list_conversations(req, store),
+        "_aginx/listConversations" | "listConversations" => {
+            acp_aginx_list_conversations(req, store)
+        }
         "_aginx/getMessages" | "getMessages" => acp_aginx_get_messages(req, store),
-        "_aginx/deleteConversation" | "deleteConversation" => acp_aginx_delete_conversation(req, state, store),
+        "_aginx/deleteConversation" | "deleteConversation" => {
+            acp_aginx_delete_conversation(req, state, store)
+        }
         _ => Some(jsonrpc_error(
             req.id.clone(),
             METHOD_NOT_FOUND,
@@ -201,7 +215,7 @@ fn acp_initialize(req: &JsonRpcRequest, state: &mut AcpConnectionState) -> Optio
                 "version": env!("CARGO_PKG_VERSION")
             },
             "agentCapabilities": {
-                "loadSession": false,
+                "loadSession": true,
                 "promptCapabilities": {
                     "image": false,
                     "audio": false,
@@ -223,7 +237,7 @@ fn acp_session_new(
     kernel: &Arc<OpenCarrierKernel>,
     req: &JsonRpcRequest,
     state: &mut AcpConnectionState,
-    store: &opencarrier_memory::acp_session::AcpSessionStore,
+    store: &AcpSessionStore,
 ) -> Option<Response> {
     let params = req.params.as_ref();
 
@@ -241,11 +255,7 @@ fn acp_session_new(
     let agent_id = match resolve_agent_id(kernel, params) {
         Ok(id) => id,
         Err(msg) => {
-            return Some(jsonrpc_error(
-                req.id.clone(),
-                INVALID_PARAMS,
-                &msg,
-            ));
+            return Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, &msg));
         }
     };
 
@@ -291,13 +301,15 @@ fn acp_session_new(
 }
 
 /// session/prompt — send message with streaming session/update notifications.
+///
+/// Spawns a worker thread so the main loop stays responsive for session/cancel.
 fn acp_session_prompt(
     kernel: &Arc<OpenCarrierKernel>,
-    rt: &tokio::runtime::Runtime,
+    rt: &Arc<tokio::runtime::Runtime>,
     req: &JsonRpcRequest,
-    state: &AcpConnectionState,
-    writer: &mut dyn Write,
-    store: &opencarrier_memory::acp_session::AcpSessionStore,
+    state: &mut AcpConnectionState,
+    writer: &SharedWriter,
+    store: &AcpSessionStore,
 ) -> Option<Response> {
     let params = match req.params.as_ref() {
         Some(p) => p,
@@ -305,7 +317,13 @@ fn acp_session_prompt(
     };
     let session_id = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(id) => id,
-        None => return Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, "Missing sessionId")),
+        None => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Missing sessionId",
+            ))
+        }
     };
 
     let session = match state.sessions.get(session_id) {
@@ -318,6 +336,17 @@ fn acp_session_prompt(
             ))
         }
     };
+
+    // Reject if a prompt is already active on this session
+    if let Some(active) = state.active_prompts.get(session_id) {
+        if !active.completed.load(Ordering::Relaxed) {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Prompt already in progress for this session",
+            ));
+        }
+    }
 
     // Extract text from prompt content blocks
     let prompt: Vec<AcpContentBlock> = params
@@ -344,99 +373,270 @@ fn acp_session_prompt(
     }
 
     let agent_id = session.agent_id;
+    let cwd = session.cwd.clone();
 
     // Persist user message before streaming
-    if let Err(e) = store.append_user_message(session_id, &message, Some(&session.cwd)) {
-        error!("[acp] Failed to append user message: {e}");
-        return Some(jsonrpc_error(req.id.clone(), INTERNAL_ERROR, &format!("Failed to append user message: {e}")));
+    if let Err(e) = store.append_user_message(session_id, &message, Some(&cwd)) {
+        return Some(jsonrpc_error(
+            req.id.clone(),
+            INTERNAL_ERROR,
+            &format!("Failed to append user message: {e}"),
+        ));
     }
 
-    // Build kernel handle for agent loop (enables inter-agent calls, cron, etc.)
-    let kernel_handle = kernel.get_kernel_handle();
+    // Create cancel/completed tokens
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let completed = Arc::new(AtomicBool::new(false));
+    state.active_prompts.insert(
+        session_id.to_string(),
+        ActivePrompt {
+            cancelled: cancelled.clone(),
+            completed: completed.clone(),
+        },
+    );
 
+    // Clone everything for the worker thread
+    let kernel = kernel.clone();
+    let rt = rt.clone();
+    let writer = writer.clone();
+    let store = store.clone();
     let req_id = req.id.clone();
     let session_id_owned = session_id.to_string();
 
-    let result = rt.block_on(async {
-        let (mut rx, handle) = match kernel
-            .send_message_streaming(agent_id, &message, kernel_handle, None, None)
-        {
-            Ok(r) => r,
-            Err(e) => return Err(format!("Failed to start streaming: {e}")),
-        };
+    std::thread::spawn(move || {
+        let kernel_handle = kernel.get_kernel_handle();
 
-        // Track tool call IDs as FIFO: (tool_name, tool_call_id)
-        // When multiple parallel calls use the same tool, each gets its own ID.
-        let mut tool_id_fifo: Vec<(String, String)> = Vec::new();
+        let result = rt.block_on(async {
+            let (mut rx, handle) = match kernel
+                .send_message_streaming(agent_id, &message, kernel_handle, None, None)
+            {
+                Ok(r) => r,
+                Err(e) => return Err(format!("Failed to start streaming: {e}")),
+            };
 
-        let mut stop_reason_str = "end_turn".to_string();
-        let mut assistant_text = String::new();
+            // Track tool call IDs as FIFO: (tool_name, tool_call_id)
+            let mut tool_id_fifo: Vec<(String, String)> = Vec::new();
 
-        while let Some(event) = rx.recv().await {
-            if let StreamEvent::TextDelta { text } = &event {
-                assistant_text.push_str(text);
-            }
+            let mut stop_reason_str = "end_turn".to_string();
+            let mut assistant_text = String::new();
 
-            if let Some(notification) = map_stream_event_to_acp(
-                &session_id_owned,
-                &event,
-                &mut tool_id_fifo,
-            ) {
-                match serde_json::to_string(&notification) {
-                    Ok(json_line) => {
-                        if let Err(e) = writeln!(writer, "{}", json_line) {
-                            error!("[acp] Write error during streaming: {e}");
-                            break;
-                        }
-                        if let Err(e) = writer.flush() {
-                            error!("[acp] Flush error during streaming: {e}");
-                            break;
-                        }
+            while let Some(event) = rx.recv().await {
+                // Check cancellation
+                if cancelled.load(Ordering::Relaxed) {
+                    stop_reason_str = "cancelled".to_string();
+                    break;
+                }
+
+                if let StreamEvent::TextDelta { text } = &event {
+                    assistant_text.push_str(text);
+                }
+
+                if let Some(notification) =
+                    map_stream_event_to_acp(&session_id_owned, &event, &mut tool_id_fifo)
+                {
+                    let mut w = writer.lock().unwrap();
+                    if let Ok(json_line) = serde_json::to_string(&notification) {
+                        let _ = writeln!(w, "{}", json_line);
+                        let _ = w.flush();
                     }
-                    Err(e) => {
-                        error!("[acp] Serialize notification error: {e}");
-                    }
+                }
+
+                if let StreamEvent::ContentComplete { stop_reason, .. } = &event {
+                    stop_reason_str = match stop_reason {
+                        StopReason::EndTurn | StopReason::StopSequence => "end_turn".to_string(),
+                        StopReason::MaxTokens => "max_tokens".to_string(),
+                        StopReason::ToolUse => "max_turn_requests".to_string(),
+                    };
                 }
             }
 
-            if let StreamEvent::ContentComplete { stop_reason, .. } = &event {
-                stop_reason_str = match stop_reason {
-                    StopReason::EndTurn | StopReason::StopSequence => "end_turn".to_string(),
-                    StopReason::MaxTokens => "max_tokens".to_string(),
-                    StopReason::ToolUse => "max_turn_requests".to_string(), // loop terminated mid-tool
-                };
+            // Wait for agent loop to finish post-processing
+            let _ = handle.await;
+
+            Ok((stop_reason_str, assistant_text))
+        });
+
+        // Persist assistant message
+        if let Ok((_, ref text)) = result {
+            if !text.is_empty() {
+                let _ = store.append_assistant_message(&session_id_owned, text);
             }
         }
 
-        // Wait for agent loop to finish post-processing
-        let _ = handle.await;
+        // Write final response
+        let final_response = match result {
+            Ok((stop_reason, _)) => {
+                jsonrpc_success(req_id.clone(), json!({"stopReason": stop_reason}))
+            }
+            Err(e) => {
+                error!("[acp] session/prompt error: {e}");
+                jsonrpc_error(req_id.clone(), INTERNAL_ERROR, &e)
+            }
+        };
 
-        Ok((stop_reason_str, assistant_text))
+        write_response(&writer, final_response);
+
+        // Mark as completed
+        completed.store(true, Ordering::Relaxed);
     });
 
-    // Persist assistant message after streaming completes
-    if let Ok((_, ref assistant_text)) = result {
-        if let Err(e) = store.append_assistant_message(session_id, assistant_text) {
-            error!("[acp] Failed to append assistant message: {e}");
+    None // Worker thread writes the response
+}
+
+/// session/load — replay conversation history, then return result:null.
+///
+/// Per ACP spec, the agent must replay all messages via session/update
+/// notifications (user_message_chunk / agent_message_chunk), then respond.
+fn acp_session_load(
+    kernel: &Arc<OpenCarrierKernel>,
+    req: &JsonRpcRequest,
+    state: &mut AcpConnectionState,
+    writer: &SharedWriter,
+    store: &AcpSessionStore,
+) -> Option<Response> {
+    let params = req.params.as_ref();
+    let session_id = match params
+        .and_then(|p| p.get("sessionId"))
+        .and_then(|v| v.as_str())
+    {
+        Some(id) => id,
+        None => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Missing sessionId",
+            ))
+        }
+    };
+
+    let cwd = params
+        .and_then(|p| p.get("cwd"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("/");
+    let mcp_servers = params
+        .and_then(|p| p.get("mcpServers"))
+        .cloned()
+        .unwrap_or(json!([]));
+
+    // Load session meta from persistence
+    let meta = match store.get_session_meta(session_id) {
+        Some(m) => m,
+        None => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                &format!("Session not found: {}", session_id),
+            ))
+        }
+    };
+
+    // Resolve agent from stored meta
+    let agent_id = match meta.agent_id.parse::<AgentId>() {
+        Ok(id) => id,
+        Err(_) => match kernel.registry.find_by_name(&meta.agent_id) {
+            Some(entry) => entry.id,
+            None => {
+                return Some(jsonrpc_error(
+                    req.id.clone(),
+                    INVALID_PARAMS,
+                    &format!("Agent not found: {}", meta.agent_id),
+                ))
+            }
+        },
+    };
+
+    // Re-add session to connection state
+    let created_at = chrono::DateTime::from_timestamp_millis(meta.created_at as i64)
+        .unwrap_or(chrono::Utc::now());
+    state.sessions.insert(
+        session_id.to_string(),
+        AcpSession {
+            agent_id,
+            cwd: cwd.to_string(),
+            mcp_servers,
+            created_at,
+        },
+    );
+
+    info!(
+        "[acp] session/load: sessionId={}, agentId={}, replaying history",
+        session_id, agent_id
+    );
+
+    // Load messages and replay as session/update notifications
+    let messages = match store.get_messages(session_id, 1000) {
+        Ok(msgs) => msgs,
+        Err(e) => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INTERNAL_ERROR,
+                &format!("Failed to load messages: {e}"),
+            ))
+        }
+    };
+
+    {
+        let mut w = writer.lock().unwrap();
+        for msg in &messages {
+            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+            let update_type = match role {
+                "user" => "user_message_chunk",
+                _ => "agent_message_chunk",
+            };
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+            let notification = json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": update_type,
+                        "content": {"type": "text", "text": content}
+                    }
+                }
+            });
+
+            if let Ok(json_line) = serde_json::to_string(&notification) {
+                let _ = writeln!(w, "{}", json_line);
+            }
+        }
+        let _ = w.flush();
+    }
+
+    Some(jsonrpc_success(req.id.clone(), Value::Null))
+}
+
+/// session/cancel — cancel an in-flight prompt (notification, no response).
+///
+/// Sets the cancelled flag so the prompt worker thread stops streaming
+/// and returns `{"stopReason": "cancelled"}`.
+fn acp_session_cancel(
+    req: &JsonRpcRequest,
+    state: &mut AcpConnectionState,
+) -> Option<Response> {
+    let session_id = req
+        .params
+        .as_ref()
+        .and_then(|p| p.get("sessionId"))
+        .and_then(|v| v.as_str());
+
+    if let Some(id) = session_id {
+        if let Some(active) = state.active_prompts.get(id) {
+            if !active.completed.load(Ordering::Relaxed) {
+                active.cancelled.store(true, Ordering::Relaxed);
+                debug!("[acp] Cancelled prompt for session {}", id);
+            }
         }
     }
 
-    match result {
-        Ok((stop_reason, _)) => Some(jsonrpc_success(
-            req_id,
-            json!({ "stopReason": stop_reason }),
-        )),
-        Err(e) => {
-            error!("[acp] session/prompt error: {e}");
-            Some(jsonrpc_error(req_id, INTERNAL_ERROR, &e))
-        }
-    }
+    None // No response — this is a notification
 }
 
 /// session/list — list all persisted sessions.
 fn acp_session_list(
     req: &JsonRpcRequest,
-    store: &opencarrier_memory::acp_session::AcpSessionStore,
+    store: &AcpSessionStore,
 ) -> Option<Response> {
     match store.list_sessions() {
         Ok(sessions) => Some(jsonrpc_success(
@@ -465,7 +665,10 @@ fn acp_session_set_mode(req: &JsonRpcRequest) -> Option<Response> {
 }
 
 /// _aginx/listAgents — list opencarrier agents.
-fn acp_aginx_list_agents(kernel: &Arc<OpenCarrierKernel>, req: &JsonRpcRequest) -> Option<Response> {
+fn acp_aginx_list_agents(
+    kernel: &Arc<OpenCarrierKernel>,
+    req: &JsonRpcRequest,
+) -> Option<Response> {
     let agents: Vec<Value> = kernel
         .registry
         .list()
@@ -489,7 +692,7 @@ fn acp_aginx_list_agents(kernel: &Arc<OpenCarrierKernel>, req: &JsonRpcRequest) 
 /// _aginx/listConversations — list conversations from persisted sessions.
 fn acp_aginx_list_conversations(
     req: &JsonRpcRequest,
-    store: &opencarrier_memory::acp_session::AcpSessionStore,
+    store: &AcpSessionStore,
 ) -> Option<Response> {
     match store.list_sessions() {
         Ok(sessions) => {
@@ -520,7 +723,7 @@ fn acp_aginx_list_conversations(
 /// _aginx/getMessages — get messages for a conversation (session).
 fn acp_aginx_get_messages(
     req: &JsonRpcRequest,
-    store: &opencarrier_memory::acp_session::AcpSessionStore,
+    store: &AcpSessionStore,
 ) -> Option<Response> {
     let params = req.params.as_ref();
     let conversation_id = params
@@ -562,7 +765,7 @@ fn acp_aginx_get_messages(
 fn acp_aginx_delete_conversation(
     req: &JsonRpcRequest,
     state: &mut AcpConnectionState,
-    store: &opencarrier_memory::acp_session::AcpSessionStore,
+    store: &AcpSessionStore,
 ) -> Option<Response> {
     let params = req.params.as_ref();
     let conversation_id = params
@@ -674,7 +877,10 @@ fn map_stream_event_to_acp(
 
 /// Resolve agent ID from session/new params.
 /// Requires _meta.aginx/agentId; returns an error if missing or unknown.
-fn resolve_agent_id(kernel: &Arc<OpenCarrierKernel>, params: Option<&Value>) -> Result<AgentId, String> {
+fn resolve_agent_id(
+    kernel: &OpenCarrierKernel,
+    params: Option<&Value>,
+) -> Result<AgentId, String> {
     let explicit = params
         .and_then(|p| p.get("_meta"))
         .and_then(|m| m.get("aginx/agentId"))
@@ -769,6 +975,7 @@ mod tests {
         assert!(is_acp_method("session/new"));
         assert!(is_acp_method("session/prompt"));
         assert!(is_acp_method("session/cancel"));
+        assert!(is_acp_method("session/load"));
         assert!(is_acp_method("session/list"));
         assert!(is_acp_method("session/set_mode"));
         assert!(is_acp_method("_aginx/listAgents"));
@@ -896,11 +1103,17 @@ mod tests {
         let mut tool_fifo = Vec::new();
 
         // Two parallel read_file calls
-        let e1 = StreamEvent::ToolUseStart { id: "call_1".to_string(), name: "read_file".to_string() };
+        let e1 = StreamEvent::ToolUseStart {
+            id: "call_1".to_string(),
+            name: "read_file".to_string(),
+        };
         let _ = map_stream_event_to_acp("s", &e1, &mut tool_fifo);
         assert_eq!(tool_fifo.len(), 1);
 
-        let e2 = StreamEvent::ToolUseStart { id: "call_2".to_string(), name: "read_file".to_string() };
+        let e2 = StreamEvent::ToolUseStart {
+            id: "call_2".to_string(),
+            name: "read_file".to_string(),
+        };
         let _ = map_stream_event_to_acp("s", &e2, &mut tool_fifo);
         assert_eq!(tool_fifo.len(), 2);
 

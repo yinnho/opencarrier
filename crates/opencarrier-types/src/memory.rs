@@ -92,6 +92,8 @@ pub struct MemoryFilter {
     pub before: Option<DateTime<Utc>>,
     /// Metadata key-value filters.
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Filter by tenant ID (for multi-tenant isolation).
+    pub tenant_id: Option<String>,
 }
 
 impl MemoryFilter {

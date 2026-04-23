@@ -100,7 +100,7 @@ impl BackgroundExecutor {
 
                         let prompt = format!(
                             "[AUTONOMOUS TICK] You are running in continuous mode. \
-                             Check your goals, review shared memory for pending tasks, \
+                             Check your goals, review your memory for pending tasks, \
                              and take any necessary actions. Agent: {name}"
                         );
                         debug!(agent = %name, "Continuous loop: sending self-prompt");
