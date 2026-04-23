@@ -8,18 +8,27 @@ use crate::api;
 use crate::token::WEIXIN_STATE;
 use crate::types::*;
 use opencarrier_plugin_sdk::{ChannelAdapter, MessageSender, PluginContent, PluginError, PluginMessage};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 /// Channel adapter for a single iLink tenant (one scanned WeChat account).
 pub struct ILinkChannel {
     tenant_name: String,
+    /// Shutdown signal for the polling thread (set to true to stop).
+    shutdown: Arc<AtomicBool>,
+    /// Handle to the polling thread (for join on stop).
+    thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ILinkChannel {
     pub fn new(tenant_name: String) -> Self {
-        Self { tenant_name }
+        Self {
+            tenant_name,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            thread_handle: None,
+        }
     }
 }
 
@@ -39,18 +48,19 @@ impl ChannelAdapter for ILinkChannel {
         if let Some(state) = WEIXIN_STATE.tenants.get(&tenant_name) {
             state.active.store(true, Ordering::Relaxed);
         } else {
-            // Tenant not loaded yet — will be picked up when QR scan completes
             info!(tenant = %tenant_name, "ILinkChannel starting in waiting mode (no token yet)");
         }
 
+        let shutdown = self.shutdown.clone();
         let thread_tenant = tenant_name.clone();
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name(format!("weixin-poll-{tenant_name}"))
             .spawn(move || {
-                run_poll_loop(&thread_tenant, sender);
+                run_poll_loop(&thread_tenant, sender, &shutdown);
             })
             .map_err(|e| PluginError::channel(format!("Failed to spawn polling thread: {e}")))?;
 
+        self.thread_handle = Some(handle);
         info!(tenant = %tenant_name, "ILinkChannel started");
         Ok(())
     }
@@ -79,39 +89,61 @@ impl ChannelAdapter for ILinkChannel {
         // Generate client_id
         let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
 
-        // Send via iLink API (block_on from sync context)
+        // Clone what we need, then do a blocking HTTP call on the tenant's own runtime.
+        // We use a small single-threaded runtime here instead of Handle::current()
+        // because send() may be called from any thread (including non-tokio threads via FFI).
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();
         let http = state.http.clone();
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                api::send_message(
-                    &http,
-                    &bot_token,
-                    &baseurl,
-                    user_id,
-                    &context_token,
-                    &client_id,
-                    text,
-                )
-                .await
-                .map_err(PluginError::channel)
-            })
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PluginError::channel(format!("Failed to create send runtime: {e}")))?;
+
+        rt.block_on(async {
+            api::send_message(
+                &http,
+                &bot_token,
+                &baseurl,
+                user_id,
+                &context_token,
+                &client_id,
+                text,
+            )
+            .await
+            .map_err(PluginError::channel)
         })
     }
 
     fn stop(&mut self) {
+        // Signal the polling thread to shut down
+        self.shutdown.store(true, Ordering::Relaxed);
+
         if let Some(state) = WEIXIN_STATE.tenants.get(&self.tenant_name) {
             state.active.store(false, Ordering::Relaxed);
         }
+
+        // Wait for the polling thread to finish (with timeout to avoid hanging)
+        if let Some(handle) = self.thread_handle.take() {
+            // The thread should exit within one poll cycle (~40s max)
+            // Use a reasonable timeout to avoid blocking indefinitely
+            match handle.join() {
+                Ok(()) => info!(tenant = %self.tenant_name, "Polling thread joined cleanly"),
+                Err(e) => error!(tenant = %self.tenant_name, "Polling thread panicked: {e:?}"),
+            }
+        }
+
         info!(tenant = %self.tenant_name, "ILinkChannel stopped");
     }
 }
 
 /// Main polling loop (runs in a dedicated thread with its own runtime).
-fn run_poll_loop(tenant_name: &str, sender: MessageSender) {
+fn run_poll_loop(
+    tenant_name: &str,
+    sender: MessageSender,
+    shutdown: &AtomicBool,
+) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -124,27 +156,50 @@ fn run_poll_loop(tenant_name: &str, sender: MessageSender) {
     };
 
     rt.block_on(async move {
-        poll_loop_inner(tenant_name, sender).await;
+        poll_loop_inner(tenant_name, sender, shutdown).await;
     });
 }
 
-async fn poll_loop_inner(tenant_name: &str, sender: MessageSender) {
+async fn poll_loop_inner(
+    tenant_name: &str,
+    sender: MessageSender,
+    shutdown: &AtomicBool,
+) {
     info!(tenant = tenant_name, "Poll loop started");
 
     loop {
-        // Wait for tenant to be registered and active
+        // Check shutdown signal first
+        if shutdown.load(Ordering::Relaxed) {
+            info!(tenant = tenant_name, "Shutdown signal received, exiting poll loop");
+            return;
+        }
+
+        // Wait for tenant to be registered and active (with shutdown check)
         let (bot_token, baseurl, http) = {
             let state = match WEIXIN_STATE.tenants.get(tenant_name) {
                 Some(s) => s,
                 None => {
-                    // Tenant not registered yet, wait and retry
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    // Sleep in short intervals to check shutdown flag
+                    for _ in 0..10 {
+                        if shutdown.load(Ordering::Relaxed) {
+                            info!(tenant = tenant_name, "Shutdown during wait, exiting");
+                            return;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
                     continue;
                 }
             };
 
             if !state.active.load(Ordering::Relaxed) || state.is_expired() {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                // Sleep in short intervals to check shutdown flag
+                for _ in 0..10 {
+                    if shutdown.load(Ordering::Relaxed) {
+                        info!(tenant = tenant_name, "Shutdown during inactive wait, exiting");
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
                 continue;
             }
 
@@ -162,7 +217,8 @@ async fn poll_loop_inner(tenant_name: &str, sender: MessageSender) {
             .map(|s| s.cursor.lock().unwrap().clone())
             .unwrap_or_default();
 
-        // Long-poll getupdates
+        // Long-poll getupdates (35s hold) — shutdown is checked at the top of the loop.
+        // The poll will complete naturally; worst case we wait one cycle after stop().
         match api::get_updates(&http, &bot_token, &baseurl, &cursor).await {
             Ok(resp) => {
                 // Check for session expired

@@ -6674,19 +6674,62 @@ const WEIXIN_ILINK_BASE: &str = "https://ilinkai.weixin.qq.com";
 /// iLink bot_type for personal account.
 const WEIXIN_BOT_TYPE: u32 = 3;
 
+/// Validate tenant name: only alphanumeric, hyphen, underscore. Prevents path traversal.
+fn weixin_sanitize_tenant(name: &str) -> Option<&str> {
+    if name.is_empty() || name.len() > 64 {
+        return None;
+    }
+    if name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+/// Build a shared reqwest client for iLink API calls (no-redirect, no proxy tricks).
+fn weixin_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_default()
+}
+
+/// Validate that a baseurl from iLink response is safe (must match known iLink domain).
+fn weixin_validate_baseurl(url: &str) -> bool {
+    url.starts_with("https://ilinkai.weixin.qq.com")
+        || url.starts_with("https://ilinkai.weixin.qq.com/")
+}
+
+/// Atomic file write: write to `.tmp` then rename over target.
+fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, content)?;
+    std::fs::rename(&tmp_path, path)
+}
+
 /// GET `/api/weixin/qrcode` — fetch a fresh QR code for WeChat scanning.
 ///
 /// Query params: `?tenant=<name>` (optional, defaults to "default")
 pub async fn weixin_qrcode(
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let tenant = params.get("tenant").map(|s| s.as_str()).unwrap_or("default");
+    let raw_tenant = params.get("tenant").map(|s| s.as_str()).unwrap_or("default");
+    let tenant = match weixin_sanitize_tenant(raw_tenant) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Invalid tenant name: use only alphanumeric, hyphen, underscore (max 64 chars)" })),
+            );
+        }
+    };
 
     let url = format!(
         "{WEIXIN_ILINK_BASE}/ilink/bot/get_bot_qrcode?bot_type={WEIXIN_BOT_TYPE}"
     );
 
-    let http = reqwest::Client::new();
+    let http = weixin_http_client();
     let resp = match http.get(&url).send().await {
         Ok(r) => r,
         Err(e) => {
@@ -6732,7 +6775,16 @@ pub async fn weixin_qrcode_status(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let tenant = params.get("tenant").map(|s| s.as_str()).unwrap_or("default");
+    let raw_tenant = params.get("tenant").map(|s| s.as_str()).unwrap_or("default");
+    let tenant = match weixin_sanitize_tenant(raw_tenant) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Invalid tenant name" })),
+            );
+        }
+    };
     let qrcode = match params.get("qrcode") {
         Some(q) => q.clone(),
         None => {
@@ -6748,7 +6800,7 @@ pub async fn weixin_qrcode_status(
         urlencoding::encode(&qrcode)
     );
 
-    let http = reqwest::Client::new();
+    let http = weixin_http_client();
     let resp = match http
         .get(&url)
         .timeout(std::time::Duration::from_secs(40))
@@ -6809,7 +6861,7 @@ pub async fn weixin_qrcode_status(
             .get("bot_token")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let baseurl = data
+        let raw_baseurl = data
             .get("baseurl")
             .and_then(|v| v.as_str())
             .unwrap_or(WEIXIN_ILINK_BASE);
@@ -6819,30 +6871,55 @@ pub async fn weixin_qrcode_status(
             .unwrap_or("");
         let ilink_user_id = data.get("ilink_user_id").and_then(|v| v.as_str());
 
+        // Validate baseurl to prevent stored SSRF
+        let baseurl = if weixin_validate_baseurl(raw_baseurl) {
+            raw_baseurl
+        } else {
+            tracing::warn!(tenant, raw_baseurl, "iLink returned unexpected baseurl, falling back to default");
+            WEIXIN_ILINK_BASE
+        };
+
         if !bot_token.is_empty() && !ilink_bot_id.is_empty() {
             // Save token to disk so plugin can pick it up on restart
             let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
             if let Err(e) = std::fs::create_dir_all(&token_dir) {
                 tracing::error!(tenant, "Failed to create weixin token dir: {e}");
-            } else {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-                let token_file = serde_json::json!({
-                    "name": tenant,
-                    "bot_token": bot_token,
-                    "baseurl": baseurl,
-                    "ilink_bot_id": ilink_bot_id,
-                    "user_id": ilink_user_id,
-                    "expires_at": now + 86400, // 24h
-                    "bind_agent": null,
-                });
-                let path = token_dir.join(format!("{tenant}.json"));
-                if let Ok(json) = serde_json::to_string_pretty(&token_file) {
-                    if let Err(e) = std::fs::write(&path, json) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("Failed to create token directory: {e}") })),
+                );
+            }
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let token_file = serde_json::json!({
+                "name": tenant,
+                "bot_token": bot_token,
+                "baseurl": baseurl,
+                "ilink_bot_id": ilink_bot_id,
+                "user_id": ilink_user_id,
+                "expires_at": now + 86400, // 24h
+                "bind_agent": null,
+            });
+            let path = token_dir.join(format!("{tenant}.json"));
+            match serde_json::to_string_pretty(&token_file) {
+                Ok(json) => {
+                    if let Err(e) = atomic_write(&path, &json) {
                         tracing::error!(tenant, "Failed to write weixin token file: {e}");
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": format!("Failed to save token: {e}") })),
+                        );
                     }
+                }
+                Err(e) => {
+                    tracing::error!(tenant, "Failed to serialize token file: {e}");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": "Internal serialization error" })),
+                    );
                 }
             }
 
