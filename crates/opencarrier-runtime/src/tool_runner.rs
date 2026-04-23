@@ -2086,6 +2086,16 @@ async fn tool_clone_install(
         return Err("No files provided. At minimum, SOUL.md and system_prompt.md are required.".to_string());
     }
 
+    // SECURITY: Reject oversized file maps (max 20MB total content)
+    const MAX_FILES_TOTAL: usize = 20 * 1024 * 1024;
+    let total_size: usize = files.values().map(|v| v.as_str().map(|s| s.len()).unwrap_or(0)).sum();
+    if total_size > MAX_FILES_TOTAL {
+        return Err(format!(
+            "Clone files too large: {} bytes total (max 20MB)",
+            total_size
+        ));
+    }
+
     // Build CloneData from the file map
     use opencarrier_clone::{CloneData, SkillData, AgentData, pack_agx};
     use std::collections::HashMap;
@@ -2310,6 +2320,8 @@ fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> Result<PathBuf, Str
 /// Legacy web fetch (no SSRF protection, no readability). Used when WebToolsContext is unavailable.
 async fn tool_web_fetch_legacy(input: &serde_json::Value) -> Result<String, String> {
     let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
+    // SECURITY: SSRF check — block internal/metadata URLs
+    crate::web_fetch::check_ssrf(url)?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()

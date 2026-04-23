@@ -504,6 +504,8 @@ pub async fn build_router(
             auth_state,
             middleware::auth,
         ))
+        // SECURITY: Global body size limit — 10MB max for all endpoints
+        .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             gcra_limiter,
             rate_limiter::gcra_rate_limit,
