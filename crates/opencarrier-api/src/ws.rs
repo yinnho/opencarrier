@@ -984,9 +984,10 @@ async fn handle_command(
 fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_json::Value> {
     match event {
         StreamEvent::TextDelta { .. } => None, // Handled by debounce buffer
-        StreamEvent::ToolUseStart { name, .. } => Some(serde_json::json!({
+        StreamEvent::ToolUseStart { id, name, .. } => Some(serde_json::json!({
             "type": "tool_start",
             "tool": name,
+            "tool_use_id": id,
         })),
         StreamEvent::ToolUseEnd { name, input, .. } if name == "canvas_present" => {
             let html = input.get("html").and_then(|v| v.as_str()).unwrap_or("");
@@ -1001,7 +1002,7 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
                 "title": title,
             }))
         }
-        StreamEvent::ToolUseEnd { name, input, .. } => match verbose {
+        StreamEvent::ToolUseEnd { id, name, input, .. } => match verbose {
             VerboseLevel::Off => None,
             VerboseLevel::On => {
                 let input_preview: String = serde_json::to_string(input)
@@ -1012,6 +1013,7 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
                 Some(serde_json::json!({
                     "type": "tool_end",
                     "tool": name,
+                    "tool_use_id": id,
                     "input": input_preview,
                 }))
             }
@@ -1024,11 +1026,13 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
                 Some(serde_json::json!({
                     "type": "tool_end",
                     "tool": name,
+                    "tool_use_id": id,
                     "input": input_preview,
                 }))
             }
         },
         StreamEvent::ToolExecutionResult {
+            id,
             name,
             result_preview,
             is_error,
@@ -1036,6 +1040,7 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
             VerboseLevel::Off => Some(serde_json::json!({
                 "type": "tool_result",
                 "tool": name,
+                "tool_use_id": id,
                 "is_error": is_error,
             })),
             VerboseLevel::On => {
@@ -1043,6 +1048,7 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
                 Some(serde_json::json!({
                     "type": "tool_result",
                     "tool": name,
+                    "tool_use_id": id,
                     "result": truncated,
                     "is_error": is_error,
                 }))
@@ -1050,6 +1056,7 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
             VerboseLevel::Full => Some(serde_json::json!({
                 "type": "tool_result",
                 "tool": name,
+                "tool_use_id": id,
                 "result": result_preview,
                 "is_error": is_error,
             })),

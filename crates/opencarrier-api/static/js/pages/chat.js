@@ -534,7 +534,7 @@ function chatPage() {
           var lastMsg = this.messages.length ? this.messages[this.messages.length - 1] : null;
           if (lastMsg && lastMsg.streaming) {
             if (!lastMsg.tools) lastMsg.tools = [];
-            lastMsg.tools.push({ id: data.tool + '-' + Date.now(), name: data.tool, running: true, expanded: true, input: '', result: '', is_error: false });
+            lastMsg.tools.push({ id: data.tool_use_id || (data.tool + '-' + Date.now()), name: data.tool, running: true, expanded: true, input: '', result: '', is_error: false });
           }
           this.scrollToBottom();
           break;
@@ -544,7 +544,10 @@ function chatPage() {
           var lastMsg2 = this.messages.length ? this.messages[this.messages.length - 1] : null;
           if (lastMsg2 && lastMsg2.tools) {
             for (var ti = lastMsg2.tools.length - 1; ti >= 0; ti--) {
-              if (lastMsg2.tools[ti].name === data.tool && lastMsg2.tools[ti].running) {
+              var matchById = data.tool_use_id && lastMsg2.tools[ti].id === data.tool_use_id;
+              var matchByName = lastMsg2.tools[ti].name === data.tool && lastMsg2.tools[ti].running;
+              if (matchById || matchByName) {
+                if (data.tool_use_id) lastMsg2.tools[ti].id = data.tool_use_id;
                 lastMsg2.tools[ti].input = data.input || '';
                 break;
               }
@@ -557,7 +560,9 @@ function chatPage() {
           var lastMsg3 = this.messages.length ? this.messages[this.messages.length - 1] : null;
           if (lastMsg3 && lastMsg3.tools) {
             for (var ri = lastMsg3.tools.length - 1; ri >= 0; ri--) {
-              if (lastMsg3.tools[ri].name === data.tool && lastMsg3.tools[ri].running) {
+              var rMatchById = data.tool_use_id && lastMsg3.tools[ri].id === data.tool_use_id;
+              var rMatchByName = lastMsg3.tools[ri].name === data.tool && lastMsg3.tools[ri].running;
+              if (rMatchById || rMatchByName) {
                 lastMsg3.tools[ri].running = false;
                 lastMsg3.tools[ri].result = data.result || '';
                 lastMsg3.tools[ri].is_error = !!data.is_error;
