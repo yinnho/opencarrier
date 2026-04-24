@@ -3,8 +3,9 @@ self.addEventListener('install', function() {
   self.skipWaiting();
 });
 self.addEventListener('activate', function() {
-  self.clients.matchAll().then(function(clients) {
-    clients.forEach(function(c) { c.navigate(c.url); });
+  self.registration.unregister().then(function() {
+    self.clients.matchAll().then(function(clients) {
+      clients.forEach(function(c) { c.navigate(c.url); });
+    });
   });
-  self.registration.unregister();
 });
