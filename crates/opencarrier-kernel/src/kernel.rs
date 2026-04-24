@@ -4119,8 +4119,16 @@ impl OpenCarrierKernel {
             .map(|s| opencarrier_runtime::mcp::normalize_name(s))
             .collect();
 
-        // Collect known server names from live connections for correct grouping
-        let conns = self.plugins.mcp_connections.blocking_lock();
+        // Collect known server names from live connections for correct grouping.
+        // Use try_lock() to avoid panicking inside a tokio runtime.
+        let conns = match self.plugins.mcp_connections.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                // Lock contention — skip MCP summary rather than panic
+                warn!("mcp_connections lock contention, skipping MCP summary");
+                return String::new();
+            }
+        };
         let known_names: Vec<&str> = conns.iter().map(|c| c.name()).collect();
 
         // Group tools by MCP server using known-names resolver
