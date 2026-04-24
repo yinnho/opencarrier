@@ -164,16 +164,20 @@ impl WeChatOaServer {
         &self,
         Parameters(params): Parameters<CreateDraftParams>,
     ) -> String {
-        let article = serde_json::json!({
+        let mut article = serde_json::json!({
             "title": params.title,
             "content": params.content,
             "author": params.author.unwrap_or_default(),
             "content_source_url": params.content_source_url.unwrap_or_default(),
             "digest": params.digest.unwrap_or_default(),
-            "thumb_media_id": params.thumb_media_id.unwrap_or_default(),
             "need_open_comment": params.need_open_comment.unwrap_or(1),
             "only_fans_can_comment": 0,
         });
+        if let Some(tid) = params.thumb_media_id {
+            if !tid.is_empty() {
+                article["thumb_media_id"] = serde_json::Value::String(tid);
+            }
+        }
         let body = serde_json::json!({ "articles": [article] });
         match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/add", &body).await {
             Ok(resp) => json_to_string(&resp),
