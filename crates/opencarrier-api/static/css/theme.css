@@ -1,6 +1,6 @@
 /* OpenCarrier Theme — Premium design system */
 
-/* Font imports in index_head.html: Inter (body) + Geist Mono (code) */
+/* Fonts: system-native stack — zero external dependency */
 
 [data-theme="light"], :root {
   /* Backgrounds — layered depth */
@@ -74,8 +74,8 @@
   --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.5);
 
   /* Typography — dual font system */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'Geist Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', ui-monospace, monospace;
 
   /* Motion — spring curves for premium feel */
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
