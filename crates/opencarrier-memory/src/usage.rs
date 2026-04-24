@@ -83,8 +83,8 @@ impl UsageStore {
         let now = Utc::now().to_rfc3339();
         let tenant_id_str = record.tenant_id.as_deref().unwrap_or("");
         conn.execute(
-            "INSERT INTO usage_events (id, agent_id, timestamp, model, input_tokens, output_tokens, cost_usd, tool_calls, tenant_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO usage_events (id, agent_id, timestamp, model, input_tokens, output_tokens, tool_calls, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 id,
                 record.agent_id.0.to_string(),
@@ -92,7 +92,6 @@ impl UsageStore {
                 record.model,
                 record.input_tokens as i64,
                 record.output_tokens as i64,
-                0.0f64,
                 record.tool_calls as i64,
                 tenant_id_str,
             ],
