@@ -748,7 +748,7 @@ function chatPage() {
           try {
             var senderId = Alpine.store('app').sessionUser || 'default';
             var uploadRes = await OpenCarrierAPI.upload(this.currentAgent.id, att.file, senderId);
-            fileRefs.push('[File: ' + att.file.name + ']');
+            fileRefs.push('[File: input/' + att.file.name + ']');
             uploadedFiles.push({ file_id: uploadRes.file_id, filename: uploadRes.filename, content_type: uploadRes.content_type });
           } catch(e) {
             OpenCarrierToast.error('Failed to upload ' + att.file.name);
