@@ -291,7 +291,7 @@ pub async fn upload_file(
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
     // Validate agent ID format and tenant ownership
-    let _agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -319,6 +319,12 @@ pub async fn upload_file(
         .unwrap_or("upload")
         .to_string();
 
+    // Extract sender_id from header (used to place file in per-user input dir)
+    let sender_id = headers
+        .get("X-Sender-Id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     // Validate size
     if body.len() > MAX_UPLOAD_SIZE {
         return (
@@ -336,9 +342,89 @@ pub async fn upload_file(
         );
     }
 
-    // Generate file ID and save
+    // Generate file ID
     let file_id = uuid::Uuid::new_v4().to_string();
-    let upload_dir = std::env::temp_dir().join("opencarrier_uploads");
+
+    // Determine save location: prefer workspace users/{sender_id}/input/
+    // Fall back to temp dir if no workspace or no sender_id
+    let (file_path, upload_dir) = if let Some(ref sid) = sender_id {
+        if let Some(entry) = state.kernel.registry.get(agent_id) {
+            if let Some(ref ws) = entry.manifest.workspace {
+                let user_input_dir = ws.join("users").join(sid).join("input");
+                if let Err(e) = std::fs::create_dir_all(&user_input_dir) {
+                    tracing::warn!("Failed to create user input dir: {e}");
+                } else {
+                    let dest = user_input_dir.join(&filename);
+                    if let Err(e) = std::fs::write(&dest, &body) {
+                        tracing::warn!("Failed to write upload to workspace: {e}");
+                    } else {
+                        tracing::info!(agent = %id, sender = %sid, file = %filename, "File uploaded to user input dir");
+                        // Also save to temp for image resolution (attachments flow)
+                        let tmp_dir = std::env::temp_dir().join("opencarrier_uploads");
+                        let _ = std::fs::create_dir_all(&tmp_dir);
+                        let tmp_path = tmp_dir.join(&file_id);
+                        let _ = std::fs::write(&tmp_path, &body);
+                        let size = body.len();
+                        UPLOAD_REGISTRY.insert(
+                            file_id.clone(),
+                            UploadMeta {
+                                content_type: content_type.clone(),
+                            },
+                        );
+
+                        // Auto-transcribe audio uploads using the media engine
+                        let transcription = if content_type.starts_with("audio/") {
+                            let attachment = opencarrier_types::media::MediaAttachment {
+                                media_type: opencarrier_types::media::MediaType::Audio,
+                                mime_type: content_type.clone(),
+                                source: opencarrier_types::media::MediaSource::FilePath {
+                                    path: dest.to_string_lossy().to_string(),
+                                },
+                                size_bytes: size as u64,
+                            };
+                            match state
+                                .kernel
+                                .services
+                                .media_engine
+                                .transcribe_audio(&attachment)
+                                .await
+                            {
+                                Ok(result) => {
+                                    tracing::info!(chars = result.description.len(), provider = %result.provider, "Audio transcribed");
+                                    Some(result.description)
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Audio transcription failed: {e}");
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
+                        return (
+                            StatusCode::CREATED,
+                            Json(serde_json::json!(UploadResponse {
+                                file_id,
+                                filename,
+                                content_type,
+                                size,
+                                transcription,
+                            })),
+                        );
+                    }
+                }
+            }
+        }
+        // Fallback: temp dir
+        let upload_dir = std::env::temp_dir().join("opencarrier_uploads");
+        (upload_dir.join(&file_id), upload_dir)
+    } else {
+        // No sender_id — use temp dir (legacy behavior)
+        let upload_dir = std::env::temp_dir().join("opencarrier_uploads");
+        (upload_dir.join(&file_id), upload_dir)
+    };
+
     if let Err(e) = std::fs::create_dir_all(&upload_dir) {
         tracing::warn!("Failed to create upload dir: {e}");
         return (
@@ -347,7 +433,6 @@ pub async fn upload_file(
         );
     }
 
-    let file_path = upload_dir.join(&file_id);
     if let Err(e) = std::fs::write(&file_path, &body) {
         tracing::warn!("Failed to write upload: {e}");
         return (

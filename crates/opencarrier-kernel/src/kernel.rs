@@ -153,7 +153,7 @@ pub struct OpenCarrierKernel {
 
 /// Create workspace directory structure for an agent.
 fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
-    for subdir in &["data", "data/knowledge", "output", "sessions", "skills", "logs", "memory", "history", "users"] {
+    for subdir in &["data", "data/knowledge", "sessions", "skills", "logs", "memory", "history", "users"] {
         std::fs::create_dir_all(workspace.join(subdir)).map_err(|e| {
             KernelError::OpenCarrier(OpenCarrierError::Internal(format!(
                 "Failed to create workspace dir {}/{subdir}: {e}",

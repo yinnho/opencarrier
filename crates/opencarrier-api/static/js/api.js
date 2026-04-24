@@ -296,12 +296,13 @@ var OpenCarrierAPI = (function() {
 
   function getToken() { return _authToken; }
 
-  function upload(agentId, file) {
+  function upload(agentId, file, senderId) {
     var hdrs = {
       'Content-Type': file.type || 'application/octet-stream',
       'X-Filename': file.name
     };
     if (_authToken) hdrs['Authorization'] = 'Bearer ' + _authToken;
+    if (senderId) hdrs['X-Sender-Id'] = senderId;
     return fetch(BASE + '/api/agents/' + agentId + '/upload', {
       method: 'POST',
       headers: hdrs,
