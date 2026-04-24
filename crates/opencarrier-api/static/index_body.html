@@ -2553,4 +2553,5 @@
 <!-- Toast notification container -->
 <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-<!-- Service worker removed: sw.js was a no-op passthrough causing ERR_CACHE_MISS -->
+<!-- Temporary: re-register sw.js so the self-unregistering version replaces the old cached one -->
+<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){})}</script>
