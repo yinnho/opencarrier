@@ -78,6 +78,71 @@ function settingsPage() {
     stopQrPoll() { this.wechatPolling = false; },
     async wecomAddTenant() { var f = this.wecomForm; if (!f.name.trim() || !f.corp_id.trim() || !f.secret.trim()) { OpenCarrierToast.error('Name, Corp ID, and Secret are required'); return; } this.wecomSaving = true; try { await OpenCarrierAPI.post('/api/channels/wecom/tenants', { name: f.name.trim(), mode: f.mode, corp_id: f.corp_id.trim(), bot_id: f.bot_id.trim(), secret: f.secret.trim(), webhook_port: f.webhook_port || 8454, encoding_aes_key: f.encoding_aes_key.trim() }); OpenCarrierToast.success('WeCom tenant added'); this.wecomForm = { name: '', mode: 'smartbot', corp_id: '', bot_id: '', secret: '', webhook_port: 8454, encoding_aes_key: '' }; await this.loadChannels(); } catch(e) { OpenCarrierToast.error('Failed to add tenant: ' + (e.message || e)); } this.wecomSaving = false; },
     async feishuAddTenant() { var f = this.feishuForm; if (!f.name.trim() || !f.app_id.trim() || !f.app_secret.trim()) { OpenCarrierToast.error('Name, App ID, and App Secret are required'); return; } this.feishuSaving = true; try { await OpenCarrierAPI.post('/api/channels/feishu/tenants', { name: f.name.trim(), app_id: f.app_id.trim(), app_secret: f.app_secret.trim(), brand: f.brand }); OpenCarrierToast.success('Feishu tenant added'); this.feishuForm = { name: '', app_id: '', app_secret: '', brand: 'feishu' }; await this.loadChannels(); } catch(e) { OpenCarrierToast.error('Failed to add tenant: ' + (e.message || e)); } this.feishuSaving = false; },
-    formatWechatExpiry(secs) { if (!secs || secs <= 0) return '-'; var h = Math.floor(secs / 3600); var m = Math.floor((secs % 3600) / 60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; }
+    formatWechatExpiry(secs) { if (!secs || secs <= 0) return '-'; var h = Math.floor(secs / 3600); var m = Math.floor((secs % 3600) / 60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; },
+
+    // ── Agent Bindings ──
+    bindings: [],
+    bindingsLoading: false,
+    showBindForm: false,
+    bindForm: { agent: '', channel: '', account_id: '', peer_id: '', guild_id: '', tenant_id: '' },
+    bindSaving: false,
+    bindingsTenants: [],
+
+    async loadBindings() {
+      this.bindingsLoading = true;
+      try {
+        var data = await OpenCarrierAPI.get('/api/bindings');
+        this.bindings = data.bindings || [];
+      } catch(e) { this.bindings = []; }
+      this.bindingsLoading = false;
+    },
+
+    async loadChannelsFull() {
+      await Promise.all([this.loadChannels(), this.loadBindings()]);
+      if (Alpine.store('app').isAdmin()) {
+        this.loadBindingsTenants();
+      }
+    },
+
+    async loadBindingsTenants() {
+      try {
+        var data = await OpenCarrierAPI.get('/api/tenants');
+        this.bindingsTenants = Array.isArray(data) ? data : [];
+      } catch(e) { this.bindingsTenants = []; }
+    },
+
+    async addBinding() {
+      var f = this.bindForm;
+      if (!f.agent.trim()) { OpenCarrierToast.error('Please select an agent'); return; }
+      if (!f.channel.trim()) { OpenCarrierToast.error('Channel type is required'); return; }
+      this.bindSaving = true;
+      try {
+        var body = { agent: f.agent.trim(), match_rule: {} };
+        if (f.channel.trim()) body.match_rule.channel = f.channel.trim();
+        if (f.account_id.trim()) body.match_rule.account_id = f.account_id.trim();
+        if (f.peer_id.trim()) body.match_rule.peer_id = f.peer_id.trim();
+        if (f.guild_id.trim()) body.match_rule.guild_id = f.guild_id.trim();
+        if (f.tenant_id.trim()) body.tenant_id = f.tenant_id.trim();
+        await OpenCarrierAPI.post('/api/bindings', body);
+        OpenCarrierToast.success('Binding created');
+        this.bindForm = { agent: '', channel: '', account_id: '', peer_id: '', guild_id: '', tenant_id: '' };
+        this.showBindForm = false;
+        await this.loadBindings();
+      } catch(e) {
+        OpenCarrierToast.error('Failed to create binding: ' + (e.message || e));
+      }
+      this.bindSaving = false;
+    },
+
+    async removeBinding(index) {
+      if (!confirm('Remove this binding?')) return;
+      try {
+        await OpenCarrierAPI.del('/api/bindings/' + index);
+        OpenCarrierToast.success('Binding removed');
+        await this.loadBindings();
+      } catch(e) {
+        OpenCarrierToast.error('Failed to remove binding: ' + (e.message || e));
+      }
+    }
   };
 }
