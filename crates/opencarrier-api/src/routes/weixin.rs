@@ -333,37 +333,70 @@ pub async fn channels_status(
         }
     }
 
-    // ── WeCom ──────────────────────────────────────────────────────────
-    let wecom_toml = home.join("plugins").join("opencarrier-plugin-wecom").join("plugin.toml");
+    // ── WeCom & Feishu — scan all plugin dirs for plugin.toml ───────
+    let plugins_dir = home.join("plugins");
     let mut wecom_tenants: Vec<serde_json::Value> = Vec::new();
-    if let Ok(content) = std::fs::read_to_string(&wecom_toml) {
-        if let Ok(doc) = content.parse::<toml::Value>() {
-            if let Some(arr) = doc.get("tenants").and_then(|v| v.as_array()) {
-                for tenant in arr {
-                    let cfg = tenant.get("config").cloned().unwrap_or(toml::Value::Table(Default::default()));
-                    wecom_tenants.push(serde_json::json!({
-                        "name": tenant.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                        "mode": cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot"),
-                        "corp_id": cfg.get("corp_id").and_then(|v| v.as_str()).unwrap_or(""),
-                    }));
-                }
-            }
-        }
-    }
-
-    // ── Feishu/Lark ────────────────────────────────────────────────────
-    let feishu_toml = home.join("plugins").join("opencarrier-plugin-feishu").join("plugin.toml");
     let mut feishu_tenants: Vec<serde_json::Value> = Vec::new();
-    if let Ok(content) = std::fs::read_to_string(&feishu_toml) {
-        if let Ok(doc) = content.parse::<toml::Value>() {
+
+    if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+        for entry in entries.flatten() {
+            let plugin_dir = entry.path();
+            if !plugin_dir.is_dir() { continue; }
+            let toml_path = plugin_dir.join("plugin.toml");
+            if !toml_path.exists() { continue; }
+            let Ok(content) = std::fs::read_to_string(&toml_path) else { continue };
+            let Ok(doc) = content.parse::<toml::Value>() else { continue };
+
+            // Determine channel category from [[channels]]
+            let has_wecom = doc.get("channels").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().any(|ch| {
+                    ch.get("channel_type").and_then(|v| v.as_str())
+                        .map(|t| t.starts_with("wecom"))
+                        .unwrap_or(false)
+                })
+            }).unwrap_or(false);
+
+            let has_feishu = doc.get("channels").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().any(|ch| {
+                    ch.get("channel_type").and_then(|v| v.as_str())
+                        .map(|t| t == "feishu" || t == "lark")
+                        .unwrap_or(false)
+                })
+            }).unwrap_or(false);
+
+            if !has_wecom && !has_feishu { continue; }
+
             if let Some(arr) = doc.get("tenants").and_then(|v| v.as_array()) {
                 for tenant in arr {
-                    let cfg = tenant.get("config").cloned().unwrap_or(toml::Value::Table(Default::default()));
-                    feishu_tenants.push(serde_json::json!({
-                        "name": tenant.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                        "app_id": cfg.get("app_id").and_then(|v| v.as_str()).unwrap_or(""),
-                        "brand": cfg.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu"),
-                    }));
+                    let name = tenant.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let bind_agent = tenant.get("bind_agent").and_then(|v| v.as_str()).unwrap_or("");
+                    let mode = tenant.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot");
+                    let corp_id = tenant.get("corp_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let bot_id = tenant.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let secret_env = tenant.get("secret_env").and_then(|v| v.as_str()).unwrap_or("");
+
+                    if has_wecom {
+                        wecom_tenants.push(serde_json::json!({
+                            "name": name,
+                            "mode": mode,
+                            "corp_id": corp_id,
+                            "bot_id": bot_id,
+                            "secret_env": secret_env,
+                            "bind_agent": bind_agent,
+                        }));
+                    }
+                    if has_feishu {
+                        let app_id = tenant.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let app_secret_env = tenant.get("app_secret_env").and_then(|v| v.as_str()).unwrap_or("");
+                        let brand = tenant.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu");
+                        feishu_tenants.push(serde_json::json!({
+                            "name": name,
+                            "app_id": app_id,
+                            "app_secret_env": app_secret_env,
+                            "brand": brand,
+                            "bind_agent": bind_agent,
+                        }));
+                    }
                 }
             }
         }

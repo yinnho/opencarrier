@@ -1688,6 +1688,7 @@
                         <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
                         <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Mode</th>
                         <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Corp ID</th>
+                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Bound Agent</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1696,6 +1697,7 @@
                           <td style="padding:6px 8px" x-text="item.name"></td>
                           <td style="padding:6px 8px"><span class="badge" style="background:#2b7ce9;color:#fff;font-size:10px" x-text="item.mode"></span></td>
                           <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.corp_id || '-'"></td>
+                          <td style="padding:6px 8px" x-text="item.bind_agent || '-'"></td>
                         </tr>
                       </template>
                     </tbody>
@@ -1729,6 +1731,7 @@
                         <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
                         <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">App ID</th>
                         <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Brand</th>
+                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Bound Agent</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1737,6 +1740,7 @@
                           <td style="padding:6px 8px" x-text="item.name"></td>
                           <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.app_id || '-'"></td>
                           <td style="padding:6px 8px"><span class="badge" style="background:#3370ff;color:#fff;font-size:10px" x-text="item.brand"></span></td>
+                          <td style="padding:6px 8px" x-text="item.bind_agent || '-'"></td>
                         </tr>
                       </template>
                     </tbody>
