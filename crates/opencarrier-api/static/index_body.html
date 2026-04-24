@@ -709,7 +709,7 @@
         <div class="page-header">
           <h2>Chat</h2>
           <div class="flex gap-2">
-            <button class="btn btn-ghost btn-sm" x-show="filteredAgents.length || !$store.app.isAdmin() || ($store.app.isAdmin() && !selectedTenantId)" @click="openHubModal()">+ 安装分身</button>
+            <button class="btn btn-ghost btn-sm" x-show="$store.app.isAdmin() || filteredAgents.length" @click="openHubModal()">+ 安装分身</button>
             <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
           </div>
         </div>
