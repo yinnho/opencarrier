@@ -172,7 +172,28 @@ pub async fn agent_ws(
             .map(|token| ct_eq(token, api_key))
             .unwrap_or(false);
 
-        if !header_auth && !query_auth {
+        // Session cookie auth: browser WebSocket automatically sends cookies
+        let auth_cfg = &state.kernel.config.auth;
+        let session_secret = if !api_key.is_empty() {
+            api_key.to_string()
+        } else {
+            auth_cfg.password_hash.clone()
+        };
+        let cookie_auth = headers
+            .get("cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|cookies| {
+                cookies.split(';').find_map(|c| {
+                    c.trim().strip_prefix("opencarrier_session=")
+                        .map(|v| v.to_string())
+                })
+            })
+            .and_then(|token| {
+                crate::session_auth::verify_session_token(&token, &session_secret)
+            })
+            .is_some();
+
+        if !header_auth && !query_auth && !cookie_auth {
             warn!("WebSocket upgrade rejected: invalid auth");
             return axum::http::StatusCode::UNAUTHORIZED.into_response();
         }
