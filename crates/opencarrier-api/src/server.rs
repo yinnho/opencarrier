@@ -2,7 +2,8 @@
 
 use crate::middleware;
 use crate::rate_limiter;
-use crate::routes::{self, AppState};
+use crate::routes;
+use crate::routes::state::AppState;
 use crate::webchat;
 use crate::ws;
 use axum::Router;
@@ -28,11 +29,6 @@ pub struct DaemonInfo {
 }
 
 /// Build the full API router with all routes, middleware, and state.
-///
-/// This is extracted from `run_daemon()` so that embedders (e.g. opencarrier-desktop)
-/// can create the router without starting the full daemon lifecycle.
-///
-/// Returns `(router, shared_state)`.
 pub async fn build_router(
     kernel: Arc<OpenCarrierKernel>,
     listen_addr: SocketAddr,
@@ -46,24 +42,16 @@ pub async fn build_router(
         plugin_manager: plugin_manager.map(|pm| Arc::new(tokio::sync::Mutex::new(pm))),
     });
 
-    // CORS: allow localhost origins by default. If API key is set, the API
-    // is protected anyway. For development, permissive CORS is convenient.
     let cors = if state.kernel.config.api_key.trim().is_empty() {
-        // No auth → restrict CORS to localhost origins (include both 127.0.0.1 and localhost)
         let port = listen_addr.port();
         let mut origins: Vec<axum::http::HeaderValue> = vec![
             format!("http://{listen_addr}").parse().unwrap(),
             format!("http://localhost:{port}").parse().unwrap(),
         ];
-        // Also allow common dev ports
         for p in [3000u16, 8080] {
             if p != port {
-                if let Ok(v) = format!("http://127.0.0.1:{p}").parse() {
-                    origins.push(v);
-                }
-                if let Ok(v) = format!("http://localhost:{p}").parse() {
-                    origins.push(v);
-                }
+                if let Ok(v) = format!("http://127.0.0.1:{p}").parse() { origins.push(v); }
+                if let Ok(v) = format!("http://localhost:{p}").parse() { origins.push(v); }
             }
         }
         CorsLayer::new()
@@ -71,9 +59,6 @@ pub async fn build_router(
             .allow_methods(tower_http::cors::Any)
             .allow_headers(tower_http::cors::Any)
     } else {
-        // Auth enabled → restrict CORS to localhost + configured origins.
-        // SECURITY: CorsLayer::permissive() is dangerous — any website could
-        // make cross-origin requests. Restrict to known origins instead.
         let mut origins: Vec<axum::http::HeaderValue> = vec![
             format!("http://{listen_addr}").parse().unwrap(),
             "http://localhost:4200".parse().unwrap(),
@@ -81,14 +66,9 @@ pub async fn build_router(
             "http://localhost:8080".parse().unwrap(),
             "http://127.0.0.1:8080".parse().unwrap(),
         ];
-        // Add the actual listen address variants
         if listen_addr.port() != 4200 && listen_addr.port() != 8080 {
-            if let Ok(v) = format!("http://localhost:{}", listen_addr.port()).parse() {
-                origins.push(v);
-            }
-            if let Ok(v) = format!("http://127.0.0.1:{}", listen_addr.port()).parse() {
-                origins.push(v);
-            }
+            if let Ok(v) = format!("http://localhost:{}", listen_addr.port()).parse() { origins.push(v); }
+            if let Ok(v) = format!("http://127.0.0.1:{}", listen_addr.port()).parse() { origins.push(v); }
         }
         CorsLayer::new()
             .allow_origin(origins)
@@ -96,7 +76,6 @@ pub async fn build_router(
             .allow_headers(tower_http::cors::Any)
     };
 
-    // Trim whitespace so `api_key = ""` or `api_key = "  "` both disable auth.
     let api_key = state.kernel.config.api_key.trim().to_string();
     let auth_state = crate::middleware::AuthState {
         api_key: api_key.clone(),
@@ -117,399 +96,36 @@ pub async fn build_router(
         .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
         .route("/sw.js", axum::routing::get(webchat::sw_js))
-        .route(
-            "/api/metrics",
-            axum::routing::get(routes::prometheus_metrics),
-        )
-        .route("/api/health", axum::routing::get(routes::health))
-        .route(
-            "/api/health/detail",
-            axum::routing::get(routes::health_detail),
-        )
-        .route("/api/status", axum::routing::get(routes::status))
-        // Provider API Key management
-        .route(
-            "/api/providers/keys",
-            axum::routing::get(routes::list_provider_keys),
-        )
-        .route(
-            "/api/providers/{name}/key",
-            axum::routing::post(routes::set_provider_key)
-                .delete(routes::delete_provider_key),
-        )
-        .route("/api/brain", axum::routing::get(routes::brain_info))
-        .route("/api/brain/status", axum::routing::get(routes::brain_status))
-        .route(
-            "/api/brain/modalities/{name}",
-            axum::routing::get(routes::brain_modality_detail),
-        )
-        // Brain config management
-        .route(
-            "/api/brain/providers/{name}",
-            axum::routing::put(routes::set_brain_provider)
-                         .delete(routes::delete_brain_provider),
-        )
-        .route(
-            "/api/brain/endpoints/{name}",
-            axum::routing::put(routes::set_brain_endpoint)
-                         .delete(routes::delete_brain_endpoint),
-        )
-        .route(
-            "/api/brain/modalities/{name}",
-            axum::routing::put(routes::set_brain_modality)
-                         .delete(routes::delete_brain_modality),
-        )
-        .route(
-            "/api/brain/default-modality",
-            axum::routing::put(routes::set_brain_default_modality),
-        )
-        .route(
-            "/api/brain/reload",
-            axum::routing::post(routes::reload_brain),
-        )
-        .route(
-            "/api/brain/config",
-            axum::routing::get(routes::get_brain_config_raw)
-                .put(routes::put_brain_config_raw),
-        )
-        .route("/api/version", axum::routing::get(routes::version))
-        .route(
-            "/api/agents",
-            axum::routing::get(routes::list_agents).post(routes::spawn_agent),
-        )
-        .route(
-            "/api/agents/{id}",
-            axum::routing::get(routes::get_agent)
-                .delete(routes::kill_agent)
-                .patch(routes::patch_agent),
-        )
-        .route(
-            "/api/agents/{id}/mode",
-            axum::routing::put(routes::set_agent_mode),
-        )
-        .route("/api/profiles", axum::routing::get(routes::list_profiles))
-        .route(
-            "/api/agents/{id}/restart",
-            axum::routing::post(routes::restart_agent),
-        )
-        .route(
-            "/api/agents/{id}/start",
-            axum::routing::post(routes::restart_agent),
-        )
-        .route(
-            "/api/agents/{id}/message",
-            axum::routing::post(routes::send_message),
-        )
-        .route(
-            "/api/agents/{id}/message/stream",
-            axum::routing::post(routes::send_message_stream),
-        )
-        .route(
-            "/api/agents/{id}/session",
-            axum::routing::get(routes::get_agent_session),
-        )
-        .route(
-            "/api/agents/{id}/sessions",
-            axum::routing::get(routes::list_agent_sessions).post(routes::create_agent_session),
-        )
-        .route(
-            "/api/agents/{id}/sessions/{session_id}/switch",
-            axum::routing::post(routes::switch_agent_session),
-        )
-        .route(
-            "/api/agents/{id}/session/reset",
-            axum::routing::post(routes::reset_session),
-        )
-        .route(
-            "/api/agents/{id}/history",
-            axum::routing::delete(routes::clear_agent_history),
-        )
-        .route(
-            "/api/agents/{id}/session/compact",
-            axum::routing::post(routes::compact_session),
-        )
-        .route(
-            "/api/agents/{id}/stop",
-            axum::routing::post(routes::stop_agent),
-        )
-        .route(
-            "/api/agents/{id}/model",
-            axum::routing::put(routes::set_model),
-        )
-        .route(
-            "/api/agents/{id}/tools",
-            axum::routing::get(routes::get_agent_tools).put(routes::set_agent_tools),
-        )
-        .route(
-            "/api/agents/{id}/skills",
-            axum::routing::get(routes::get_agent_skills).put(routes::set_agent_skills),
-        )
-        .route(
-            "/api/agents/{id}/mcp_servers",
-            axum::routing::get(routes::get_agent_mcp_servers).put(routes::set_agent_mcp_servers),
-        )
-        .route(
-            "/api/agents/{id}/identity",
-            axum::routing::patch(routes::update_agent_identity),
-        )
-        .route(
-            "/api/agents/{id}/config",
-            axum::routing::patch(routes::patch_agent_config),
-        )
-        .route(
-            "/api/agents/{id}/clone",
-            axum::routing::post(routes::clone_agent),
-        )
-        .route(
-            "/api/agents/{id}/files",
-            axum::routing::get(routes::list_agent_files),
-        )
-        .route(
-            "/api/agents/{id}/files/{filename}",
-            axum::routing::get(routes::get_agent_file).put(routes::set_agent_file),
-        )
-        .route(
-            "/api/agents/{id}/upload",
-            axum::routing::post(routes::upload_file),
-        )
+        .merge(routes::agents::router())
+        .merge(routes::auth::router())
+        .merge(routes::bindings::router())
+        .merge(routes::brain::router())
+        .merge(routes::clones::router())
+        .merge(routes::comms::router())
+        .merge(routes::config::router())
+        .merge(routes::cron::router())
+        .merge(routes::files::router())
+        .merge(routes::hub::router())
+        .merge(routes::kv::router())
+        .merge(routes::messaging::router())
+        .merge(routes::observability::router())
+        .merge(routes::providers::router())
+        .merge(routes::sessions::router())
+        .merge(routes::templates::router())
+        .merge(routes::tenants::router())
+        .merge(routes::tools_skills::router())
+        .merge(routes::webhooks::router())
+        .merge(routes::weixin::router())
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
-        // Upload serving
-        .route(
-            "/api/uploads/{file_id}",
-            axum::routing::get(routes::serve_upload),
-        )
-        // Template endpoints
-        .route("/api/templates", axum::routing::get(routes::list_templates))
-        .route(
-            "/api/templates/{name}",
-            axum::routing::get(routes::get_template),
-        )
-        // Hub marketplace endpoints
-        .route("/api/hub/templates", axum::routing::get(routes::list_hub_templates))
-        .route(
-            "/api/hub/templates/{name}/install",
-            axum::routing::post(routes::install_hub_template),
-        )
-        // Clone (.agx) endpoints
-        .route("/api/clones", axum::routing::get(routes::list_clones))
-        .route(
-            "/api/clones/install",
-            axum::routing::post(routes::install_clone),
-        )
-        .route(
-            "/api/clones/{name}/start",
-            axum::routing::post(routes::start_clone),
-        )
-        .route(
-            "/api/clones/{name}/stop",
-            axum::routing::post(routes::stop_clone),
-        )
-        .route(
-            "/api/clones/{name}",
-            axum::routing::delete(routes::uninstall_clone),
-        )
-        // Clone lifecycle endpoints
-        .route(
-            "/api/clones/{name}/compile",
-            axum::routing::post(routes::clone_compile),
-        )
-        .route(
-            "/api/clones/{name}/health",
-            axum::routing::get(routes::clone_health),
-        )
-        .route(
-            "/api/clones/{name}/rollback",
-            axum::routing::post(routes::clone_rollback),
-        )
-        .route(
-            "/api/clones/{name}/verify",
-            axum::routing::post(routes::clone_verify),
-        )
-        .route(
-            "/api/clones/{name}/feedback/push",
-            axum::routing::post(routes::clone_feedback_push),
-        )
-        .route(
-            "/api/clones/{name}/evaluate",
-            axum::routing::get(routes::clone_evaluate),
-        )
-        // Memory endpoints
-        .route(
-            "/api/memory/agents/{id}/kv",
-            axum::routing::get(routes::get_agent_kv),
-        )
-        .route(
-            "/api/memory/agents/{id}/kv/{key}",
-            axum::routing::get(routes::get_agent_kv_key)
-                .put(routes::set_agent_kv_key)
-                .delete(routes::delete_agent_kv_key),
-        )
-        // Skills endpoints
-        .route("/api/skills", axum::routing::get(routes::list_skills))
-        // MCP server endpoints
-        .route(
-            "/api/mcp/servers",
-            axum::routing::get(routes::list_mcp_servers),
-        )
-        // Audit endpoints
-        .route(
-            "/api/audit/recent",
-            axum::routing::get(routes::audit_recent),
-        )
-        .route(
-            "/api/audit/verify",
-            axum::routing::get(routes::audit_verify),
-        )
-        // Live log streaming (SSE)
-        .route("/api/logs/stream", axum::routing::get(routes::logs_stream))
-        // Agent communication (Comms) endpoints
-        .route(
-            "/api/comms/topology",
-            axum::routing::get(routes::comms_topology),
-        )
-        .route(
-            "/api/comms/events",
-            axum::routing::get(routes::comms_events),
-        )
-        .route(
-            "/api/comms/events/stream",
-            axum::routing::get(routes::comms_events_stream),
-        )
-        .route("/api/comms/send", axum::routing::post(routes::comms_send))
-        .route("/api/comms/task", axum::routing::post(routes::comms_task))
-        .route("/api/plugins", axum::routing::get(routes::plugins_list))
-        // WeChat iLink Bot — QR code binding
-        .route("/api/weixin/qrcode", axum::routing::get(routes::weixin_qrcode))
-        .route(
-            "/api/weixin/qrcode-status",
-            axum::routing::get(routes::weixin_qrcode_status),
-        )
-        .route("/api/weixin/status", axum::routing::get(routes::weixin_status))
-        // Unified channels management
-        .route(
-            "/api/channels/status",
-            axum::routing::get(routes::channels_status),
-        )
-        .route(
-            "/api/channels/wecom/tenants",
-            axum::routing::post(routes::wecom_add_tenant),
-        )
-        .route(
-            "/api/channels/feishu/tenants",
-            axum::routing::post(routes::feishu_add_tenant),
-        );
-
-    // Split into a second router chunk to stay within axum's type nesting limit.
-    let app = app
-        // Tools endpoint
-        .route("/api/tools", axum::routing::get(routes::list_tools))
-        // Config endpoints
-        .route("/api/config", axum::routing::get(routes::get_config))
-        .route(
-            "/api/config/schema",
-            axum::routing::get(routes::config_schema),
-        )
-        .route("/api/config/set", axum::routing::post(routes::config_set))
-        // Usage endpoints
-        .route("/api/usage", axum::routing::get(routes::usage_stats))
-        .route(
-            "/api/usage/summary",
-            axum::routing::get(routes::usage_summary),
-        )
-        .route(
-            "/api/usage/by-model",
-            axum::routing::get(routes::usage_by_model),
-        )
-        .route("/api/usage/daily", axum::routing::get(routes::usage_daily))
-        // Session endpoints
-        .route("/api/sessions", axum::routing::get(routes::list_sessions))
-        .route(
-            "/api/sessions/{id}",
-            axum::routing::delete(routes::delete_session),
-        )
-        .route(
-            "/api/sessions/{id}/label",
-            axum::routing::put(routes::set_session_label),
-        )
-        .route(
-            "/api/agents/{id}/sessions/by-label/{label}",
-            axum::routing::get(routes::find_session_by_label),
-        )
-        // Agent update
-        .route(
-            "/api/agents/{id}/update",
-            axum::routing::put(routes::update_agent),
-        )
-        // Security dashboard endpoint
-        .route("/api/security", axum::routing::get(routes::security_status))
-        .route(
-            "/api/skills/create",
-            axum::routing::post(routes::create_skill),
-        )
-        // Cron job management endpoints
-        .route(
-            "/api/cron/jobs",
-            axum::routing::get(routes::list_cron_jobs).post(routes::create_cron_job),
-        )
-        .route(
-            "/api/cron/jobs/{id}",
-            axum::routing::delete(routes::delete_cron_job),
-        )
-        .route(
-            "/api/cron/jobs/{id}/enable",
-            axum::routing::put(routes::toggle_cron_job),
-        )
-        .route(
-            "/api/cron/jobs/{id}/status",
-            axum::routing::get(routes::cron_job_status),
-        )
-        // Webhook trigger endpoints (external event injection)
-        .route("/hooks/wake", axum::routing::post(routes::webhook_wake))
-        .route("/hooks/agent", axum::routing::post(routes::webhook_agent))
-        .route("/api/shutdown", axum::routing::post(routes::shutdown))
-        // Chat commands endpoint (dynamic slash menu)
         .route("/api/commands", axum::routing::get(routes::list_commands))
-        // Config reload endpoint
-        .route(
-            "/api/config/reload",
-            axum::routing::post(routes::config_reload),
-        )
-        // Agent binding routes
-        .route(
-            "/api/bindings",
-            axum::routing::get(routes::list_bindings).post(routes::add_binding),
-        )
-        .route(
-            "/api/bindings/{index}",
-            axum::routing::delete(routes::remove_binding),
-        )
-        // MCP HTTP endpoint (exposes MCP protocol over HTTP)
-        .route("/mcp", axum::routing::post(routes::mcp_http))
-        // Dashboard authentication endpoints
-        .route("/api/auth/login", axum::routing::post(routes::auth_login))
-        .route("/api/auth/logout", axum::routing::post(routes::auth_logout))
-        .route("/api/auth/check", axum::routing::get(routes::auth_check))
-        // Tenant management endpoints (admin only)
-        .route(
-            "/api/tenants",
-            axum::routing::get(routes::list_tenants).post(routes::create_tenant),
-        )
-        .route(
-            "/api/tenants/{id}",
-            axum::routing::get(routes::get_tenant)
-                .put(routes::update_tenant)
-                .delete(routes::delete_tenant),
-        )
-        .layer(axum::middleware::from_fn_with_state(
-            auth_state,
-            middleware::auth,
-        ))
-        // SECURITY: Global body size limit — 10MB max for all endpoints
+        .route("/api/plugins", axum::routing::get(routes::plugins_list))
+        .route("/api/profiles", axum::routing::get(routes::list_profiles))
+        .route("/api/shutdown", axum::routing::post(routes::shutdown))
+        .route("/api/status", axum::routing::get(routes::status))
+        .route("/api/version", axum::routing::get(routes::version))
+        .layer(axum::middleware::from_fn_with_state(auth_state, middleware::auth))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(axum::middleware::from_fn_with_state(
-            gcra_limiter,
-            rate_limiter::gcra_rate_limit,
-        ))
+        .layer(axum::middleware::from_fn_with_state(gcra_limiter, rate_limiter::gcra_rate_limit))
         .layer(axum::middleware::from_fn(middleware::security_headers))
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(CompressionLayer::new())
@@ -520,9 +136,6 @@ pub async fn build_router(
     (app, state)
 }
 
-/// Start the OpenCarrier daemon: boot kernel + HTTP API server.
-///
-/// This function blocks until Ctrl+C or a shutdown request.
 pub async fn run_daemon(
     kernel: OpenCarrierKernel,
     listen_addr: &str,
@@ -551,7 +164,7 @@ pub async fn run_daemon(
             // Inject tool dispatcher into kernel
             {
                 let dispatcher = pm.tool_dispatcher();
-                let mut guard = kernel.plugin_tool_dispatcher.lock().unwrap();
+                let mut guard = kernel.plugins.plugin_tool_dispatcher.lock().unwrap();
                 *guard = Some(dispatcher);
             }
 

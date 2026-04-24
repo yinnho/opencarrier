@@ -1152,6 +1152,7 @@ fn cmd_start(config: Option<PathBuf>) {
         let model = kernel.config.default_model.model.clone();
         let agent_count = kernel.registry.count();
         let model_count = kernel
+            .brain
             .model_catalog
             .read()
             .map(|c| c.list_models().len())

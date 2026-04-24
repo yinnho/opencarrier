@@ -35,49 +35,27 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, Weak};
 use tracing::{debug, info, warn};
 
-/// The main OpenCarrier kernel — coordinates all subsystems.
-pub struct OpenCarrierKernel {
-    /// Kernel configuration.
-    pub config: KernelConfig,
-    /// Agent registry.
-    pub registry: AgentRegistry,
-    /// Capability manager.
-    pub capabilities: CapabilityManager,
-    /// Event bus.
-    pub event_bus: EventBus,
-    /// Agent scheduler.
-    pub scheduler: AgentScheduler,
-    /// Memory substrate.
-    pub memory: Arc<MemorySubstrate>,
-    /// Process supervisor.
-    pub supervisor: Supervisor,
-    /// Background agent executor.
-    pub background: BackgroundExecutor,
-    /// Merkle hash chain audit trail.
-    pub audit_log: Arc<AuditLog>,
-    /// Cost metering engine.
-    pub metering: Arc<MeteringEngine>,
+/// LLM brain and model catalog subsystem.
+pub struct KernelBrain {
     /// The carrier's independent LLM brain. Always loaded — boot fails without a valid brain.json.
     /// Wrapped in RwLock to allow hot-reload of brain.json at runtime.
     brain: Arc<std::sync::RwLock<Arc<Brain>>>,
     /// Path to brain.json (saved at boot for hot-reload writes).
     brain_path: std::path::PathBuf,
-    /// WASM sandbox engine (shared across all WASM agent executions).
-    wasm_sandbox: WasmSandbox,
     /// Model catalog registry (RwLock for auth status refresh from API).
     pub model_catalog: std::sync::RwLock<opencarrier_runtime::model_catalog::ModelCatalog>,
-    /// Skill registry for plugin skills (RwLock for hot-reload on install/uninstall).
-    pub skill_registry: std::sync::RwLock<opencarrier_skills::registry::SkillRegistry>,
-    /// Tracks running agent tasks for cancellation support.
-    pub running_tasks: dashmap::DashMap<AgentId, tokio::task::AbortHandle>,
-    /// MCP server connections (lazily initialized at start_background_agents).
-    pub mcp_connections: tokio::sync::Mutex<Vec<opencarrier_runtime::mcp::McpConnection>>,
-    /// MCP tool definitions cache (populated after connections are established).
-    pub mcp_tools: std::sync::Mutex<Vec<ToolDefinition>>,
+}
+
+/// A2A (Agent-to-Agent) communication subsystem.
+pub struct KernelA2a {
     /// A2A task store for tracking task lifecycle.
     pub a2a_task_store: opencarrier_runtime::a2a::A2aTaskStore,
     /// Discovered external A2A agent cards.
     pub a2a_external_agents: std::sync::Mutex<Vec<(String, opencarrier_runtime::a2a::AgentCard)>>,
+}
+
+/// External service integrations (web search, browser, media, TTS, embeddings).
+pub struct KernelServices {
     /// Web tools context (multi-provider search + SSRF-protected fetch + caching).
     pub web_ctx: opencarrier_runtime::web_search::WebToolsContext,
     /// Browser automation manager (Playwright bridge sessions).
@@ -89,12 +67,47 @@ pub struct OpenCarrierKernel {
     /// Embedding driver for vector similarity search (None = text fallback).
     pub embedding_driver:
         Option<Arc<dyn opencarrier_runtime::embedding::EmbeddingDriver + Send + Sync>>,
+}
+
+/// Plugin and MCP tooling subsystem.
+pub struct KernelPlugins {
+    /// MCP server connections (lazily initialized at start_background_agents).
+    pub mcp_connections: tokio::sync::Mutex<Vec<opencarrier_runtime::mcp::McpConnection>>,
+    /// MCP tool definitions cache (populated after connections are established).
+    pub mcp_tools: std::sync::Mutex<Vec<ToolDefinition>>,
     /// Configured MCP server list (from config, used for MCP connections).
     pub effective_mcp_servers:
         std::sync::RwLock<Vec<opencarrier_types::config::McpServerConfigEntry>>,
+    /// Skill registry for plugin skills (RwLock for hot-reload on install/uninstall).
+    pub skill_registry: std::sync::RwLock<opencarrier_skills::registry::SkillRegistry>,
+    /// Plugin tool dispatcher — routes plugin tool calls to loaded shared libraries.
+    pub plugin_tool_dispatcher:
+        std::sync::Mutex<Option<Arc<opencarrier_runtime::plugin::tool_dispatch::PluginToolDispatcher>>>,
+}
 
-    /// Cron job scheduler.
-    pub cron_scheduler: crate::cron::CronScheduler,
+/// Agent scheduling, supervision, and runtime execution subsystem.
+pub struct KernelRuntime {
+    /// Agent scheduler.
+    pub scheduler: AgentScheduler,
+    /// Process supervisor.
+    pub supervisor: Supervisor,
+    /// Background agent executor.
+    pub background: BackgroundExecutor,
+    /// Tracks running agent tasks for cancellation support.
+    pub running_tasks: dashmap::DashMap<AgentId, tokio::task::AbortHandle>,
+    /// WASM sandbox engine (shared across all WASM agent executions).
+    wasm_sandbox: WasmSandbox,
+    /// Per-agent message locks — serializes LLM calls for the same agent to prevent
+    /// session corruption when multiple messages arrive concurrently.
+    agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
+}
+
+/// Cross-cutting coordination: capabilities, events, bindings, hooks, and process management.
+pub struct KernelCoordination {
+    /// Capability manager.
+    pub capabilities: CapabilityManager,
+    /// Event bus.
+    pub event_bus: EventBus,
     /// Agent bindings for multi-account routing (Mutex for runtime add/remove).
     pub bindings: std::sync::Mutex<Vec<opencarrier_types::config::AgentBinding>>,
     /// Broadcast configuration.
@@ -105,15 +118,37 @@ pub struct OpenCarrierKernel {
     pub process_manager: Arc<opencarrier_runtime::process_manager::ProcessManager>,
     /// Boot timestamp for uptime calculation.
     pub booted_at: std::time::Instant,
-    /// Per-agent message locks — serializes LLM calls for the same agent to prevent
-    /// session corruption when multiple messages arrive concurrently (e.g. rapid voice
-    /// messages via Telegram). Different agents can still run in parallel.
-    agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
     self_handle: OnceLock<Weak<OpenCarrierKernel>>,
-    /// Plugin tool dispatcher — routes plugin tool calls to loaded shared libraries.
-    pub plugin_tool_dispatcher:
-        std::sync::Mutex<Option<Arc<opencarrier_runtime::plugin::tool_dispatch::PluginToolDispatcher>>>,
+}
+
+/// The main OpenCarrier kernel — coordinates all subsystems.
+pub struct OpenCarrierKernel {
+    /// Kernel configuration.
+    pub config: KernelConfig,
+    /// Agent registry.
+    pub registry: AgentRegistry,
+    /// Memory substrate.
+    pub memory: Arc<MemorySubstrate>,
+    /// Merkle hash chain audit trail.
+    pub audit_log: Arc<AuditLog>,
+    /// Cost metering engine.
+    pub metering: Arc<MeteringEngine>,
+    /// Cron job scheduler.
+    pub cron_scheduler: crate::cron::CronScheduler,
+
+    /// LLM brain and model catalog.
+    pub brain: KernelBrain,
+    /// A2A communication subsystem.
+    pub a2a: KernelA2a,
+    /// External service integrations.
+    pub services: KernelServices,
+    /// Plugin and MCP tooling.
+    pub plugins: KernelPlugins,
+    /// Scheduling, supervision, and runtime.
+    pub runtime: KernelRuntime,
+    /// Coordination: capabilities, events, bindings, hooks, processes.
+    pub coordination: KernelCoordination,
 }
 
 /// Create workspace directory structure for an agent.
@@ -1243,39 +1278,51 @@ impl OpenCarrierKernel {
         let kernel = Self {
             config,
             registry: AgentRegistry::new(),
-            capabilities: CapabilityManager::new(),
-            event_bus: EventBus::new(),
-            scheduler: AgentScheduler::new(),
             memory: memory.clone(),
-            supervisor,
-            background,
             audit_log: Arc::new(AuditLog::with_db(memory.usage_conn())),
             metering,
-            brain: Arc::new(std::sync::RwLock::new(Arc::new(brain))),
-            brain_path: brain_path.clone(),
-            wasm_sandbox,
-            model_catalog: std::sync::RwLock::new(model_catalog),
-            skill_registry: std::sync::RwLock::new(skill_registry),
-            running_tasks: dashmap::DashMap::new(),
-            mcp_connections: tokio::sync::Mutex::new(Vec::new()),
-            mcp_tools: std::sync::Mutex::new(Vec::new()),
-            a2a_task_store: opencarrier_runtime::a2a::A2aTaskStore::default(),
-            a2a_external_agents: std::sync::Mutex::new(Vec::new()),
-            web_ctx,
-            browser_ctx,
-            media_engine,
-            tts_engine,
-            embedding_driver,
-            effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
             cron_scheduler,
-            bindings: std::sync::Mutex::new(initial_bindings),
-            broadcast: initial_broadcast,
-            hooks: opencarrier_runtime::hooks::HookRegistry::new(),
-            process_manager: Arc::new(opencarrier_runtime::process_manager::ProcessManager::new(5)),
-            booted_at: std::time::Instant::now(),
-            agent_msg_locks: dashmap::DashMap::new(),
-            self_handle: OnceLock::new(),
-            plugin_tool_dispatcher: std::sync::Mutex::new(None),
+            brain: KernelBrain {
+                brain: Arc::new(std::sync::RwLock::new(Arc::new(brain))),
+                brain_path: brain_path.clone(),
+                model_catalog: std::sync::RwLock::new(model_catalog),
+            },
+            a2a: KernelA2a {
+                a2a_task_store: opencarrier_runtime::a2a::A2aTaskStore::default(),
+                a2a_external_agents: std::sync::Mutex::new(Vec::new()),
+            },
+            services: KernelServices {
+                web_ctx,
+                browser_ctx,
+                media_engine,
+                tts_engine,
+                embedding_driver,
+            },
+            plugins: KernelPlugins {
+                mcp_connections: tokio::sync::Mutex::new(Vec::new()),
+                mcp_tools: std::sync::Mutex::new(Vec::new()),
+                effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
+                skill_registry: std::sync::RwLock::new(skill_registry),
+                plugin_tool_dispatcher: std::sync::Mutex::new(None),
+            },
+            runtime: KernelRuntime {
+                scheduler: AgentScheduler::new(),
+                supervisor,
+                background,
+                running_tasks: dashmap::DashMap::new(),
+                wasm_sandbox,
+                agent_msg_locks: dashmap::DashMap::new(),
+            },
+            coordination: KernelCoordination {
+                capabilities: CapabilityManager::new(),
+                event_bus: EventBus::new(),
+                bindings: std::sync::Mutex::new(initial_bindings),
+                broadcast: initial_broadcast,
+                hooks: opencarrier_runtime::hooks::HookRegistry::new(),
+                process_manager: Arc::new(opencarrier_runtime::process_manager::ProcessManager::new(5)),
+                booted_at: std::time::Instant::now(),
+                self_handle: OnceLock::new(),
+            },
         };
 
         // Restore persisted agents from SQLite
@@ -1359,10 +1406,11 @@ impl OpenCarrierKernel {
 
                     // Re-grant capabilities
                     let caps = manifest_to_capabilities(&entry.manifest);
-                    kernel.capabilities.grant(agent_id, caps);
+                    kernel.coordination.capabilities.grant(agent_id, caps);
 
                     // Re-register with scheduler
                     kernel
+                        .runtime
                         .scheduler
                         .register(agent_id, entry.manifest.resources.clone());
 
@@ -1482,10 +1530,10 @@ impl OpenCarrierKernel {
 
         // Register capabilities
         let caps = manifest_to_capabilities(&manifest);
-        self.capabilities.grant(agent_id, caps);
+        self.coordination.capabilities.grant(agent_id, caps);
 
         // Register with scheduler
-        self.scheduler
+        self.runtime.scheduler
             .register(agent_id, manifest.resources.clone());
 
         // Create registry entry
@@ -1565,6 +1613,7 @@ impl OpenCarrierKernel {
         message: &str,
     ) -> KernelResult<AgentLoopResult> {
         let handle: Option<Arc<dyn KernelHandle>> = self
+            .coordination
             .self_handle
             .get()
             .and_then(|w| w.upgrade())
@@ -1618,6 +1667,7 @@ impl OpenCarrierKernel {
         // succession (e.g. rapid voice messages via Telegram). Messages for different
         // agents are not blocked — each agent has its own independent lock.
         let lock = self
+            .runtime
             .agent_msg_locks
             .entry(agent_id)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -1625,7 +1675,7 @@ impl OpenCarrierKernel {
         let _guard = lock.lock().await;
 
         // Enforce quota before running the agent loop
-        self.scheduler
+        self.runtime.scheduler
             .check_quota(agent_id)
             .map_err(KernelError::OpenCarrier)?;
 
@@ -1656,7 +1706,7 @@ impl OpenCarrierKernel {
         match result {
             Ok(result) => {
                 // Record token usage for quota tracking
-                self.scheduler.record_usage(agent_id, &result.total_usage);
+                self.runtime.scheduler.record_usage(agent_id, &result.total_usage);
 
                 // Update last active time
                 let _ = self.registry.set_state(agent_id, AgentState::Running);
@@ -1684,7 +1734,7 @@ impl OpenCarrierKernel {
                 );
 
                 // Record the failure in supervisor for health reporting
-                self.supervisor.record_panic();
+                self.runtime.supervisor.record_panic();
                 warn!(agent_id = %agent_id, error = %e, "Agent loop failed — recorded in supervisor");
                 Err(e)
             }
@@ -1711,7 +1761,7 @@ impl OpenCarrierKernel {
         tokio::task::JoinHandle<KernelResult<AgentLoopResult>>,
     )> {
         // Enforce quota before spawning the streaming task
-        self.scheduler
+        self.runtime.scheduler
             .check_quota(agent_id)
             .map_err(KernelError::OpenCarrier)?;
 
@@ -1755,6 +1805,7 @@ impl OpenCarrierKernel {
                             })
                             .await;
                         kernel_clone
+                            .runtime
                             .scheduler
                             .record_usage(agent_id, &result.total_usage);
                         let _ = kernel_clone
@@ -1763,7 +1814,7 @@ impl OpenCarrierKernel {
                         Ok(result)
                     }
                     Err(e) => {
-                        kernel_clone.supervisor.record_panic();
+                        kernel_clone.runtime.supervisor.record_panic();
                         warn!(agent_id = %agent_id, error = %e, "Non-LLM agent failed");
                         Err(e)
                     }
@@ -1826,7 +1877,7 @@ impl OpenCarrierKernel {
                     "Token-based compaction triggered (messages below threshold but tokens above)"
                 );
             }
-            let by_quota = if let Some(headroom) = self.scheduler.token_headroom(agent_id) {
+            let by_quota = if let Some(headroom) = self.runtime.scheduler.token_headroom(agent_id) {
                 let threshold = (headroom as f64 * 0.8) as u64;
                 if estimated as u64 > threshold && session.messages.len() > 4 {
                     info!(
@@ -1876,7 +1927,7 @@ impl OpenCarrierKernel {
         let handle = tokio::spawn(async move {
             // Clone Brain Arc before any .await so the RwLockReadGuard is dropped (not Send).
             let brain_ref: Option<Arc<dyn opencarrier_runtime::llm_driver::Brain>> =
-                Some(Arc::clone(&*kernel_clone.brain.read().unwrap()) as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
+                Some(Arc::clone(&*kernel_clone.brain.brain.read().unwrap()) as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
 
             // Auto-compact if the session is large before running the loop
             if needs_compact {
@@ -1897,6 +1948,7 @@ impl OpenCarrierKernel {
 
             let messages_before = session.messages.len();
             let mut skill_snapshot = kernel_clone
+                .plugins
                 .skill_registry
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1943,15 +1995,15 @@ impl OpenCarrierKernel {
                 kernel_handle,
                 tx,
                 Some(&skill_snapshot),
-                Some(&kernel_clone.mcp_connections),
-                Some(&kernel_clone.web_ctx),
-                Some(&kernel_clone.browser_ctx),
-                kernel_clone.embedding_driver.as_deref(),
+                Some(&kernel_clone.plugins.mcp_connections),
+                Some(&kernel_clone.services.web_ctx),
+                Some(&kernel_clone.services.browser_ctx),
+                kernel_clone.services.embedding_driver.as_deref(),
                 manifest.workspace.as_deref(),
                 Some(&phase_cb),
-                Some(&kernel_clone.media_engine),
+                Some(&kernel_clone.services.media_engine),
                 if kernel_clone.config.tts.enabled {
-                    Some(&kernel_clone.tts_engine)
+                    Some(&kernel_clone.services.tts_engine)
                 } else {
                     None
                 },
@@ -1960,9 +2012,9 @@ impl OpenCarrierKernel {
                 } else {
                     None
                 },
-                Some(&kernel_clone.hooks),
+                Some(&kernel_clone.coordination.hooks),
                 ctx_window,
-                Some(&kernel_clone.process_manager),
+                Some(&kernel_clone.coordination.process_manager),
                 None, // content_blocks (streaming path uses text only for now)
                 brain_ref.clone(), // Brain for modality-based routing
                 sender_id.as_deref(),
@@ -2009,6 +2061,7 @@ impl OpenCarrierKernel {
                     }
 
                     kernel_clone
+                        .runtime
                         .scheduler
                         .record_usage(agent_id, &result.total_usage);
 
@@ -2051,7 +2104,7 @@ impl OpenCarrierKernel {
                     Ok(result)
                 }
                 Err(e) => {
-                    kernel_clone.supervisor.record_panic();
+                    kernel_clone.runtime.supervisor.record_panic();
                     warn!(agent_id = %agent_id, error = %e, "Streaming agent loop failed");
                     Err(KernelError::OpenCarrier(e))
                 }
@@ -2059,7 +2112,7 @@ impl OpenCarrierKernel {
         });
 
         // Store abort handle for cancellation support
-        self.running_tasks.insert(agent_id, handle.abort_handle());
+        self.runtime.running_tasks.insert(agent_id, handle.abort_handle());
 
         Ok((rx, handle))
     }
@@ -2106,6 +2159,7 @@ impl OpenCarrierKernel {
         });
 
         let result = self
+            .runtime
             .wasm_sandbox
             .execute(
                 &wasm_bytes,
@@ -2222,7 +2276,7 @@ impl OpenCarrierKernel {
     ) -> KernelResult<AgentLoopResult> {
         // Clone Brain Arc early so the RwLockReadGuard is dropped before any .await.
         let brain_ref: Option<Arc<dyn opencarrier_runtime::llm_driver::Brain>> =
-            Some(Arc::clone(&*self.brain.read().unwrap()) as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
+            Some(Arc::clone(&*self.brain.brain.read().unwrap()) as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
 
         // Load session: use per-user session when sender_id is present (multi-tenancy),
         // otherwise use the agent's default session.
@@ -2268,7 +2322,7 @@ impl OpenCarrierKernel {
                 None,
             );
             let by_tokens = needs_compaction_by_tokens(estimated, &config);
-            let by_quota = if let Some(headroom) = self.scheduler.token_headroom(agent_id) {
+            let by_quota = if let Some(headroom) = self.runtime.scheduler.token_headroom(agent_id) {
                 let threshold = (headroom as f64 * 0.8) as u64;
                 estimated as u64 > threshold && session.messages.len() > 4
             } else {
@@ -2319,6 +2373,7 @@ impl OpenCarrierKernel {
 
         // Snapshot skill registry before async call (RwLockReadGuard is !Send)
         let mut skill_snapshot = self
+            .plugins
             .skill_registry
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -2352,15 +2407,15 @@ impl OpenCarrierKernel {
             &tools,
             kernel_handle,
             Some(&skill_snapshot),
-            Some(&self.mcp_connections),
-            Some(&self.web_ctx),
-            Some(&self.browser_ctx),
-            self.embedding_driver.as_deref(),
+            Some(&self.plugins.mcp_connections),
+            Some(&self.services.web_ctx),
+            Some(&self.services.browser_ctx),
+            self.services.embedding_driver.as_deref(),
             manifest.workspace.as_deref(),
             None, // on_phase callback
-            Some(&self.media_engine),
+            Some(&self.services.media_engine),
             if self.config.tts.enabled {
-                Some(&self.tts_engine)
+                Some(&self.services.tts_engine)
             } else {
                 None
             },
@@ -2369,9 +2424,9 @@ impl OpenCarrierKernel {
             } else {
                 None
             },
-            Some(&self.hooks),
+            Some(&self.coordination.hooks),
             ctx_window,
-            Some(&self.process_manager),
+            Some(&self.coordination.process_manager),
             content_blocks,
             brain_ref, // Brain for modality-based routing
             sender_id.as_deref(),
@@ -2465,7 +2520,7 @@ impl OpenCarrierKernel {
             .map_err(KernelError::OpenCarrier)?;
 
         // Reset quota tracking so /new clears "token quota exceeded"
-        self.scheduler.reset_usage(agent_id);
+        self.runtime.scheduler.reset_usage(agent_id);
 
         info!(agent_id = %agent_id, "Session reset (summary saved to memory)");
         Ok(())
@@ -2699,6 +2754,7 @@ impl OpenCarrierKernel {
         // Validate skill names if allowlist is non-empty
         if !skills.is_empty() {
             let registry = self
+                .plugins
                 .skill_registry
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
@@ -2732,7 +2788,7 @@ impl OpenCarrierKernel {
     ) -> KernelResult<()> {
         // Validate server names if allowlist is non-empty
         if !servers.is_empty() {
-            if let Ok(mcp_tools) = self.mcp_tools.lock() {
+            if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
                 let mut known_servers: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 for tool in mcp_tools.iter() {
@@ -2789,7 +2845,7 @@ impl OpenCarrierKernel {
 
     /// Cancel an agent's currently running LLM task.
     pub fn stop_agent_run(&self, agent_id: AgentId) -> KernelResult<bool> {
-        if let Some((_, handle)) = self.running_tasks.remove(&agent_id) {
+        if let Some((_, handle)) = self.runtime.running_tasks.remove(&agent_id) {
             handle.abort();
             info!(agent_id = %agent_id, "Agent run cancelled");
             Ok(true)
@@ -2931,10 +2987,10 @@ impl OpenCarrierKernel {
             .registry
             .remove(agent_id)
             .map_err(KernelError::OpenCarrier)?;
-        self.background.stop_agent(agent_id);
-        self.scheduler.unregister(agent_id);
-        self.capabilities.revoke_all(agent_id);
-        self.event_bus.unsubscribe_agent(agent_id);
+        self.runtime.background.stop_agent(agent_id);
+        self.runtime.scheduler.unregister(agent_id);
+        self.coordination.capabilities.revoke_all(agent_id);
+        self.coordination.event_bus.unsubscribe_agent(agent_id);
 
         // Remove cron jobs so they don't linger as orphans (#504)
         let cron_removed = self.cron_scheduler.remove_agent_jobs(agent_id);
@@ -2966,21 +3022,21 @@ impl OpenCarrierKernel {
     ///
     /// Returns `None` if `set_self_handle` hasn't been called yet.
     pub fn get_kernel_handle(self: &Arc<Self>) -> Option<Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle>> {
-        self.self_handle
+        self.coordination.self_handle
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle>)
     }
 
     pub fn set_self_handle(self: &Arc<Self>) {
-        let _ = self.self_handle.set(Arc::downgrade(self));
+        let _ = self.coordination.self_handle.set(Arc::downgrade(self));
     }
 
     // ─── Agent Binding management ──────────────────────────────────────
 
     /// List all agent bindings.
     pub fn list_bindings(&self) -> Vec<opencarrier_types::config::AgentBinding> {
-        self.bindings
+        self.coordination.bindings
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -2988,7 +3044,7 @@ impl OpenCarrierKernel {
 
     /// Add a binding at runtime.
     pub fn add_binding(&self, binding: opencarrier_types::config::AgentBinding) {
-        let mut bindings = self.bindings.lock().unwrap_or_else(|e| e.into_inner());
+        let mut bindings = self.coordination.bindings.lock().unwrap_or_else(|e| e.into_inner());
         bindings.push(binding);
         // Sort by specificity descending
         bindings.sort_by(|a, b| b.match_rule.specificity().cmp(&a.match_rule.specificity()));
@@ -2996,7 +3052,7 @@ impl OpenCarrierKernel {
 
     /// Remove a binding by index, returns the removed binding if valid.
     pub fn remove_binding(&self, index: usize) -> Option<opencarrier_types::config::AgentBinding> {
-        let mut bindings = self.bindings.lock().unwrap_or_else(|e| e.into_inner());
+        let mut bindings = self.coordination.bindings.lock().unwrap_or_else(|e| e.into_inner());
         if index < bindings.len() {
             Some(bindings.remove(index))
         } else {
@@ -3057,6 +3113,7 @@ impl OpenCarrierKernel {
                 HotAction::ReloadProviderUrls => {
                     info!("Hot-reload: applying provider URL overrides");
                     let mut catalog = self
+                        .brain
                         .model_catalog
                         .write()
                         .unwrap_or_else(|e| e.into_inner());
@@ -3077,7 +3134,7 @@ impl OpenCarrierKernel {
     /// Publish an event to the event bus.
     pub async fn publish_event(&self, event: Event) -> Vec<(AgentId, String)> {
         // Publish to the event bus
-        self.event_bus.publish(event).await;
+        self.coordination.event_bus.publish(event).await;
 
         // No trigger dispatch (triggers engine removed)
         Vec::new()
@@ -3129,6 +3186,7 @@ impl OpenCarrierKernel {
             tokio::spawn(async move {
                 let local_providers: Vec<(String, String)> = {
                     let catalog = kernel
+                        .brain
                         .model_catalog
                         .read()
                         .unwrap_or_else(|e| e.into_inner());
@@ -3152,7 +3210,7 @@ impl OpenCarrierKernel {
                             "Local provider online"
                         );
                         if !result.discovered_models.is_empty() {
-                            if let Ok(mut catalog) = kernel.model_catalog.write() {
+                            if let Ok(mut catalog) = kernel.brain.model_catalog.write() {
                                 catalog.merge_discovered_models(
                                     provider_id,
                                     &result.discovered_models,
@@ -3178,7 +3236,7 @@ impl OpenCarrierKernel {
                 interval.tick().await; // Skip first immediate tick
                 loop {
                     interval.tick().await;
-                    if kernel.supervisor.is_shutting_down() {
+                    if kernel.runtime.supervisor.is_shutting_down() {
                         break;
                     }
                     match kernel.metering.cleanup(90) {
@@ -3206,7 +3264,7 @@ impl OpenCarrierKernel {
                     interval.tick().await; // Skip first immediate tick
                     loop {
                         interval.tick().await;
-                        if kernel.supervisor.is_shutting_down() {
+                        if kernel.runtime.supervisor.is_shutting_down() {
                             break;
                         }
                         match kernel.memory.consolidate().await {
@@ -3232,6 +3290,7 @@ impl OpenCarrierKernel {
 
         // Connect to configured + extension MCP servers
         let has_mcp = self
+            .plugins
             .effective_mcp_servers
             .read()
             .map(|s| !s.is_empty())
@@ -3254,7 +3313,7 @@ impl OpenCarrierKernel {
                 interval.tick().await; // Skip first immediate tick
                 loop {
                     interval.tick().await;
-                    if kernel.supervisor.is_shutting_down() {
+                    if kernel.runtime.supervisor.is_shutting_down() {
                         // Persist on shutdown
                         let _ = kernel.cron_scheduler.persist();
                         break;
@@ -3369,7 +3428,7 @@ impl OpenCarrierKernel {
                 tokio::spawn(async move {
                     let discovered =
                         opencarrier_runtime::a2a::discover_external_agents(&agents).await;
-                    if let Ok(mut store) = kernel.a2a_external_agents.lock() {
+                    if let Ok(mut store) = kernel.a2a.a2a_external_agents.lock() {
                         *store = discovered;
                     }
                 });
@@ -3394,7 +3453,7 @@ impl OpenCarrierKernel {
             loop {
                 interval.tick().await;
 
-                if kernel.supervisor.is_shutting_down() {
+                if kernel.runtime.supervisor.is_shutting_down() {
                     info!("Heartbeat monitor stopping (shutdown)");
                     break;
                 }
@@ -3438,7 +3497,7 @@ impl OpenCarrierKernel {
                                             unresponsive_secs: status.inactive_secs as u64,
                                         }),
                                     );
-                                    kernel.event_bus.publish(event).await;
+                                    kernel.coordination.event_bus.publish(event).await;
                                 }
                             }
                             continue;
@@ -3478,7 +3537,7 @@ impl OpenCarrierKernel {
                                 unresponsive_secs: 0, // 0 signals recovery attempt
                             }),
                         );
-                        kernel.event_bus.publish(event).await;
+                        kernel.coordination.event_bus.publish(event).await;
                         continue;
                     }
 
@@ -3515,7 +3574,7 @@ impl OpenCarrierKernel {
                                 unresponsive_secs: status.inactive_secs as u64,
                             }),
                         );
-                        kernel.event_bus.publish(event).await;
+                        kernel.coordination.event_bus.publish(event).await;
                     }
                 }
             }
@@ -3533,7 +3592,7 @@ impl OpenCarrierKernel {
     ) {
         // Start continuous/periodic loops
         let kernel = Arc::clone(self);
-        self.background
+        self.runtime.background
             .start_agent(agent_id, name, schedule, move |aid, msg| {
                 let k = Arc::clone(&kernel);
                 tokio::spawn(async move {
@@ -3556,7 +3615,7 @@ impl OpenCarrierKernel {
     pub fn shutdown(&self) {
         info!("Shutting down OpenCarrier kernel...");
 
-        self.supervisor.shutdown();
+        self.runtime.supervisor.shutdown();
 
         // Update agent states to Suspended in persistent storage (not delete)
         for entry in self.registry.list() {
@@ -3588,23 +3647,23 @@ impl OpenCarrierKernel {
     /// providers work immediately without a daemon restart.
     /// Return a cloned Arc<Brain> for the API (None if not loaded).
     pub fn brain_info(&self) -> Arc<Brain> {
-        Arc::clone(&*self.brain.read().unwrap())
+        Arc::clone(&*self.brain.brain.read().unwrap())
     }
 
     /// Acquire a read lock on the Brain (for validation before updates).
     pub fn brain_read(&self) -> std::sync::RwLockReadGuard<'_, Arc<Brain>> {
-        self.brain.read().unwrap()
+        self.brain.brain.read().unwrap()
     }
 
     /// Resolve a human-readable (modality, model_name) pair for display.
     pub fn resolve_model_label(&self, modality: &str) -> (String, String) {
-        let brain = self.brain.read().unwrap();
+        let brain = self.brain.brain.read().unwrap();
         let model = brain.model_for(modality).to_string();
         (modality.to_string(), model)
     }
 
     pub fn resolve_driver(&self, manifest: &AgentManifest) -> KernelResult<Arc<dyn LlmDriver>> {
-        let brain = self.brain.read().unwrap();
+        let brain = self.brain.brain.read().unwrap();
         let modality = if manifest.model.modality.is_empty() {
             "chat"
         } else {
@@ -3648,14 +3707,14 @@ impl OpenCarrierKernel {
 
     /// Reload Brain from disk (brain.json). Used by the API to hot-reload after config changes.
     pub fn reload_brain(&self) -> Result<(), String> {
-        let json_str = std::fs::read_to_string(&self.brain_path)
-            .map_err(|e| format!("Cannot read {}: {e}", self.brain_path.display()))?;
+        let json_str = std::fs::read_to_string(&self.brain.brain_path)
+            .map_err(|e| format!("Cannot read {}: {e}", self.brain.brain_path.display()))?;
         let config: opencarrier_types::brain::BrainConfig = serde_json::from_str(&json_str)
             .map_err(|e| format!("Invalid brain.json: {e}"))?;
         let brain = Brain::new(config)
             .map_err(|e| format!("Brain init failed: {e}"))?;
-        *self.brain.write().unwrap() = Arc::new(brain);
-        info!("Brain reloaded from {}", self.brain_path.display());
+        *self.brain.brain.write().unwrap() = Arc::new(brain);
+        info!("Brain reloaded from {}", self.brain.brain_path.display());
         Ok(())
     }
 
@@ -3666,7 +3725,7 @@ impl OpenCarrierKernel {
     {
         // Read current config
         let mut config = {
-            let guard = self.brain.read().unwrap();
+            let guard = self.brain.brain.read().unwrap();
             guard.config().clone()
         };
 
@@ -3676,20 +3735,20 @@ impl OpenCarrierKernel {
         // Persist to disk
         let json_str = serde_json::to_string_pretty(&config)
             .map_err(|e| format!("Cannot serialize brain config: {e}"))?;
-        std::fs::write(&self.brain_path, &json_str)
-            .map_err(|e| format!("Cannot write {}: {e}", self.brain_path.display()))?;
+        std::fs::write(&self.brain.brain_path, &json_str)
+            .map_err(|e| format!("Cannot write {}: {e}", self.brain.brain_path.display()))?;
 
         // Hot-reload: create new Brain from updated config
         let brain = Brain::new(config)
             .map_err(|e| format!("Brain init failed after update: {e}"))?;
-        *self.brain.write().unwrap() = Arc::new(brain);
+        *self.brain.brain.write().unwrap() = Arc::new(brain);
         info!("Brain config updated and reloaded");
         Ok(())
     }
 
     /// Return the path to brain.json.
     pub fn brain_path(&self) -> &std::path::Path {
-        &self.brain_path
+        &self.brain.brain_path
     }
 
     /// Connect to all configured MCP servers and cache their tool definitions.
@@ -3698,6 +3757,7 @@ impl OpenCarrierKernel {
         use opencarrier_types::config::McpTransportEntry;
 
         let servers = self
+            .plugins
             .effective_mcp_servers
             .read()
             .map(|s| s.clone())
@@ -3723,7 +3783,7 @@ impl OpenCarrierKernel {
                 Ok(conn) => {
                     let tool_count = conn.tools().len();
                     // Cache tool definitions
-                    if let Ok(mut tools) = self.mcp_tools.lock() {
+                    if let Ok(mut tools) = self.plugins.mcp_tools.lock() {
                         tools.extend(conn.tools().iter().cloned());
                     }
                     info!(
@@ -3731,7 +3791,7 @@ impl OpenCarrierKernel {
                         tools = tool_count,
                         "MCP server connected"
                     );
-                    self.mcp_connections.lock().await.push(conn);
+                    self.plugins.mcp_connections.lock().await.push(conn);
                 }
                 Err(e) => {
                     warn!(
@@ -3743,11 +3803,11 @@ impl OpenCarrierKernel {
             }
         }
 
-        let tool_count = self.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
+        let tool_count = self.plugins.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
         if tool_count > 0 {
             info!(
                 "MCP: {tool_count} tools available from {} server(s)",
-                self.mcp_connections.lock().await.len()
+                self.plugins.mcp_connections.lock().await.len()
             );
         }
 
@@ -3767,7 +3827,7 @@ impl OpenCarrierKernel {
                 // Find dead connections by pinging each one
                 let mut dead_servers = Vec::new();
                 {
-                    let mut conns = kernel.mcp_connections.lock().await;
+                    let mut conns = kernel.plugins.mcp_connections.lock().await;
                     let mut i = 0;
                     while i < conns.len() {
                         if conns[i].ping().await.is_err() {
@@ -3790,12 +3850,12 @@ impl OpenCarrierKernel {
                         Ok(conn) => {
                             let tool_count = conn.tools().len();
                             // Remove stale tools for this server before re-adding
-                            if let Ok(mut tools) = kernel.mcp_tools.lock() {
+                            if let Ok(mut tools) = kernel.plugins.mcp_tools.lock() {
                                 let prefix = format!("mcp_{}", opencarrier_runtime::mcp::normalize_name(&name));
                                 tools.retain(|t| !t.name.starts_with(&prefix));
                                 tools.extend(conn.tools().iter().cloned());
                             }
-                            kernel.mcp_connections.lock().await.push(conn);
+                            kernel.plugins.mcp_connections.lock().await.push(conn);
                             info!(server = %name, tools = tool_count, "MCP server reconnected");
                         }
                         Err(e) => {
@@ -3847,7 +3907,7 @@ impl OpenCarrierKernel {
         // Step 1: Filter builtin tools.
         // Priority: declared tools > ToolProfile > all builtins.
         let has_tool_all = entry.as_ref().is_some_and(|_| {
-            let caps = self.capabilities.list(agent_id);
+            let caps = self.coordination.capabilities.list(agent_id);
             caps.iter().any(|c| matches!(c, Capability::ToolAll))
         });
 
@@ -3878,6 +3938,7 @@ impl OpenCarrierKernel {
         // then by declared tools).
         let skill_tools = {
             let registry = self
+                .plugins
                 .skill_registry
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
@@ -3901,7 +3962,7 @@ impl OpenCarrierKernel {
 
         // Step 3: Add MCP tools (filtered by agent's MCP server allowlist,
         // then by declared tools).
-        if let Ok(mcp_tools) = self.mcp_tools.lock() {
+        if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
             let mcp_candidates: Vec<ToolDefinition> = if mcp_allowlist.is_empty() {
                 mcp_tools.iter().cloned().collect()
             } else {
@@ -3929,7 +3990,7 @@ impl OpenCarrierKernel {
         }
 
         // Step 3.5: Add plugin tools (from dlopen-loaded shared libraries).
-        if let Ok(guard) = self.plugin_tool_dispatcher.lock() {
+        if let Ok(guard) = self.plugins.plugin_tool_dispatcher.lock() {
             if let Some(ref dispatcher) = *guard {
                 for t in dispatcher.definitions() {
                     if !tools_unrestricted
@@ -3985,6 +4046,7 @@ impl OpenCarrierKernel {
     /// to agents without restarting the kernel.
     pub fn reload_skills(&self) {
         let mut registry = self
+            .plugins
             .skill_registry
             .write()
             .unwrap_or_else(|e| e.into_inner());
@@ -4003,6 +4065,7 @@ impl OpenCarrierKernel {
     /// what extra capabilities are installed.
     fn build_skill_summary(&self, skill_allowlist: &[String]) -> String {
         let registry = self
+            .plugins
             .skill_registry
             .read()
             .unwrap_or_else(|e| e.into_inner());
@@ -4042,7 +4105,7 @@ impl OpenCarrierKernel {
     /// Build a compact MCP server/tool summary for the system prompt so the
     /// agent knows what external tool servers are connected.
     fn build_mcp_summary(&self, mcp_allowlist: &[String]) -> String {
-        let tools = match self.mcp_tools.lock() {
+        let tools = match self.plugins.mcp_tools.lock() {
             Ok(t) => t.clone(),
             Err(_) => return String::new(),
         };
@@ -4057,7 +4120,7 @@ impl OpenCarrierKernel {
             .collect();
 
         // Collect known server names from live connections for correct grouping
-        let conns = self.mcp_connections.blocking_lock();
+        let conns = self.plugins.mcp_connections.blocking_lock();
         let known_names: Vec<&str> = conns.iter().map(|c| c.name()).collect();
 
         // Group tools by MCP server using known-names resolver
@@ -4117,6 +4180,7 @@ impl OpenCarrierKernel {
     pub fn collect_prompt_context(&self, skill_allowlist: &[String]) -> String {
         let mut context_parts = Vec::new();
         for skill in self
+            .plugins
             .skill_registry
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -4181,7 +4245,7 @@ impl OpenCarrierKernel {
         sender_id: &Option<String>,
         sender_name: Option<String>,
     ) {
-        let mcp_tool_count = self.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
+        let mcp_tool_count = self.plugins.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
         // Read user_name from the agent's own KV namespace (per-agent memory)
         let user_name = self
             .memory
@@ -4483,6 +4547,7 @@ impl KernelHandle for OpenCarrierKernel {
                 .ok_or_else(|| format!("Agent not found: {agent_id}"))?,
         };
         let handle: Option<Arc<dyn KernelHandle>> = self
+            .coordination
             .self_handle
             .get()
             .and_then(|w| w.upgrade())
@@ -4750,6 +4815,7 @@ impl KernelHandle for OpenCarrierKernel {
 
     fn list_a2a_agents(&self) -> Vec<(String, String)> {
         let agents = self
+            .a2a
             .a2a_external_agents
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -4761,6 +4827,7 @@ impl KernelHandle for OpenCarrierKernel {
 
     fn get_a2a_agent_url(&self, name: &str) -> Option<String> {
         let agents = self
+            .a2a
             .a2a_external_agents
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -5106,7 +5173,7 @@ impl KernelHandle for OpenCarrierKernel {
         sender_id: &str,
         agent_id: &str,
     ) -> Result<String, String> {
-        let guard = self.plugin_tool_dispatcher.lock().unwrap();
+        let guard = self.plugins.plugin_tool_dispatcher.lock().unwrap();
         if let Some(ref dispatcher) = *guard {
             let context = opencarrier_types::plugin::PluginToolContext {
                 tenant_id: String::new(),
