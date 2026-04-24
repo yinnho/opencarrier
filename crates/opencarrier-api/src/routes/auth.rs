@@ -127,9 +127,34 @@ pub async fn auth_login(
             .unwrap();
     }
 
-    // Legacy admin login — issue new-format token with admin role
+    // Legacy admin login — ensure a tenant record exists for this admin,
+    // then issue token with the admin's tenant_id so workspace paths are scoped.
+    let admin_tid = {
+        let tenant_store = state.kernel.memory.tenant();
+        match tenant_store.get_tenant_by_name(username) {
+            Ok(Some(t)) => t.id,
+            _ => {
+                // Auto-create tenant record for legacy admin
+                let id = uuid::Uuid::new_v4().to_string();
+                let hash = auth_cfg.password_hash.clone();
+                let entry = opencarrier_types::tenant::TenantEntry {
+                    id: id.clone(),
+                    name: username.to_string(),
+                    password_hash: hash,
+                    role: opencarrier_types::tenant::TenantRole::Admin,
+                    enabled: true,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    updated_at: chrono::Utc::now().to_rfc3339(),
+                };
+                if let Err(e) = tenant_store.create_tenant(&entry) {
+                    tracing::warn!("Failed to auto-create admin tenant: {e}");
+                }
+                id
+            }
+        }
+    };
     let token = crate::session_auth::create_session_token(
-        None,
+        Some(&admin_tid),
         "admin",
         username,
         &secret,
@@ -157,6 +182,7 @@ pub async fn auth_login(
                 "token": token,
                 "username": username,
                 "role": "admin",
+                "tenant_id": admin_tid,
             })
             .to_string(),
         ))

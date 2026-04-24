@@ -85,11 +85,11 @@ pub async fn create_tenant(
                     let _ = existing;
                     continue;
                 }
-                // Check if the clone is installed on disk
+                // Check if the clone is installed on disk (tenant-scoped path)
                 let clone_toml = state
                     .kernel
                     .config
-                    .effective_workspaces_dir()
+                    .tenant_workspaces_dir(Some(tenant_id.as_str()))
                     .join(clone_name)
                     .join("agent.toml");
                 if clone_toml.exists() {

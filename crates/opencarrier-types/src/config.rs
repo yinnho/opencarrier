@@ -1079,11 +1079,11 @@ impl KernelConfig {
 
     /// Resolved workspaces root directory scoped to a specific tenant.
     ///
-    /// Returns `tenants/{tenant_id}/workspaces/` under the home directory.
-    /// Falls back to `effective_workspaces_dir()` if tenant_id is None.
+    /// Returns `workspaces/{tenant_id}/` under the effective workspaces directory.
+    /// Falls back to `effective_workspaces_dir()` if tenant_id is None (global agents).
     pub fn tenant_workspaces_dir(&self, tenant_id: Option<&str>) -> PathBuf {
         match tenant_id {
-            Some(tid) => self.home_dir.join("tenants").join(tid).join("workspaces"),
+            Some(tid) => self.effective_workspaces_dir().join(tid),
             None => self.effective_workspaces_dir(),
         }
     }

@@ -177,7 +177,7 @@ pub async fn execute_tool(
         "user_profile" => tool_user_profile(input, workspace_root, sender_id).await,
 
         // Clone management tools
-        "clone_install" => tool_clone_install(input, kernel).await,
+        "clone_install" => tool_clone_install(input, kernel, caller_agent_id).await,
         "clone_export" => tool_clone_export(input, kernel).await,
         "clone_publish" => tool_clone_publish(input, kernel).await,
 
@@ -2084,6 +2084,7 @@ async fn tool_user_profile(
 async fn tool_clone_install(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_install requires kernel access")?;
     let name_raw = input["name"].as_str()
@@ -2218,8 +2219,9 @@ async fn tool_clone_install(
     let agx_bytes = pack_agx(&clone_data)
         .map_err(|e| format!("Failed to pack .agx: {e}"))?;
 
-    // Install via kernel
-    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes, None).await?;
+    // Install via kernel — inherit tenant_id from the calling agent
+    let tenant_id = caller_agent_id.and_then(|aid| kernel.get_agent_tenant_id(aid));
+    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes, tenant_id.as_deref()).await?;
 
     Ok(format!(
         "Clone '{}' installed successfully. Agent ID: {}. {} knowledge files, {} skills, {} agents.",
