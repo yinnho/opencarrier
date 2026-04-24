@@ -4878,6 +4878,11 @@ impl KernelHandle for OpenCarrierKernel {
             .map(|p| p.to_string_lossy().to_string())
     }
 
+    fn get_agent_tenant_id(&self, agent_id: &str) -> Option<String> {
+        let aid: opencarrier_types::agent::AgentId = agent_id.parse().ok()?;
+        self.registry.get(aid).and_then(|entry| entry.tenant_id.clone())
+    }
+
     fn refresh_tools(&self, agent_id_str: &str) -> Option<Vec<opencarrier_types::tool::ToolDefinition>> {
         let agent_id: opencarrier_types::agent::AgentId = agent_id_str.parse().ok()?;
         let tools = self.available_tools(agent_id);
