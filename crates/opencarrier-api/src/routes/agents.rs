@@ -159,9 +159,14 @@ pub async fn spawn_agent(
     let name = manifest.name.clone();
     match state.kernel.spawn_agent(manifest) {
         Ok(id) => {
-            // Assign tenant ownership from the request context
-            if ctx.tenant_id.is_some() {
-                state.kernel.registry.set_tenant_id(id, ctx.tenant_id.clone());
+            // Determine target tenant: admin can override, otherwise use context
+            let target_tenant = if ctx.is_admin() {
+                req.tenant_id.clone().or_else(|| ctx.tenant_id.clone())
+            } else {
+                ctx.tenant_id.clone()
+            };
+            if target_tenant.is_some() {
+                state.kernel.registry.set_tenant_id(id, target_tenant);
             }
             (
                 StatusCode::CREATED,
@@ -211,6 +216,7 @@ pub async fn list_agents(
                 "model": model,
                 "ready": ready,
                 "profile": e.manifest.profile,
+                "tenant_id": e.tenant_id,
                 "identity": {
                     "emoji": e.identity.emoji,
                     "avatar_url": e.identity.avatar_url,

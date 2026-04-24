@@ -16,6 +16,10 @@ pub struct SpawnRequest {
     /// When present, the signature is verified before spawning.
     #[serde(default)]
     pub signed_manifest: Option<String>,
+    /// Optional tenant_id override (admin only).
+    /// When provided by an admin, the agent is assigned to this tenant.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 /// Response after spawning an agent.

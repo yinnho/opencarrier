@@ -142,6 +142,8 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/js/pages/comms.js"),
     "\n",
     include_str!("../static/js/pages/mcp.js"),
+    "\n",
+    include_str!("../static/js/pages/tenants.js"),
     "\n</script>\n",
     // Alpine.js MUST be last — it processes x-data and fires alpine:init
     "<script>\n",

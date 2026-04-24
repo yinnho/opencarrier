@@ -2207,7 +2207,7 @@ async fn tool_clone_install(
         .map_err(|e| format!("Failed to pack .agx: {e}"))?;
 
     // Install via kernel
-    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes).await?;
+    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes, None).await?;
 
     Ok(format!(
         "Clone '{}' installed successfully. Agent ID: {}. {} knowledge files, {} skills, {} agents.",

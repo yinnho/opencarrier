@@ -13,6 +13,9 @@ use std::sync::Arc;
 pub struct InstallCloneRequest {
     /// Base64-encoded .agx file bytes.
     pub data: String,
+    /// Optional tenant_id override (admin only).
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 impl InstallCloneRequest {
@@ -97,8 +100,15 @@ pub async fn install_clone(
         );
     }
 
+    // Determine target tenant: admin can override, otherwise use context
+    let target_tenant = if ctx.is_admin() {
+        req.tenant_id.as_deref().or(ctx.tenant_id.as_deref())
+    } else {
+        ctx.tenant_id.as_deref()
+    };
+
     // Create workspace directory (tenant-scoped)
-    let workspace_dir = state.kernel.config.tenant_workspaces_dir(ctx.tenant_id.as_deref()).join(&clone_data.name);
+    let workspace_dir = state.kernel.config.tenant_workspaces_dir(target_tenant).join(&clone_data.name);
     if workspace_dir.exists() {
         return (
             StatusCode::CONFLICT,
@@ -122,9 +132,8 @@ pub async fn install_clone(
     // Spawn agent (tenant-scoped)
     let name = manifest.name.clone();
     let warnings = clone_data.security_warnings.clone();
-    let tid = ctx.tenant_id.as_deref();
 
-    match state.kernel.spawn_agent_with_parent(manifest, None, None, tid) {
+    match state.kernel.spawn_agent_with_parent(manifest, None, None, target_tenant) {
         Ok(id) => {
             tracing::info!("Clone '{}' installed and spawned: {}", name, id);
             (

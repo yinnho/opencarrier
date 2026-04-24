@@ -154,8 +154,9 @@ pub trait KernelHandle: Send + Sync {
     }
 
     /// Install a clone from raw .agx bytes. Returns (agent_id, agent_name).
-    async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
-        let _ = (name, agx_data);
+    /// `tenant_id` scopes the clone's workspace to a specific tenant.
+    async fn clone_install(&self, name: &str, agx_data: &[u8], tenant_id: Option<&str>) -> Result<(String, String), String> {
+        let _ = (name, agx_data, tenant_id);
         Err("Clone install not available".to_string())
     }
 
