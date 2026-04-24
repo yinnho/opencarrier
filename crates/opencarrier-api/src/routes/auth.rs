@@ -225,6 +225,7 @@ pub async fn auth_check(
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/auth/check", routing::get(auth_check))
+    axum::Router::new().route("/api/auth/login", routing::post(auth_login))
+        .route("/api/auth/check", routing::get(auth_check))
         .route("/api/auth/logout", routing::post(auth_logout))
 }
