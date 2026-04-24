@@ -31,7 +31,7 @@ subtle = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true }
-cron = "0.15"
+cron = "0.16"
 zeroize = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
