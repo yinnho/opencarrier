@@ -1353,7 +1353,7 @@
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'; stopQrPoll()">Tools</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'security' }" @click="tab = 'security'; stopQrPoll(); if (!securityData && !secLoading) loadSecurity()">Security</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'; stopQrPoll()">System</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'channels' }" @click="tab = 'channels'; if (!channelsData && !channelsLoading) loadChannels()">Channels</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'channels' }" @click="tab = 'channels'; if (!channelsData && !channelsLoading) loadChannelsFull()">Channels</div>
           </div>
 
           <!-- System Info tab -->
@@ -1753,6 +1753,104 @@
                     <div style="grid-column:span 2"><button class="btn btn-sm" :disabled="feishuSaving" @click="feishuAddTenant()"><span x-show="!feishuSaving">Add Tenant</span><span x-show="feishuSaving">Saving...</span></button></div>
                   </div>
                 </details>
+              </div>
+            </div>
+
+            <!-- Agent Bindings section -->
+            <div class="card mt-4" style="border-left:3px solid var(--accent)">
+              <div class="card-header">Agent Bindings</div>
+              <div class="card-body" style="padding-top:8px">
+                <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Bind agents to messaging channels. Each binding routes matching messages to the specified agent.</p>
+
+                <div style="display:flex;gap:8px;margin-bottom:12px">
+                  <button class="btn btn-sm" @click="showBindForm = !showBindForm; if (showBindForm && bindingsTenants.length === 0 && $store.app.isAdmin()) loadBindingsTenants()">
+                    <span x-show="!showBindForm">+ Add Binding</span>
+                    <span x-show="showBindForm">Cancel</span>
+                  </button>
+                  <button class="btn btn-sm btn-ghost" :disabled="bindingsLoading" @click="loadBindings()">Refresh</button>
+                </div>
+
+                <!-- Add binding form -->
+                <div x-show="showBindForm" style="margin-bottom:14px;padding:12px;background:var(--bg);border-radius:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+                  <div>
+                    <label style="color:var(--text-dim)">Agent *</label>
+                    <select class="form-input" style="width:100%;font-size:12px" x-model="bindForm.agent">
+                      <option value="">Select agent...</option>
+                      <template x-for="a in $store.app.agents" :key="a.id">
+                        <option :value="a.id" x-text="a.name + (a.tenant_id ? ' [' + a.tenant_id.slice(0,8) + ']' : '')"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div>
+                    <label style="color:var(--text-dim)">Channel *</label>
+                    <input class="form-input" style="width:100%;font-size:12px" x-model="bindForm.channel" placeholder="e.g. wecom, weixin, feishu">
+                  </div>
+                  <div>
+                    <label style="color:var(--text-dim)">Account ID</label>
+                    <input class="form-input" style="width:100%;font-size:12px" x-model="bindForm.account_id" placeholder="optional">
+                  </div>
+                  <div>
+                    <label style="color:var(--text-dim)">Peer ID</label>
+                    <input class="form-input" style="width:100%;font-size:12px" x-model="bindForm.peer_id" placeholder="optional">
+                  </div>
+                  <div>
+                    <label style="color:var(--text-dim)">Guild ID</label>
+                    <input class="form-input" style="width:100%;font-size:12px" x-model="bindForm.guild_id" placeholder="optional">
+                  </div>
+                  <div x-show="$store.app.isAdmin()">
+                    <label style="color:var(--text-dim)">Tenant</label>
+                    <select class="form-input" style="width:100%;font-size:12px" x-model="bindForm.tenant_id">
+                      <option value="">None (global)</option>
+                      <template x-for="t in bindingsTenants" :key="t.id">
+                        <option :value="t.id" x-text="t.name"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div style="grid-column:span 2">
+                    <button class="btn btn-sm" :disabled="bindSaving" @click="addBinding()">
+                      <span x-show="!bindSaving">Save Binding</span>
+                      <span x-show="bindSaving">Saving...</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Bindings list -->
+                <div x-show="bindings.length > 0" style="margin-bottom:12px">
+                  <table style="width:100%;font-size:12px;border-collapse:collapse">
+                    <thead>
+                      <tr style="border-bottom:1px solid var(--border)">
+                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">#</th>
+                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">Agent</th>
+                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">Channel</th>
+                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">Match Rule</th>
+                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">Tenant</th>
+                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="(b, i) in bindings" :key="i">
+                        <tr style="border-bottom:1px solid var(--border)">
+                          <td style="padding:4px 6px;font-family:monospace;font-size:11px" x-text="i"></td>
+                          <td style="padding:4px 6px;font-family:monospace;font-size:11px" x-text="b.agent ? b.agent.slice(0,8)+'...' : '-'"></td>
+                          <td style="padding:4px 6px"><span class="badge" style="background:var(--accent);color:#fff;font-size:10px" x-text="(b.match_rule && b.match_rule.channel) || '-'"></span></td>
+                          <td style="padding:4px 6px;font-size:11px">
+                            <span x-show="b.match_rule && b.match_rule.account_id" style="color:var(--text-dim)">acct:</span>
+                            <span x-show="b.match_rule && b.match_rule.account_id" x-text="b.match_rule.account_id.slice(0,12)+'...'" style="font-family:monospace"></span>
+                            <span x-show="b.match_rule && b.match_rule.peer_id" style="color:var(--text-dim)"> peer:</span>
+                            <span x-show="b.match_rule && b.match_rule.peer_id" x-text="b.match_rule.peer_id.slice(0,12)+'...'" style="font-family:monospace"></span>
+                            <span x-show="b.match_rule && b.match_rule.guild_id" style="color:var(--text-dim)"> guild:</span>
+                            <span x-show="b.match_rule && b.match_rule.guild_id" x-text="b.match_rule.guild_id.slice(0,12)+'...'" style="font-family:monospace"></span>
+                            <span x-show="!b.match_rule || (!b.match_rule.account_id && !b.match_rule.peer_id && !b.match_rule.guild_id)" style="color:var(--text-dim)">catch-all</span>
+                          </td>
+                          <td style="padding:4px 6px;font-size:11px" x-text="b.tenant_id ? b.tenant_id.slice(0,8)+'...' : '-'"></td>
+                          <td style="padding:4px 6px"><button class="btn btn-sm btn-ghost" style="color:var(--error);font-size:11px" @click="removeBinding(i)">Delete</button></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+                <div x-show="!bindingsLoading && bindings.length === 0" style="font-size:12px;color:var(--text-dim);padding:4px 0">No agent bindings configured yet.</div>
+                <div x-show="bindingsLoading" style="font-size:12px;color:var(--text-dim);padding:4px 0">Loading bindings...</div>
               </div>
             </div>
           </div>
