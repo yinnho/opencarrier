@@ -84,7 +84,7 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
               <span class="nav-label">Overview</span>
             </a>
-            <a class="nav-item" :class="{ active: page === 'logs' }" @click="navigate('logs')" :aria-current="page === 'logs' ? 'page' : false">
+            <a class="nav-item" :class="{ active: page === 'logs' }" @click="navigate('logs')" :aria-current="page === 'logs' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span>
               <span class="nav-label">Logs</span>
             </a>
@@ -104,7 +104,7 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
               <span class="nav-label">Sessions</span>
             </a>
-            <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false">
+            <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
               <span class="nav-label">Comms</span>
             </a>
@@ -136,7 +136,7 @@
         </div>
         <template x-if="!collapsed">
           <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'mcp' }" @click="navigate('mcp')" :aria-current="page === 'mcp' ? 'page' : false">
+            <a class="nav-item" :class="{ active: page === 'mcp' }" @click="navigate('mcp')" :aria-current="page === 'mcp' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
               <span class="nav-label">MCP & Tools</span>
             </a>
@@ -152,9 +152,13 @@
         </div>
         <template x-if="!collapsed">
           <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'settings' }" @click="navigate('settings')" :aria-current="page === 'settings' ? 'page' : false">
+            <a class="nav-item" :class="{ active: page === 'settings' }" @click="navigate('settings')" :aria-current="page === 'settings' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg></span>
               <span class="nav-label">Settings</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'tenants' }" @click="navigate('tenants')" :aria-current="page === 'tenants' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+              <span class="nav-label">Tenants</span>
             </a>
           </div>
         </template>
@@ -163,7 +167,13 @@
 
     <div class="sidebar-footer">
       <div x-show="$store.app.sessionUser" style="padding:4px 16px;display:flex;align-items:center;justify-content:space-between">
-        <span class="text-xs text-dim" x-text="$store.app.sessionUser" style="letter-spacing:0.5px"></span>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <span class="text-xs text-dim" x-text="$store.app.sessionUser" style="letter-spacing:0.5px"></span>
+          <span class="text-xs text-dim" style="font-size:10px;opacity:0.7">
+            <template x-if="$store.app.isAdmin()"><span>Admin</span></template>
+            <template x-if="$store.app.userRole === 'tenant'"><span x-text="'Tenant' + ($store.app.tenantId ? ' (' + $store.app.tenantId + ')' : '')"></span></template>
+          </span>
+        </div>
         <button @click="$store.app.sessionLogout()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;opacity:0.7" title="Sign out">Logout</button>
       </div>
       <div class="sidebar-label text-xs text-dim" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K agents | Ctrl+N new</div>
@@ -699,24 +709,38 @@
         <div class="page-header">
           <h2>Chat</h2>
           <div class="flex gap-2">
-            <button class="btn btn-ghost btn-sm" x-show="agents.length" @click="openHubModal()">+ 安装分身</button>
+            <button class="btn btn-ghost btn-sm" x-show="filteredAgents.length || !$store.app.isAdmin() || ($store.app.isAdmin() && !selectedTenantId)" @click="openHubModal()">+ 安装分身</button>
             <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
           </div>
         </div>
         <div class="page-body" style="overflow-y:auto;padding:24px">
 
+          <!-- Tenant selector (admin only) -->
+          <div x-show="$store.app.isAdmin() && tenants.length > 0" style="margin-bottom:14px;display:flex;align-items:center;gap:8px">
+            <label class="text-xs text-dim" style="white-space:nowrap">Assigned to:</label>
+            <select class="form-select" style="width:220px;font-size:12px" x-model="selectedTenantId" @change="filterState = 'all'; refreshAgents()">
+              <option value="">All tenants</option>
+              <template x-for="t in tenants" :key="t.id">
+                <option :value="t.id" x-text="t.name + (t.enabled !== false ? '' : ' (disabled)')"></option>
+              </template>
+            </select>
+          </div>
+
           <!-- Running agents — click to chat -->
-          <div x-show="agents.length" style="margin-bottom:28px">
+          <div x-show="filteredAgents.length" style="margin-bottom:28px">
             <div class="text-sm font-bold mb-2" style="color:var(--text-dim);letter-spacing:0.5px;font-size:11px;text-transform:uppercase">Your Agents</div>
             <div style="display:flex;flex-wrap:wrap;gap:10px">
-              <template x-for="agent in agents" :key="agent.id">
+              <template x-for="agent in filteredAgents" :key="agent.id">
                 <div class="agent-chip" @click="chatWithAgent(agent)" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:12px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);transition:all 0.2s var(--ease-spring, ease);min-width:200px;box-shadow:var(--shadow-xs)" @mouseenter="$el.style.borderColor='var(--accent)';$el.style.transform='translateY(-2px)';$el.style.boxShadow='var(--shadow-md)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.transform='';$el.style.boxShadow='var(--shadow-xs)'">
                   <div style="width:36px;height:36px;border-radius:50%;background:var(--accent-subtle);display:flex;align-items:center;justify-content:center;flex-shrink:0">
                     <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:18px"></span>
                     <svg x-show="!agent.identity || !agent.identity.emoji" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                   </div>
                   <div style="min-width:0;flex:1">
-                    <div class="font-bold" style="font-size:13px" x-text="agent.name"></div>
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span class="font-bold" style="font-size:13px" x-text="agent.name"></span>
+                      <span class="badge badge-dim" style="font-size:9px;padding:0 4px;line-height:16px" x-show="$store.app.isAdmin() && agent.tenant_id" x-text="agent.tenant_id.substring(0, 8) + '...'"></span>
+                    </div>
                     <div class="text-xs text-dim font-mono" style="font-size:11px" x-text="agent.model_name"></div>
                   </div>
                   <span class="badge" :class="'badge-' + agent.state.toLowerCase()" x-text="agent.state" style="font-size:10px"></span>
@@ -2301,6 +2325,123 @@
           </div>
         </template>
 
+      </div>
+    </template>
+
+    <!-- Page: Tenants -->
+    <template x-if="page === 'tenants'">
+      <div x-data="tenantsPage" x-init="loadTenants()">
+        <div class="page-header">
+          <h2>Tenants</h2>
+          <button class="btn btn-primary btn-sm" @click="showCreateModal = true" x-show="$store.app.isAdmin()">
+            <span>+ Add Tenant</span>
+          </button>
+        </div>
+        <div class="page-body">
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading tenants...</span></div>
+          <div x-show="!loading && loadError" class="error-state">
+            <span class="error-icon">!</span>
+            <p x-text="loadError"></p>
+            <button class="btn btn-ghost btn-sm" @click="loadTenants()">Retry</button>
+          </div>
+          <div x-show="!loading && !loadError">
+            <div x-show="tenants.length === 0" class="empty-state">
+              <h4>No Tenants</h4>
+              <p class="hint">Create a tenant to give a user their own isolated workspace.</p>
+              <button class="btn btn-primary btn-sm" @click="showCreateModal = true" style="margin-top:12px">Create Tenant</button>
+            </div>
+            <div x-show="tenants.length > 0" class="card">
+              <table style="width:100%;font-size:12px;border-collapse:collapse">
+                <thead>
+                  <tr style="border-bottom:1px solid var(--border)">
+                    <th style="text-align:left;padding:6px 4px;font-weight:600">Name</th>
+                    <th style="text-align:left;padding:6px 4px;font-weight:600">Role</th>
+                    <th style="text-align:left;padding:6px 4px;font-weight:600">Status</th>
+                    <th style="text-align:left;padding:6px 4px;font-weight:600">Created</th>
+                    <th style="text-align:right;padding:6px 4px;font-weight:600;width:100px">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="t in tenants" :key="t.id">
+                    <tr style="border-bottom:1px solid var(--border-light)">
+                      <td style="padding:8px 4px">
+                        <div style="font-weight:600" x-text="t.name"></div>
+                        <div style="font-size:10px;color:var(--text-dim);font-family:var(--font-mono)" x-text="t.id.substring(0,12)+'...'"></div>
+                      </td>
+                      <td style="padding:8px 4px">
+                        <span class="badge badge-secondary" style="font-size:10px;text-transform:capitalize" x-text="t.role || 'tenant'"></span>
+                      </td>
+                      <td style="padding:8px 4px">
+                        <span class="badge" :class="t.enabled !== false ? 'badge-running' : 'badge-crashed'" style="font-size:10px" x-text="t.enabled !== false ? 'Active' : 'Disabled'"></span>
+                      </td>
+                      <td style="padding:8px 4px;font-size:11px;color:var(--text-dim)" x-text="formatDate(t.created_at)"></td>
+                      <td style="padding:8px 4px;text-align:right">
+                        <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px" @click="openEdit(t)" title="Edit">Edit</button>
+                        <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--error)" @click="deleteTenant(t.id, t.name)" title="Delete">Del</button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Create modal -->
+        <div class="modal-overlay" x-show="showCreateModal" x-transition @click.self="showCreateModal = false" @keydown.escape.window="showCreateModal = false">
+          <div class="modal" style="max-width:420px">
+            <div class="modal-header">
+              <h3>Create Tenant</h3>
+              <button class="modal-close" @click="showCreateModal = false">&times;</button>
+            </div>
+            <div class="form-group">
+              <label>Name</label>
+              <input class="form-input" x-model="createForm.name" placeholder="tenant-name" autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input class="form-input" type="password" x-model="createForm.password" placeholder="Secure password..." autocomplete="off">
+            </div>
+            <div class="flex gap-2 justify-end" style="margin-top:16px">
+              <button class="btn btn-ghost btn-sm" @click="showCreateModal = false">Cancel</button>
+              <button class="btn btn-primary btn-sm" :disabled="saving || !createForm.name.trim() || !createForm.password.trim()" @click="createTenant()">
+                <span x-show="!saving">Create</span>
+                <span x-show="saving" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Edit modal -->
+        <div class="modal-overlay" x-show="showEditModal" x-transition @click.self="showEditModal = false" @keydown.escape.window="showEditModal = false">
+          <div class="modal" style="max-width:420px">
+            <div class="modal-header">
+              <h3>Edit Tenant</h3>
+              <button class="modal-close" @click="showEditModal = false">&times;</button>
+            </div>
+            <div class="form-group">
+              <label>Name</label>
+              <input class="form-input" x-model="editForm.name" placeholder="tenant-name" autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label>New Password <span class="text-xs text-dim">(leave blank to keep current)</span></label>
+              <input class="form-input" type="password" x-model="editForm.password" placeholder="New password..." autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label class="form-checkbox" style="margin:0">
+                <input type="checkbox" x-model="editForm.enabled">
+                <span>Enabled</span>
+              </label>
+            </div>
+            <div class="flex gap-2 justify-end" style="margin-top:16px">
+              <button class="btn btn-ghost btn-sm" @click="showEditModal = false">Cancel</button>
+              <button class="btn btn-primary btn-sm" :disabled="saving || !editForm.name.trim()" @click="updateTenant()">
+                <span x-show="!saving">Save</span>
+                <span x-show="saving" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </template>
 

@@ -160,6 +160,12 @@ document.addEventListener('alpine:init', function() {
     showAuthPrompt: false,
     authMode: 'apikey',
     sessionUser: null,
+    userRole: null,
+    tenantId: null,
+
+    isAdmin() {
+      return this.userRole === 'admin';
+    },
 
     toggleFocusMode() {
       this.focusMode = !this.focusMode;
@@ -221,6 +227,8 @@ document.addEventListener('alpine:init', function() {
           this.authMode = 'session';
           if (authInfo.authenticated) {
             this.sessionUser = authInfo.username;
+            this.userRole = authInfo.role || null;
+            this.tenantId = authInfo.tenant_id || null;
             this.showAuthPrompt = false;
             return;
           }
@@ -259,6 +267,8 @@ document.addEventListener('alpine:init', function() {
         var result = await OpenCarrierAPI.post('/api/auth/login', { username: username, password: password });
         if (result.status === 'ok') {
           this.sessionUser = result.username;
+          this.userRole = result.role || null;
+          this.tenantId = result.tenant_id || null;
           this.showAuthPrompt = false;
           this.refreshAgents();
         } else {
@@ -274,6 +284,8 @@ document.addEventListener('alpine:init', function() {
         await OpenCarrierAPI.post('/api/auth/logout');
       } catch(e) { /* ignore */ }
       this.sessionUser = null;
+      this.userRole = null;
+      this.tenantId = null;
       this.showAuthPrompt = true;
     },
 
@@ -314,7 +326,8 @@ function app() {
       });
 
       // Hash routing
-      var validPages = ['overview','agents','sessions','comms','scheduler','mcp','logs','settings'];
+      var validPages = ['overview','agents','sessions','comms','scheduler','mcp','logs','settings','tenants'];
+      var adminOnlyPages = ['logs','comms','mcp','settings','tenants'];
       var pageRedirects = {
         'chat': 'agents',
         'templates': 'agents',
@@ -324,13 +337,28 @@ function app() {
         'audit': 'logs',
         'security': 'settings'
       };
+      function isPageAllowed(page) {
+        // No role info yet — allow all until auth is resolved
+        if (!Alpine.store('app').userRole) return true;
+        return adminOnlyPages.indexOf(page) < 0 || Alpine.store('app').isAdmin();
+      }
       function handleHash() {
         var hash = window.location.hash.replace('#', '') || 'agents';
         if (pageRedirects[hash]) {
           hash = pageRedirects[hash];
           window.location.hash = hash;
         }
-        if (validPages.indexOf(hash) >= 0) self.page = hash;
+        if (validPages.indexOf(hash) >= 0) {
+          if (isPageAllowed(hash)) {
+            self.page = hash;
+          } else {
+            self.page = 'agents';
+            window.location.hash = 'agents';
+            if (typeof OpenCarrierToast !== 'undefined') {
+              OpenCarrierToast.info('This page requires admin access');
+            }
+          }
+        }
       }
       window.addEventListener('hashchange', handleHash);
       handleHash();
@@ -371,8 +399,17 @@ function app() {
     },
 
     navigate(p) {
-      this.page = p;
-      window.location.hash = p;
+      var adminOnlyPages = ['logs','comms','mcp','settings','tenants'];
+      if (adminOnlyPages.indexOf(p) >= 0 && !Alpine.store('app').isAdmin()) {
+        this.page = 'agents';
+        window.location.hash = 'agents';
+        if (typeof OpenCarrierToast !== 'undefined') {
+          OpenCarrierToast.info('This page requires admin access');
+        }
+      } else {
+        this.page = p;
+        window.location.hash = p;
+      }
       this.mobileMenuOpen = false;
     },
 

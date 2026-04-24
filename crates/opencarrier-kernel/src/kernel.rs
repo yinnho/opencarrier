@@ -4880,7 +4880,7 @@ impl KernelHandle for OpenCarrierKernel {
         }
     }
 
-    async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
+    async fn clone_install(&self, name: &str, agx_data: &[u8], tenant_id: Option<&str>) -> Result<(String, String), String> {
         use opencarrier_clone::{load_agx, install_clone_to_workspace, convert_to_manifest};
 
         // Validate name: only lowercase alphanumeric and hyphens
@@ -4894,8 +4894,8 @@ impl KernelHandle for OpenCarrierKernel {
         }
 
         // Verify workspace path doesn't escape workspaces root
-        let workspace_dir = self.config.tenant_workspaces_dir(None).join(name);
-        if !workspace_dir.starts_with(self.config.tenant_workspaces_dir(None)) {
+        let workspace_dir = self.config.tenant_workspaces_dir(tenant_id).join(name);
+        if !workspace_dir.starts_with(self.config.tenant_workspaces_dir(tenant_id)) {
             return Err("Path traversal denied".to_string());
         }
 
@@ -4941,6 +4941,11 @@ impl KernelHandle for OpenCarrierKernel {
         // Spawn agent
         let agent_name = manifest.name.clone();
         let id = self.spawn_agent(manifest).map_err(|e| format!("Spawn failed: {e}"))?;
+
+        // Assign tenant ownership if specified
+        if let Some(tid) = tenant_id {
+            self.registry.set_tenant_id(id, Some(tid.to_string()));
+        }
 
         tracing::info!(
             name = %agent_name,

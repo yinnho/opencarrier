@@ -44,6 +44,10 @@ function agentsPage() {
       profile: 'full',
       caps: { memory_read: true, memory_write: true, network: false, shell: false, agent_spawn: false }
     },
+    // -- Admin tenant assignment --
+    tenants: [],
+    selectedTenantId: '',
+    tenantsLoaded: false,
 
     // -- Multi-step wizard state --
     spawnStep: 1,
@@ -137,9 +141,17 @@ function agentsPage() {
     get agents() { return Alpine.store('app').agents; },
 
     get filteredAgents() {
+      var self = this;
+      var result = this.agents;
+      // Filter by tenant if admin selected one
+      if (Alpine.store('app').isAdmin() && this.selectedTenantId) {
+        result = result.filter(function(a) {
+          return a.tenant_id === self.selectedTenantId;
+        });
+      }
       var f = this.filterState;
-      if (f === 'all') return this.agents;
-      return this.agents.filter(function(a) { return a.state.toLowerCase() === f; });
+      if (f === 'all') return result;
+      return result.filter(function(a) { return a.state.toLowerCase() === f; });
     },
 
     get runningCount() {
@@ -189,6 +201,7 @@ function agentsPage() {
       this.loadError = '';
       try {
         await Alpine.store('app').refreshAgents();
+        await this.loadTenantsForSpawn();
       } catch(e) {
         this.loadError = e.message || 'Could not load agents. Is the daemon running?';
       }
@@ -299,11 +312,22 @@ function agentsPage() {
       });
     },
 
+    async loadTenantsForSpawn() {
+      if (this.tenantsLoaded) return;
+      if (!Alpine.store('app').isAdmin()) return;
+      try {
+        var data = await OpenCarrierAPI.get('/api/tenants');
+        this.tenants = Array.isArray(data) ? data : [];
+        this.tenantsLoaded = true;
+      } catch(e) { this.tenants = []; }
+    },
+
     // ── Hub install modal ──
     async openHubModal() {
       this.showHubModal = true;
       this.hubTemplates = [];
       this.hubError = '';
+      await this.loadTenantsForSpawn();
       await this.loadHubTemplates();
     },
 
@@ -339,7 +363,11 @@ function agentsPage() {
     async installHubTemplate(name) {
       this.hubInstalling = name;
       try {
-        var res = await OpenCarrierAPI.post('/api/hub/templates/' + encodeURIComponent(name) + '/install');
+        var body = {};
+        if (Alpine.store('app').isAdmin() && this.selectedTenantId) {
+          body.tenant_id = this.selectedTenantId;
+        }
+        var res = await OpenCarrierAPI.post('/api/hub/templates/' + encodeURIComponent(name) + '/install', body);
         OpenCarrierToast.success('Installed "' + res.name + '" (' + res.agent_id + ')');
         this.closeHubModal();
         await Alpine.store('app').refreshAgents();
@@ -362,6 +390,7 @@ function agentsPage() {
       this.spawnForm.model = 'llama-3.3-70b-versatile';
       this.spawnForm.systemPrompt = 'You are a helpful assistant.';
       this.spawnForm.profile = 'full';
+      await this.loadTenantsForSpawn();
       try {
         var res = await fetch('/api/status');
         if (res.ok) {
@@ -435,7 +464,11 @@ function agentsPage() {
       }
 
       try {
-        var res = await OpenCarrierAPI.post('/api/agents', { manifest_toml: toml });
+        var body = { manifest_toml: toml };
+        if (Alpine.store('app').isAdmin() && this.selectedTenantId) {
+          body.tenant_id = this.selectedTenantId;
+        }
+        var res = await OpenCarrierAPI.post('/api/agents', body);
         if (res.agent_id) {
           // Post-spawn: update identity + write SOUL.md if personality preset selected
           var patchBody = {};

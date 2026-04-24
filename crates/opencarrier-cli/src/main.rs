@@ -1106,7 +1106,7 @@ fn cmd_start(config: Option<PathBuf>) {
                         if resp.status().is_success() {
                             match resp.bytes().await {
                                 Ok(bytes) => {
-                                    match kernel.clone_install(clone_name, &bytes).await {
+                                    match kernel.clone_install(clone_name, &bytes, None).await {
                                         Ok((id, name)) => {
                                             eprintln!("  ✓ Clone '{}' installed (id={})", name, id);
                                         }
