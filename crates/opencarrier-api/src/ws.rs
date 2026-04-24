@@ -506,6 +506,10 @@ async fn handle_text_message(
             )
             .await;
 
+            // Extract sender_id from WS message for per-user file sandbox
+            let ws_sender_id = parsed["sender_id"].as_str().map(|s| s.to_string());
+            let ws_sender_name = parsed["sender_name"].as_str().map(|s| s.to_string());
+
             // Send message to agent with streaming
             let kernel_handle: Arc<dyn KernelHandle> =
                 state.kernel.clone() as Arc<dyn KernelHandle>;
@@ -513,8 +517,8 @@ async fn handle_text_message(
                 agent_id,
                 &content,
                 Some(kernel_handle),
-                None,
-                None,
+                ws_sender_id,
+                ws_sender_name,
             ) {
                 Ok((mut rx, handle)) => {
                     // Forward stream events to WebSocket with debouncing.
