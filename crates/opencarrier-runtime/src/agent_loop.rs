@@ -982,10 +982,6 @@ async fn call_with_retry(
     ))
 }
 
-// ---------------------------------------------------------------------------
-// Unified fallback — tries Brain endpoints in order with report()
-// ---------------------------------------------------------------------------
-
 /// Call LLM with unified fallback across Brain endpoints.
 /// When `stream_tx` is `Some`, uses streaming mode; otherwise non-streaming.
 async fn call_with_fallback(

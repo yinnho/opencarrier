@@ -246,7 +246,6 @@ fn migrate_v4(conn: &Connection) -> Result<(), rusqlite::Error> {
             model TEXT NOT NULL,
             input_tokens INTEGER NOT NULL DEFAULT 0,
             output_tokens INTEGER NOT NULL DEFAULT 0,
-            cost_usd REAL NOT NULL DEFAULT 0.0,
             tool_calls INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_usage_agent_time ON usage_events(agent_id, timestamp);
