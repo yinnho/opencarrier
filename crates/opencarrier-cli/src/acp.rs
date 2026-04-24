@@ -831,16 +831,23 @@ fn map_stream_event_to_acp(
         }
 
         StreamEvent::ToolExecutionResult {
+            id: ref tool_evt_id,
             name,
             result_preview,
             is_error,
         } => {
-            // FIFO lookup: find the first pending entry matching this tool name
+            // Prefer exact ID match, fall back to FIFO by name
             let call_id = tool_id_fifo
                 .iter()
-                .position(|(n, _)| n == name)
+                .position(|(_, tid)| tid == tool_evt_id)
                 .map(|pos| tool_id_fifo.remove(pos).1)
-                .unwrap_or_else(|| name.clone());
+                .unwrap_or_else(|| {
+                    tool_id_fifo
+                        .iter()
+                        .position(|(n, _)| n == name)
+                        .map(|pos| tool_id_fifo.remove(pos).1)
+                        .unwrap_or_else(|| tool_evt_id.clone())
+                });
             let status = if *is_error { "failed" } else { "completed" };
             Some(json!({
                 "sessionUpdate": "tool_call_update",
@@ -1119,6 +1126,7 @@ mod tests {
 
         // First result matches call_1
         let r1 = StreamEvent::ToolExecutionResult {
+            id: "call_1".to_string(),
             name: "read_file".to_string(),
             result_preview: "content1".to_string(),
             is_error: false,
@@ -1129,6 +1137,7 @@ mod tests {
 
         // Second result matches call_2
         let r2 = StreamEvent::ToolExecutionResult {
+            id: "call_2".to_string(),
             name: "read_file".to_string(),
             result_preview: "content2".to_string(),
             is_error: false,

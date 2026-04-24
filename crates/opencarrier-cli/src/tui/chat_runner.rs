@@ -147,6 +147,7 @@ impl StandaloneChat {
                 self.chat.append_stream(&text);
             }
             StreamEvent::ToolExecutionResult {
+                id: _,
                 name,
                 result_preview,
                 is_error,
