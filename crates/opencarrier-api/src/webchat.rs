@@ -63,6 +63,28 @@ pub async fn manifest_json() -> impl IntoResponse {
     )
 }
 
+/// Embedded KaTeX font files — all .woff2 variants bundled at compile time.
+const KATEX_FONT_AMS_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_AMS-Regular.woff2");
+const KATEX_FONT_CALIGRAPHIC_BOLD: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Caligraphic-Bold.woff2");
+const KATEX_FONT_CALIGRAPHIC_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Caligraphic-Regular.woff2");
+const KATEX_FONT_FRAKTUR_BOLD: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Fraktur-Bold.woff2");
+const KATEX_FONT_FRAKTUR_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Fraktur-Regular.woff2");
+const KATEX_FONT_MAIN_BOLD: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Main-Bold.woff2");
+const KATEX_FONT_MAIN_BOLDITALIC: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Main-BoldItalic.woff2");
+const KATEX_FONT_MAIN_ITALIC: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Main-Italic.woff2");
+const KATEX_FONT_MAIN_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Main-Regular.woff2");
+const KATEX_FONT_MATH_BOLDITALIC: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Math-BoldItalic.woff2");
+const KATEX_FONT_MATH_ITALIC: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Math-Italic.woff2");
+const KATEX_FONT_SANSSERIF_BOLD: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_SansSerif-Bold.woff2");
+const KATEX_FONT_SANSSERIF_ITALIC: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_SansSerif-Italic.woff2");
+const KATEX_FONT_SANSSERIF_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_SansSerif-Regular.woff2");
+const KATEX_FONT_SCRIPT_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Script-Regular.woff2");
+const KATEX_FONT_SIZE1_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Size1-Regular.woff2");
+const KATEX_FONT_SIZE2_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Size2-Regular.woff2");
+const KATEX_FONT_SIZE3_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Size3-Regular.woff2");
+const KATEX_FONT_SIZE4_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Size4-Regular.woff2");
+const KATEX_FONT_TYPEWRITER_REGULAR: &[u8] = include_bytes!("../static/vendor/katex-fonts/KaTeX_Typewriter-Regular.woff2");
+
 /// GET /sw.js — Serve the PWA service worker.
 pub async fn sw_js() -> impl IntoResponse {
     (
@@ -72,6 +94,44 @@ pub async fn sw_js() -> impl IntoResponse {
         ],
         SW_JS,
     )
+}
+
+/// GET /katex-fonts/:name — Serve a KaTeX font file (.woff2 only).
+pub async fn katex_font(axum::extract::Path(name): axum::extract::Path<String>) -> axum::response::Response<axum::body::Body> {
+    let (data, content_type) = match name.as_str() {
+        "KaTeX_AMS-Regular.woff2" => (KATEX_FONT_AMS_REGULAR, "font/woff2"),
+        "KaTeX_Caligraphic-Bold.woff2" => (KATEX_FONT_CALIGRAPHIC_BOLD, "font/woff2"),
+        "KaTeX_Caligraphic-Regular.woff2" => (KATEX_FONT_CALIGRAPHIC_REGULAR, "font/woff2"),
+        "KaTeX_Fraktur-Bold.woff2" => (KATEX_FONT_FRAKTUR_BOLD, "font/woff2"),
+        "KaTeX_Fraktur-Regular.woff2" => (KATEX_FONT_FRAKTUR_REGULAR, "font/woff2"),
+        "KaTeX_Main-Bold.woff2" => (KATEX_FONT_MAIN_BOLD, "font/woff2"),
+        "KaTeX_Main-BoldItalic.woff2" => (KATEX_FONT_MAIN_BOLDITALIC, "font/woff2"),
+        "KaTeX_Main-Italic.woff2" => (KATEX_FONT_MAIN_ITALIC, "font/woff2"),
+        "KaTeX_Main-Regular.woff2" => (KATEX_FONT_MAIN_REGULAR, "font/woff2"),
+        "KaTeX_Math-BoldItalic.woff2" => (KATEX_FONT_MATH_BOLDITALIC, "font/woff2"),
+        "KaTeX_Math-Italic.woff2" => (KATEX_FONT_MATH_ITALIC, "font/woff2"),
+        "KaTeX_SansSerif-Bold.woff2" => (KATEX_FONT_SANSSERIF_BOLD, "font/woff2"),
+        "KaTeX_SansSerif-Italic.woff2" => (KATEX_FONT_SANSSERIF_ITALIC, "font/woff2"),
+        "KaTeX_SansSerif-Regular.woff2" => (KATEX_FONT_SANSSERIF_REGULAR, "font/woff2"),
+        "KaTeX_Script-Regular.woff2" => (KATEX_FONT_SCRIPT_REGULAR, "font/woff2"),
+        "KaTeX_Size1-Regular.woff2" => (KATEX_FONT_SIZE1_REGULAR, "font/woff2"),
+        "KaTeX_Size2-Regular.woff2" => (KATEX_FONT_SIZE2_REGULAR, "font/woff2"),
+        "KaTeX_Size3-Regular.woff2" => (KATEX_FONT_SIZE3_REGULAR, "font/woff2"),
+        "KaTeX_Size4-Regular.woff2" => (KATEX_FONT_SIZE4_REGULAR, "font/woff2"),
+        "KaTeX_Typewriter-Regular.woff2" => (KATEX_FONT_TYPEWRITER_REGULAR, "font/woff2"),
+        _ => {
+            return axum::response::Response::builder()
+                .status(axum::http::StatusCode::NOT_FOUND)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(axum::body::Body::from("font not found"))
+                .unwrap();
+        }
+    };
+    axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .body(axum::body::Body::from(data))
+        .unwrap()
 }
 
 /// GET / — Serve the OpenCarrier Dashboard single-page application.
@@ -107,6 +167,8 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/css/components.css"),
     "\n",
     include_str!("../static/vendor/github-dark.min.css"),
+    "\n",
+    include_str!("../static/vendor/katex.min.css"),
     "\n</style>\n",
     include_str!("../static/index_body.html"),
     // Vendor libs: marked + highlight first (used by app.js), then Chart.js
@@ -118,6 +180,13 @@ const WEBCHAT_HTML: &str = concat!(
     "\n</script>\n",
     "<script>\n",
     include_str!("../static/vendor/chart.umd.min.js"),
+    "\n</script>\n",
+    // KaTeX math rendering (bundled locally, zero CDN dependency)
+    "<script>\n",
+    include_str!("../static/vendor/katex.min.js"),
+    "\n</script>\n",
+    "<script>\n",
+    include_str!("../static/vendor/katex-auto-render.min.js"),
     "\n</script>\n",
     // App code
     "<script>\n",

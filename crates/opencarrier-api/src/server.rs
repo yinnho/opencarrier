@@ -96,6 +96,7 @@ pub async fn build_router(
         .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
         .route("/sw.js", axum::routing::get(webchat::sw_js))
+        .route("/katex-fonts/{name}", axum::routing::get(webchat::katex_font))
         .merge(routes::agents::router())
         .merge(routes::auth::router())
         .merge(routes::bindings::router())
