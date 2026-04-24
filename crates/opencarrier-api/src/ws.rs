@@ -12,7 +12,7 @@
 //! Server → Client: `{"type":"silent_complete"}` (agent chose NO_REPLY)
 //! Server → Client: `{"type":"canvas","canvas_id":"...","html":"...","title":"..."}`
 
-use crate::routes::AppState;
+use crate::routes::state::AppState;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Path, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
@@ -917,7 +917,7 @@ async fn handle_command(
             })
         }
         "queue" => {
-            let is_running = state.kernel.running_tasks.contains_key(&agent_id);
+            let is_running = state.kernel.runtime.running_tasks.contains_key(&agent_id);
             let msg = if is_running {
                 "Agent is processing a request..."
             } else {
@@ -932,6 +932,7 @@ async fn handle_command(
         "a2a" => {
             let agents = state
                 .kernel
+                .a2a
                 .a2a_external_agents
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
