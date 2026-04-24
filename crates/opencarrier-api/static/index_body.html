@@ -1644,8 +1644,8 @@
                   </button>
                   <button class="btn btn-sm btn-ghost" @click="loadChannels()">Refresh</button>
                 </div>
-                <div x-show="wechatQrCode || wechatQrSrc" style="text-align:center;padding:12px">
-                  <img :src="wechatQrSrc || ('data:image/png;base64,' + wechatQrCode)" style="width:180px;height:180px;border-radius:8px;border:1px solid var(--border)">
+                <div x-show="wechatQrCode" style="text-align:center;padding:12px">
+                  <img :src="wechatQrCode" style="width:180px;height:180px;border-radius:8px;border:1px solid var(--border)">
                   <p style="font-size:12px;color:var(--text-dim);margin-top:6px">
                     Scan with WeChat &middot; <span x-text="wechatQrStatus || 'Waiting...'"></span>
                   </p>
