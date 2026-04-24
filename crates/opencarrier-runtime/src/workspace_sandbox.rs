@@ -184,6 +184,82 @@ pub fn resolve_sandbox_path_for_write(
     resolve_sandbox_path(&effective_path, workspace_root)
 }
 
+/// Resolve a user-supplied path for read operations within a workspace sandbox.
+///
+/// When `sender_id` is present, rewrites `input/` and `output/` paths to
+/// per-user directories so agents can read back files they or the user
+/// placed there:
+/// - `input/xxx`  → `users/{sender_id}/input/xxx`
+/// - `output/xxx` → `users/{sender_id}/output/xxx`
+///
+/// Also enforces per-user isolation for direct `users/` paths (can only
+/// read own user directory).
+pub fn resolve_sandbox_path_for_read(
+    user_path: &str,
+    workspace_root: &Path,
+    sender_id: Option<&str>,
+) -> Result<PathBuf, String> {
+    let normalized = user_path.replace('\\', "/");
+    let path = Path::new(&normalized);
+
+    let relative = if path.is_absolute() {
+        path.strip_prefix(workspace_root)
+            .map_err(|_| "Absolute path outside workspace".to_string())?
+            .to_path_buf()
+    } else {
+        path.to_path_buf()
+    };
+
+    let rel_str = relative.to_string_lossy();
+
+    // Rewrite input/ and output/ paths to per-user directories when sender_id is present
+    let effective_path = if let Some(sid) = sender_id {
+        if rel_str.starts_with("input/") || rel_str == "input" {
+            let rest = rel_str.strip_prefix("input").unwrap_or("");
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            if rest.is_empty() {
+                format!("users/{}/input", sid)
+            } else {
+                format!("users/{}/input/{}", sid, rest)
+            }
+        } else if rel_str.starts_with("output/") || rel_str == "output" {
+            let rest = rel_str.strip_prefix("output").unwrap_or("");
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            if rest.is_empty() {
+                format!("users/{}/output", sid)
+            } else {
+                format!("users/{}/output/{}", sid, rest)
+            }
+        } else {
+            rel_str.to_string()
+        }
+    } else {
+        rel_str.to_string()
+    };
+
+    // Check per-user isolation for users/ paths
+    let eff_path = Path::new(&effective_path);
+    if eff_path.starts_with("users/") {
+        let components: Vec<&str> = eff_path.components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        if components.len() >= 2 {
+            let path_sender = components[1];
+            if let Some(sid) = sender_id {
+                if path_sender != sid {
+                    return Err(format!(
+                        "Read denied: cannot read from user '{}' directory (current sender: '{}')",
+                        path_sender, sid
+                    ));
+                }
+            }
+            // No sender_id but reading from users/ — allow for admin/internal context
+        }
+    }
+
+    resolve_sandbox_path(&effective_path, workspace_root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -146,9 +146,9 @@ pub async fn execute_tool(
     debug!(tool_name, "Executing tool");
     let result = match tool_name {
         // Filesystem tools
-        "file_read" => tool_file_read(input, workspace_root).await,
+        "file_read" => tool_file_read(input, workspace_root, sender_id).await,
         "file_write" => tool_file_write(input, workspace_root, sender_id).await,
-        "file_list" => tool_file_list(input, workspace_root).await,
+        "file_list" => tool_file_list(input, workspace_root, sender_id).await,
 
         // Knowledge tools (clone-specific, safe access to data/knowledge/)
         "knowledge_list" => tool_knowledge_list(workspace_root).await,
@@ -1458,12 +1458,23 @@ fn resolve_file_path(raw_path: &str, workspace_root: Option<&Path>) -> Result<Pa
     }
 }
 
+/// Resolve a file read path through the workspace sandbox with sender_id-aware rewriting.
+fn resolve_file_path_for_read(raw_path: &str, workspace_root: Option<&Path>, sender_id: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(root) = workspace_root {
+        crate::workspace_sandbox::resolve_sandbox_path_for_read(raw_path, root, sender_id)
+    } else {
+        let _ = validate_path(raw_path)?;
+        Ok(PathBuf::from(raw_path))
+    }
+}
+
 async fn tool_file_read(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = resolve_file_path(raw_path, workspace_root)?;
+    let resolved = resolve_file_path_for_read(raw_path, workspace_root, sender_id)?;
     tokio::fs::read_to_string(&resolved)
         .await
         .map_err(|e| format!("Failed to read file: {e}"))
@@ -1502,9 +1513,10 @@ async fn tool_file_write(
 async fn tool_file_list(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = resolve_file_path(raw_path, workspace_root)?;
+    let resolved = resolve_file_path_for_read(raw_path, workspace_root, sender_id)?;
     let mut entries = tokio::fs::read_dir(&resolved)
         .await
         .map_err(|e| format!("Failed to list directory: {e}"))?;

@@ -746,7 +746,8 @@ function chatPage() {
           var att = this.attachments[i];
           att.uploading = true;
           try {
-            var uploadRes = await OpenCarrierAPI.upload(this.currentAgent.id, att.file);
+            var senderId = Alpine.store('app').sessionUser || 'default';
+            var uploadRes = await OpenCarrierAPI.upload(this.currentAgent.id, att.file, senderId);
             fileRefs.push('[File: ' + att.file.name + ']');
             uploadedFiles.push({ file_id: uploadRes.file_id, filename: uploadRes.filename, content_type: uploadRes.content_type });
           } catch(e) {
@@ -789,8 +790,10 @@ function chatPage() {
       this.sending = true;
 
       // Try WebSocket first
+      var wsSenderId = Alpine.store('app').sessionUser || null;
       var wsPayload = { type: 'message', content: finalText };
       if (uploadedFiles && uploadedFiles.length) wsPayload.attachments = uploadedFiles;
+      if (wsSenderId) wsPayload.sender_id = wsSenderId;
       if (OpenCarrierAPI.wsSend(wsPayload)) {
         this.messages.push({ id: ++msgId, role: 'agent', text: '', meta: '', thinking: true, streaming: true, tools: [], ts: Date.now() });
         this.scrollToBottom();
@@ -807,6 +810,8 @@ function chatPage() {
       try {
         var httpBody = { message: finalText };
         if (uploadedFiles && uploadedFiles.length) httpBody.attachments = uploadedFiles;
+        var msgSenderId = Alpine.store('app').sessionUser || null;
+        if (msgSenderId) httpBody.sender_id = msgSenderId;
         var res = await OpenCarrierAPI.post('/api/agents/' + this.currentAgent.id + '/message', httpBody);
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
         var httpMeta = (res.input_tokens || 0) + ' in / ' + (res.output_tokens || 0) + ' out';
@@ -989,7 +994,8 @@ function chatPage() {
         // Upload audio file
         var ext = blob.type.includes('webm') ? 'webm' : blob.type.includes('ogg') ? 'ogg' : 'mp3';
         var file = new File([blob], 'voice_' + Date.now() + '.' + ext, { type: blob.type });
-        var upload = await OpenCarrierAPI.upload(this.currentAgent.id, file);
+        var voiceSenderId = Alpine.store('app').sessionUser || 'default';
+        var upload = await OpenCarrierAPI.upload(this.currentAgent.id, file, voiceSenderId);
 
         // Remove the "Transcribing..." message
         this.messages = this.messages.filter(function(m) { return !m.thinking || m.role !== 'system'; });
