@@ -718,7 +718,7 @@
           <!-- Tenant selector (admin only) -->
           <div x-show="$store.app.isAdmin() && tenants.length > 0" style="margin-bottom:14px;display:flex;align-items:center;gap:8px">
             <label class="text-xs text-dim" style="white-space:nowrap">Assigned to:</label>
-            <select class="form-select" style="width:220px;font-size:12px" x-model="selectedTenantId" @change="filterState = 'all'; refreshAgents()">
+            <select class="form-select" style="width:220px;font-size:12px" x-model="selectedTenantId">
               <option value="">All tenants</option>
               <template x-for="t in tenants" :key="t.id">
                 <option :value="t.id" x-text="t.name + (t.enabled !== false ? '' : ' (disabled)')"></option>
