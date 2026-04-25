@@ -290,7 +290,7 @@ mod tests {
                 properties: HashMap::new(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
-            })
+            }, None)
             .unwrap();
         assert!(!id.is_empty());
     }
@@ -306,7 +306,7 @@ mod tests {
                 properties: HashMap::new(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
-            })
+            }, None)
             .unwrap();
         let company_id = store
             .add_entity(Entity {
@@ -316,7 +316,7 @@ mod tests {
                 properties: HashMap::new(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
-            })
+            }, None)
             .unwrap();
         store
             .add_relation(Relation {
@@ -326,7 +326,7 @@ mod tests {
                 properties: HashMap::new(),
                 confidence: 0.95,
                 created_at: Utc::now(),
-            })
+            }, None)
             .unwrap();
 
         let matches = store
@@ -335,7 +335,7 @@ mod tests {
                 relation: Some(RelationType::WorksAt),
                 target: None,
                 max_depth: 1,
-            })
+            }, None)
             .unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].target.name, "Acme Corp");
