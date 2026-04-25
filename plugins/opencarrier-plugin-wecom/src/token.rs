@@ -58,6 +58,9 @@ pub struct TenantEntry {
     pub http: Client,
     /// Cached access token with expiry.
     cached_token: Mutex<Option<(String, Instant)>>,
+    /// MCP bot credentials (for App/Kf modes; SmartBot reuses mode's bot_id/secret).
+    pub mcp_bot_id: Option<String>,
+    pub mcp_bot_secret: Option<String>,
 }
 
 impl TenantEntry {
@@ -74,6 +77,8 @@ impl TenantEntry {
         webhook_port: u16,
         encoding_aes_key: Option<String>,
         callback_token: Option<String>,
+        mcp_bot_id: Option<String>,
+        mcp_bot_secret: Option<String>,
     ) -> Self {
         Self {
             name,
@@ -85,6 +90,8 @@ impl TenantEntry {
             mode: WecomMode::App { agent_id },
             http: Client::new(),
             cached_token: Mutex::new(None),
+            mcp_bot_id,
+            mcp_bot_secret,
         }
     }
 
@@ -97,6 +104,8 @@ impl TenantEntry {
         webhook_port: u16,
         encoding_aes_key: Option<String>,
         callback_token: Option<String>,
+        mcp_bot_id: Option<String>,
+        mcp_bot_secret: Option<String>,
     ) -> Self {
         Self {
             name,
@@ -108,6 +117,8 @@ impl TenantEntry {
             mode: WecomMode::Kf { open_kfid },
             http: Client::new(),
             cached_token: Mutex::new(None),
+            mcp_bot_id,
+            mcp_bot_secret,
         }
     }
 
@@ -123,6 +134,8 @@ impl TenantEntry {
             mode: WecomMode::SmartBot { bot_id, secret },
             http: Client::new(),
             cached_token: Mutex::new(None),
+            mcp_bot_id: None, // SmartBot uses mode's bot_id directly
+            mcp_bot_secret: None,
         }
     }
 
@@ -159,6 +172,19 @@ impl TenantEntry {
         match &self.mode {
             WecomMode::SmartBot { secret, .. } => Some(secret),
             _ => None,
+        }
+    }
+
+    /// Get MCP bot credentials (bot_id, bot_secret).
+    /// SmartBot mode reuses its mode's bot_id and secret.
+    /// App/Kf modes use the dedicated mcp_bot_id/mcp_bot_secret fields.
+    pub fn mcp_credentials(&self) -> Option<(&str, &str)> {
+        match &self.mode {
+            WecomMode::SmartBot { bot_id, secret } => Some((bot_id, secret)),
+            _ => self
+                .mcp_bot_id
+                .as_deref()
+                .zip(self.mcp_bot_secret.as_deref()),
         }
     }
 
@@ -249,6 +275,11 @@ impl TokenManager {
     /// Get a tenant entry by name.
     pub fn get_tenant(&self, name: &str) -> Option<dashmap::mapref::one::Ref<'_, String, TenantEntry>> {
         self.tenants.get(name)
+    }
+
+    /// Get all tenant names.
+    pub fn tenant_names(&self) -> Vec<String> {
+        self.tenants.iter().map(|e| e.key().clone()).collect()
     }
 
     /// Get access token for a tenant.
