@@ -152,6 +152,13 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
+    /// Get the tenant_id of an agent by its name.
+    /// Returns None if the agent is not found or has no tenant.
+    fn get_agent_tenant_id_from_name(&self, agent_name: &str) -> Option<String> {
+        let _ = agent_name;
+        None
+    }
+
     /// Rebuild the available tool list for an agent.
     /// Used after mid-loop skill installations (e.g., train_write) so the
     /// LLM can use newly installed tools in the next iteration.

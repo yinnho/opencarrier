@@ -90,8 +90,10 @@ macro_rules! browser_dispatch {
     ($input:expr, $browser_ctx:expr, $caller_agent_id:expr, $func:path) => {
         match $browser_ctx {
             Some(mgr) => {
-                let aid = $caller_agent_id.unwrap_or("default");
-                $func($input, mgr, aid).await
+                match $caller_agent_id {
+                    Some(aid) => $func($input, mgr, aid).await,
+                    None => Err("Missing caller agent identity".to_string()),
+                }
             }
             None => Err(
                 "Browser tools not available. Ensure Chrome/Chromium is installed.".to_string(),
@@ -164,16 +166,16 @@ pub async fn execute_tool(
         "clone_evaluate" => tool_clone_evaluate(workspace_root).await,
 
         // Cross-workspace training tools (for trainer agents like clone-trainer)
-        "train_read" => tool_train_read(input, kernel).await,
-        "train_write" => tool_train_write(input, kernel).await,
-        "train_list" => tool_train_list(input, kernel).await,
-        "train_knowledge_add" => tool_train_knowledge_add(input, kernel).await,
-        "train_knowledge_import" => tool_train_knowledge_import(input, kernel).await,
-        "train_knowledge_list" => tool_train_knowledge_list(input, kernel).await,
-        "train_knowledge_read" => tool_train_knowledge_read(input, kernel).await,
-        "train_knowledge_lint" => tool_train_knowledge_lint(input, kernel).await,
-        "train_knowledge_heal" => tool_train_knowledge_heal(input, kernel).await,
-        "train_evaluate" => tool_train_evaluate(input, kernel).await,
+        "train_read" => tool_train_read(input, kernel, caller_agent_id).await,
+        "train_write" => tool_train_write(input, kernel, caller_agent_id).await,
+        "train_list" => tool_train_list(input, kernel, caller_agent_id).await,
+        "train_knowledge_add" => tool_train_knowledge_add(input, kernel, caller_agent_id).await,
+        "train_knowledge_import" => tool_train_knowledge_import(input, kernel, caller_agent_id).await,
+        "train_knowledge_list" => tool_train_knowledge_list(input, kernel, caller_agent_id).await,
+        "train_knowledge_read" => tool_train_knowledge_read(input, kernel, caller_agent_id).await,
+        "train_knowledge_lint" => tool_train_knowledge_lint(input, kernel, caller_agent_id).await,
+        "train_knowledge_heal" => tool_train_knowledge_heal(input, kernel, caller_agent_id).await,
+        "train_evaluate" => tool_train_evaluate(input, kernel, caller_agent_id).await,
         "user_profile" => tool_user_profile(input, workspace_root, sender_id).await,
 
         // Clone management tools
@@ -1820,18 +1822,31 @@ async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> Result<String, St
 // Cross-workspace training tools (for trainer agents)
 // ---------------------------------------------------------------------------
 
-/// Resolve a target clone's workspace root via kernel.
+/// Resolve a target clone's workspace root via kernel, with tenant isolation.
+/// Ensures the caller and target belong to the same tenant.
 fn resolve_target_workspace(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<PathBuf, String> {
     let kh = kernel.ok_or("train_* tools require kernel access")?;
+    let caller_id = caller_agent_id.ok_or("train_* tools require caller agent identity")?;
     let target = input["target"]
         .as_str()
         .ok_or("Missing 'target' parameter (target clone name)")?;
+
+    // Tenant isolation: caller and target must belong to the same tenant
+    let caller_tenant = kh.get_agent_tenant_id(caller_id);
     let target_workspace = kh
         .resolve_agent_workspace(target)
         .ok_or_else(|| format!("Agent '{}' not found or has no workspace", target))?;
+
+    // Verify target belongs to the same tenant as caller
+    let target_tenant = kh.get_agent_tenant_id_from_name(target);
+    if target_tenant != caller_tenant {
+        return Err(format!("Access denied: agent '{}' does not belong to your tenant", target));
+    }
+
     let path = PathBuf::from(&target_workspace);
     if !path.exists() {
         return Err(format!("Workspace for '{}' does not exist: {}", target, target_workspace));
@@ -1842,8 +1857,9 @@ fn resolve_target_workspace(
 async fn tool_train_read(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     validate_path(path)?;
     let full_path = target_root.join(path);
@@ -1858,8 +1874,9 @@ async fn tool_train_read(
 async fn tool_train_write(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     validate_path(path)?;
     let content = input["content"]
@@ -1887,8 +1904,9 @@ async fn tool_train_write(
 async fn tool_train_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     let sub_path = input["path"].as_str().unwrap_or(".");
     validate_path(sub_path)?;
     let full_path = target_root.join(sub_path);
@@ -1919,8 +1937,9 @@ async fn tool_train_list(
 async fn tool_train_knowledge_add(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     let title = input["title"]
         .as_str()
         .ok_or("Missing 'title' parameter")?;
@@ -1934,8 +1953,9 @@ async fn tool_train_knowledge_add(
 async fn tool_train_knowledge_import(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     let data = input["data"]
         .as_str()
         .ok_or("Missing 'data' parameter")?;
@@ -1951,40 +1971,45 @@ async fn tool_train_knowledge_import(
 async fn tool_train_knowledge_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     tool_knowledge_list(Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_read(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     tool_knowledge_read(input, Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_lint(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     tool_knowledge_lint(Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_heal(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     tool_knowledge_heal(Some(&target_root)).await
 }
 
 async fn tool_train_evaluate(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
+    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
     tool_clone_evaluate(Some(&target_root)).await
 }
 
@@ -3770,7 +3795,7 @@ async fn tool_docker_exec(
         .ok_or("Missing 'command' parameter")?;
 
     let workspace = workspace_root.ok_or("Docker exec requires a workspace directory")?;
-    let agent_id = caller_agent_id.unwrap_or("default");
+    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
 
     // Check Docker availability
     if !crate::docker_sandbox::is_docker_available().await {
@@ -3814,7 +3839,7 @@ async fn tool_process_start(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
-    let agent_id = caller_agent_id.unwrap_or("default");
+    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let command = input["command"]
         .as_str()
         .ok_or("Missing 'command' parameter")?;
@@ -3891,7 +3916,7 @@ async fn tool_process_list(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
-    let agent_id = caller_agent_id.unwrap_or("default");
+    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let procs = pm.list(agent_id);
     let list: Vec<serde_json::Value> = procs
         .iter()
