@@ -1333,76 +1333,12 @@ impl OpenCarrierKernel {
                     let agent_id = entry.id;
                     let name = entry.name.clone();
 
-                    // Check if TOML on disk is newer/different — if so, update from file
                     let mut entry = entry;
-                    // Check both agents/{name}/agent.toml and workspaces/{name}/agent.toml
-                    let agents_path = kernel
-                        .config
-                        .home_dir
-                        .join("agents")
-                        .join(&name)
-                        .join("agent.toml");
-                    let workspaces_path = kernel
-                        .config
-                        .tenant_workspaces_dir(entry.tenant_id.as_deref())
-                        .join(&name)
-                        .join("agent.toml");
-                    let toml_path = if agents_path.exists() {
-                        agents_path
-                    } else if workspaces_path.exists() {
-                        workspaces_path
-                    } else {
-                        agents_path // fallback to original path (will !exists → skip)
-                    };
-                    if toml_path.exists() {
-                        match std::fs::read_to_string(&toml_path) {
-                            Ok(toml_str) => {
-                                match toml::from_str::<opencarrier_types::agent::AgentManifest>(
-                                    &toml_str,
-                                ) {
-                                    Ok(disk_manifest) => {
-                                        // Compare key fields to detect changes
-                                        let changed = disk_manifest.name != entry.manifest.name
-                                            || disk_manifest.description
-                                                != entry.manifest.description
-                                            || disk_manifest.model.system_prompt
-                                                != entry.manifest.model.system_prompt
-                                            || disk_manifest.model.modality
-                                                != entry.manifest.model.modality
-                                            || disk_manifest.capabilities.tools
-                                                != entry.manifest.capabilities.tools;
-                                        if changed {
-                                            info!(
-                                                agent = %name,
-                                                "Agent TOML on disk differs from DB, updating"
-                                            );
-                                            entry.manifest = disk_manifest;
-                                            // Persist the update back to DB
-                                            if let Err(e) = kernel.memory.save_agent(&entry) {
-                                                warn!(
-                                                    agent = %name,
-                                                    "Failed to persist TOML update: {e}"
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            agent = %name,
-                                            path = %toml_path.display(),
-                                            "Invalid agent TOML on disk, using DB version: {e}"
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!(
-                                    agent = %name,
-                                    "Failed to read agent TOML: {e}"
-                                );
-                            }
-                        }
-                    }
+
+                    // Workspace 始终从 tenant_id + name 推导，不依赖 DB/TOML 中的值
+                    let ws = kernel.config.tenant_workspaces_dir(entry.tenant_id.as_deref())
+                        .join(&name);
+                    entry.manifest.workspace = Some(ws);
 
                     // Re-grant capabilities
                     let caps = manifest_to_capabilities(&entry.manifest);
@@ -1906,8 +1842,6 @@ impl OpenCarrierKernel {
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
         let mut manifest = entry.manifest.clone();
 
-        self.ensure_workspace_backfill(&agent_id, &mut manifest, "non-streaming");
-
         // Build the structured system prompt via prompt_builder
         {
             self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name);
@@ -2360,7 +2294,6 @@ impl OpenCarrierKernel {
         // Apply model routing if configured (disabled in Stable mode)
         let mut manifest = entry.manifest.clone();
 
-        self.ensure_workspace_backfill(&agent_id, &mut manifest, "streaming");
 
         self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name);
 
@@ -4217,30 +4150,6 @@ impl OpenCarrierKernel {
             }
         }
         context_parts.join("\n\n")
-    }
-
-    /// Lazy backfill: create workspace directory for agents spawned before
-    /// the workspaces feature existed. Shared between streaming and non-streaming paths.
-    fn ensure_workspace_backfill(
-        &self,
-        agent_id: &AgentId,
-        manifest: &mut AgentManifest,
-        context: &str,
-    ) {
-        if manifest.workspace.is_none() {
-            // Look up tenant_id from the registry entry to scope workspace correctly
-            let tid = self.registry.get(*agent_id)
-                .and_then(|e| e.tenant_id.clone());
-            let workspace_dir = self.config.tenant_workspaces_dir(tid.as_deref()).join(&manifest.name);
-            if let Err(e) = ensure_workspace(&workspace_dir) {
-                warn!(agent_id = %agent_id, "Failed to backfill workspace ({context}): {e}");
-            } else {
-                manifest.workspace = Some(workspace_dir);
-                let _ = self
-                    .registry
-                    .update_workspace(*agent_id, manifest.workspace.clone());
-            }
-        }
     }
 
     /// Build PromptContext and apply it to the manifest's system prompt.
