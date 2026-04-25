@@ -7,6 +7,7 @@
 use crate::token::TenantTokenCache;
 use crate::types::*;
 use crate::ws::FeishuWsClient;
+use crate::FeishuTenantEntry;
 use opencarrier_plugin_sdk::{ChannelAdapter, MessageSender, PluginError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -21,16 +22,10 @@ pub struct FeishuChannel {
 }
 
 impl FeishuChannel {
-    pub fn new(config: FeishuTenantConfig) -> Self {
-        let api_base = config.api_base().to_string();
-        let token_cache = Arc::new(TenantTokenCache::new(
-            config.app_id.clone(),
-            config.app_secret.clone(),
-            &api_base,
-        ));
+    pub fn from_entry(entry: &FeishuTenantEntry) -> Self {
         Self {
-            tenant_name: config.name.clone(),
-            token_cache,
+            tenant_name: entry.config.name.clone(),
+            token_cache: entry.token_cache.clone(),
             shutdown: Arc::new(AtomicBool::new(false)),
             thread_handle: None,
         }
