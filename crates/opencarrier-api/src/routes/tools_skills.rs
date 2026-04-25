@@ -150,10 +150,24 @@ pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse
 ///
 /// Exposes the same MCP protocol normally served via stdio, allowing
 /// external MCP clients to connect over HTTP instead.
+///
+/// SECURITY: This endpoint has no agent context, so inter-agent tools
+/// (agent_send, agent_spawn, train_*, etc.) are blocked. Only utility
+/// tools (web, file, knowledge) are available.
 pub async fn mcp_http(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Json(request): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    // Tenant context required for MCP HTTP access
+    let ctx = crate::routes::common::get_tenant_ctx(&extensions);
+    if !ctx.is_admin() && ctx.tenant_id.is_none() {
+        return Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request.get("id").cloned(),
+            "error": {"code": -32600, "message": "Authentication required"}
+        }));
+    }
     // Gather all available tools (builtin + skills + MCP)
     let mut tools = builtin_tool_definitions();
     {
@@ -183,6 +197,25 @@ pub async fn mcp_http(
             .get("arguments")
             .cloned()
             .unwrap_or(serde_json::json!({}));
+
+        // Block inter-agent and tenant-sensitive tools — MCP HTTP has no agent context
+        const BLOCKED_TOOLS: &[&str] = &[
+            "agent_send", "agent_spawn", "agent_list", "agent_kill",
+            "train_read", "train_write", "train_list",
+            "train_knowledge_add", "train_knowledge_import", "train_knowledge_list",
+            "train_knowledge_read", "train_knowledge_lint", "train_knowledge_heal",
+            "train_evaluate",
+            "clone_install", "clone_export", "clone_publish",
+            "memory_store", "memory_recall", "memory_list",
+            "task_post", "task_claim", "task_complete", "task_list",
+        ];
+        if BLOCKED_TOOLS.contains(&tool_name) {
+            return Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": request.get("id").cloned(),
+                "error": {"code": -32602, "message": format!("Tool '{tool_name}' is not available via MCP HTTP — it requires agent context")}
+            }));
+        }
 
         // Verify the tool exists
         if !tools.iter().any(|t| t.name == tool_name) {

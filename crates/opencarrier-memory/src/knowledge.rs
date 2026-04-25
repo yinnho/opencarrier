@@ -25,7 +25,7 @@ impl KnowledgeStore {
     }
 
     /// Add an entity to the knowledge graph.
-    pub fn add_entity(&self, entity: Entity) -> OpenCarrierResult<String> {
+    pub fn add_entity(&self, entity: Entity, tenant_id: Option<&str>) -> OpenCarrierResult<String> {
         let conn = self
             .conn
             .lock()
@@ -41,17 +41,17 @@ impl KnowledgeStore {
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO entities (id, entity_type, name, properties, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "INSERT INTO entities (id, entity_type, name, properties, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET name = ?3, properties = ?4, updated_at = ?5",
-            rusqlite::params![id, entity_type_str, entity.name, props_str, now],
+            rusqlite::params![id, entity_type_str, entity.name, props_str, now, tenant_id],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(id)
     }
 
     /// Add a relation between two entities.
-    pub fn add_relation(&self, relation: Relation) -> OpenCarrierResult<String> {
+    pub fn add_relation(&self, relation: Relation, tenant_id: Option<&str>) -> OpenCarrierResult<String> {
         let conn = self
             .conn
             .lock()
@@ -63,8 +63,8 @@ impl KnowledgeStore {
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO relations (id, source_entity, relation_type, target_entity, properties, confidence, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO relations (id, source_entity, relation_type, target_entity, properties, confidence, created_at, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 id,
                 relation.source,
@@ -73,14 +73,15 @@ impl KnowledgeStore {
                 props_str,
                 relation.confidence as f64,
                 now,
+                tenant_id,
             ],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(id)
     }
 
-    /// Query the knowledge graph with a pattern.
-    pub fn query_graph(&self, pattern: GraphPattern) -> OpenCarrierResult<Vec<GraphMatch>> {
+    /// Query the knowledge graph with a pattern, scoped to tenant.
+    pub fn query_graph(&self, pattern: GraphPattern, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<GraphMatch>> {
         let conn = self
             .conn
             .lock()
@@ -98,6 +99,13 @@ impl KnowledgeStore {
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut idx = 1;
+
+        // Tenant scoping
+        if let Some(tid) = tenant_id {
+            sql.push_str(&format!(" AND r.tenant_id = ?{idx}"));
+            params.push(Box::new(tid.to_string()));
+            idx += 1;
+        }
 
         if let Some(ref source) = pattern.source {
             sql.push_str(&format!(" AND (s.id = ?{idx} OR s.name = ?{idx})"));

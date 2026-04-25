@@ -103,7 +103,7 @@ impl PluginManager {
 
         // Read plugin.toml files for bind_agent configuration
         if let Ok(entries) = std::fs::read_dir(plugins_dir) {
-            let agents = self.kernel.list_agents();
+            let agents = self.kernel.list_agents(None);
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     let toml_path = entry.path().join("plugin.toml");

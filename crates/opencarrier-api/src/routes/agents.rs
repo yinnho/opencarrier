@@ -841,6 +841,9 @@ pub async fn clone_agent(
         }
     };
 
+    // Assign tenant ownership — clone inherits source agent's tenant
+    state.kernel.registry.set_tenant_id(new_id, ctx.tenant_id.clone());
+
     // Copy workspace files from source to destination
     let new_entry = state.kernel.registry.get(new_id);
     if let (Some(ref src_ws), Some(ref new_entry)) = (source.manifest.workspace, new_entry) {

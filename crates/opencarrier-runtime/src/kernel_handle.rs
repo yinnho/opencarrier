@@ -36,16 +36,19 @@ pub trait KernelHandle: Send + Sync {
 
     /// Send a message to another agent and get the response.
     /// `sender_id` and `sender_name` identify the originating user (e.g. WeChat user).
+    /// `caller_agent_id` is the agent invoking this tool, used for tenant isolation.
     async fn send_to_agent(
         &self,
         agent_id: &str,
         message: &str,
         sender_id: Option<&str>,
         sender_name: Option<&str>,
+        caller_agent_id: Option<&str>,
     ) -> Result<String, String>;
 
-    /// List all running agents.
-    fn list_agents(&self) -> Vec<AgentInfo>;
+    /// List all running agents visible to the caller.
+    /// `caller_tenant_id` scopes results to the same tenant; None returns all (admin).
+    fn list_agents(&self, caller_tenant_id: Option<&str>) -> Vec<AgentInfo>;
 
     /// Kill an agent by ID.
     fn kill_agent(&self, agent_id: &str) -> Result<(), String>;
@@ -60,7 +63,8 @@ pub trait KernelHandle: Send + Sync {
     fn memory_list(&self, agent_id: &str) -> Result<Vec<(String, serde_json::Value)>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
-    fn find_agents(&self, query: &str) -> Vec<AgentInfo>;
+    /// `caller_tenant_id` scopes results to the same tenant; None returns all (admin).
+    fn find_agents(&self, query: &str, caller_tenant_id: Option<&str>) -> Vec<AgentInfo>;
 
     /// Post a task to the shared task queue. Returns the task ID.
     async fn task_post(
@@ -71,14 +75,14 @@ pub trait KernelHandle: Send + Sync {
         created_by: Option<&str>,
     ) -> Result<String, String>;
 
-    /// Claim the next available task (optionally filtered by assignee). Returns task JSON or None.
-    async fn task_claim(&self, agent_id: &str) -> Result<Option<serde_json::Value>, String>;
+    /// Claim the next available task scoped to the caller's tenant.
+    async fn task_claim(&self, agent_id: &str, tenant_id: Option<&str>) -> Result<Option<serde_json::Value>, String>;
 
     /// Mark a task as completed with a result string.
-    async fn task_complete(&self, task_id: &str, result: &str) -> Result<(), String>;
+    async fn task_complete(&self, task_id: &str, result: &str, tenant_id: Option<&str>) -> Result<(), String>;
 
-    /// List tasks, optionally filtered by status.
-    async fn task_list(&self, status: Option<&str>) -> Result<Vec<serde_json::Value>, String>;
+    /// List tasks, optionally filtered by status, scoped to tenant.
+    async fn task_list(&self, status: Option<&str>, tenant_id: Option<&str>) -> Result<Vec<serde_json::Value>, String>;
 
     /// Publish a custom event that can trigger proactive agents.
     async fn publish_event(
@@ -87,22 +91,25 @@ pub trait KernelHandle: Send + Sync {
         payload: serde_json::Value,
     ) -> Result<(), String>;
 
-    /// Add an entity to the knowledge graph.
+    /// Add an entity to the knowledge graph, scoped to tenant.
     async fn knowledge_add_entity(
         &self,
         entity: opencarrier_types::memory::Entity,
+        tenant_id: Option<&str>,
     ) -> Result<String, String>;
 
-    /// Add a relation to the knowledge graph.
+    /// Add a relation to the knowledge graph, scoped to tenant.
     async fn knowledge_add_relation(
         &self,
         relation: opencarrier_types::memory::Relation,
+        tenant_id: Option<&str>,
     ) -> Result<String, String>;
 
-    /// Query the knowledge graph with a pattern.
+    /// Query the knowledge graph with a pattern, scoped to tenant.
     async fn knowledge_query(
         &self,
         pattern: opencarrier_types::memory::GraphPattern,
+        tenant_id: Option<&str>,
     ) -> Result<Vec<opencarrier_types::memory::GraphMatch>, String>;
 
     /// Create a cron job for the calling agent.
@@ -145,11 +152,25 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
+    /// Resolve an agent's workspace directory by name, scoped to a specific tenant.
+    /// Uses `find_by_name_and_tenant` to avoid cross-tenant name collisions.
+    /// Returns the absolute path string, or None if no agent with that name exists under the tenant.
+    fn resolve_agent_workspace_in_tenant(&self, agent_name: &str, tenant_id: Option<&str>) -> Option<String> {
+        let _ = (agent_name, tenant_id);
+        None
+    }
+
     /// Get the tenant_id of an agent by its ID.
     /// Returns None if the agent is not found or has no tenant.
     fn get_agent_tenant_id(&self, agent_id: &str) -> Option<String> {
         let _ = agent_id;
         None
+    }
+
+    /// Assign a tenant_id to an agent by ID. Used after spawn to inherit parent's tenant.
+    fn set_agent_tenant(&self, agent_id: &str, tenant_id: Option<&str>) -> Result<(), String> {
+        let _ = (agent_id, tenant_id);
+        Err("Tenant assignment not available".to_string())
     }
 
     /// Get the tenant_id of an agent by its name.

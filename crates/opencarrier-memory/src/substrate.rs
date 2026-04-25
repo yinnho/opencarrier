@@ -381,21 +381,23 @@ impl MemorySubstrate {
         description: &str,
         assigned_to: Option<&str>,
         created_by: Option<&str>,
+        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<String> {
         let conn = Arc::clone(&self.conn);
         let title = title.to_string();
         let description = description.to_string();
         let assigned_to = assigned_to.unwrap_or("").to_string();
         let created_by = created_by.unwrap_or("").to_string();
+        let tenant_id = tenant_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             let db = conn.lock().map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
             db.execute(
-                "INSERT INTO task_queue (id, agent_id, task_type, payload, status, priority, created_at, title, description, assigned_to, created_by)
-                 VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?8, ?9)",
-                rusqlite::params![id, &created_by, &title, b"", now, title, description, assigned_to, created_by],
+                "INSERT INTO task_queue (id, agent_id, task_type, payload, status, priority, created_at, title, description, assigned_to, created_by, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![id, &created_by, &title, b"", now, title, description, assigned_to, created_by, tenant_id],
             )
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
             Ok(id)
@@ -404,23 +406,38 @@ impl MemorySubstrate {
         .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    /// Claim the next pending task (optionally for a specific assignee). Returns task JSON or None.
-    pub async fn task_claim(&self, agent_id: &str) -> OpenCarrierResult<Option<serde_json::Value>> {
+    /// Claim the next pending task scoped to a tenant. Returns task JSON or None.
+    pub async fn task_claim(&self, agent_id: &str, tenant_id: Option<&str>) -> OpenCarrierResult<Option<serde_json::Value>> {
         let conn = Arc::clone(&self.conn);
         let agent_id = agent_id.to_string();
+        let tenant_id = tenant_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let db = conn.lock().map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-            // Find first pending task assigned to this agent, or any unassigned pending task
-            let mut stmt = db.prepare(
-                "SELECT id, title, description, assigned_to, created_by, created_at
-                 FROM task_queue
-                 WHERE status = 'pending' AND (assigned_to = ?1 OR assigned_to = '')
-                 ORDER BY priority DESC, created_at ASC
-                 LIMIT 1"
-            ).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+            // Find first pending task assigned to this agent, or any unassigned pending task, scoped to tenant
+            let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match &tenant_id {
+                Some(tid) => (
+                    "SELECT id, title, description, assigned_to, created_by, created_at
+                     FROM task_queue
+                     WHERE status = 'pending' AND (assigned_to = ?1 OR assigned_to = '') AND tenant_id = ?2
+                     ORDER BY priority DESC, created_at ASC
+                     LIMIT 1",
+                    vec![Box::new(agent_id.clone()), Box::new(tid.clone())],
+                ),
+                None => (
+                    "SELECT id, title, description, assigned_to, created_by, created_at
+                     FROM task_queue
+                     WHERE status = 'pending' AND (assigned_to = ?1 OR assigned_to = '')
+                     ORDER BY priority DESC, created_at ASC
+                     LIMIT 1",
+                    vec![Box::new(agent_id.clone())],
+                ),
+            };
 
-            let result = stmt.query_row(rusqlite::params![agent_id], |row| {
+            let mut stmt = db.prepare(sql).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+            let result = stmt.query_row(params_refs.as_slice(), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -457,19 +474,26 @@ impl MemorySubstrate {
         .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    /// Mark a task as completed with a result string.
-    pub async fn task_complete(&self, task_id: &str, result: &str) -> OpenCarrierResult<()> {
+    /// Mark a task as completed with a result string. Validates tenant ownership.
+    pub async fn task_complete(&self, task_id: &str, result: &str, tenant_id: Option<&str>) -> OpenCarrierResult<()> {
         let conn = Arc::clone(&self.conn);
         let task_id = task_id.to_string();
         let result = result.to_string();
+        let tenant_id = tenant_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let now = chrono::Utc::now().to_rfc3339();
             let db = conn.lock().map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-            let rows = db.execute(
-                "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3 WHERE id = ?1",
-                rusqlite::params![task_id, result, now],
-            ).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+            let rows = match &tenant_id {
+                Some(tid) => db.execute(
+                    "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3 WHERE id = ?1 AND tenant_id = ?4",
+                    rusqlite::params![task_id, result, now, tid],
+                ),
+                None => db.execute(
+                    "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3 WHERE id = ?1",
+                    rusqlite::params![task_id, result, now],
+                ),
+            }.map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
             if rows == 0 {
                 return Err(OpenCarrierError::Internal(format!("Task not found: {task_id}")));
             }
@@ -479,22 +503,32 @@ impl MemorySubstrate {
         .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    /// List tasks, optionally filtered by status.
+    /// List tasks, optionally filtered by status, scoped to tenant.
     pub async fn task_list(
         &self,
         status: Option<&str>,
+        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<Vec<serde_json::Value>> {
         let conn = Arc::clone(&self.conn);
         let status = status.map(|s| s.to_string());
+        let tenant_id = tenant_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let db = conn.lock().map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-            let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match &status {
-                Some(s) => (
+            let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match (&status, &tenant_id) {
+                (Some(s), Some(tid)) => (
+                    "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue WHERE status = ?1 AND tenant_id = ?2 ORDER BY created_at DESC",
+                    vec![Box::new(s.clone()), Box::new(tid.clone())],
+                ),
+                (Some(s), None) => (
                     "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue WHERE status = ?1 ORDER BY created_at DESC",
                     vec![Box::new(s.clone())],
                 ),
-                None => (
+                (None, Some(tid)) => (
+                    "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue WHERE tenant_id = ?1 ORDER BY created_at DESC",
+                    vec![Box::new(tid.clone())],
+                ),
+                (None, None) => (
                     "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue ORDER BY created_at DESC",
                     vec![],
                 ),
@@ -600,23 +634,26 @@ impl Memory for MemorySubstrate {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn add_entity(&self, entity: Entity) -> OpenCarrierResult<String> {
+    async fn add_entity(&self, entity: Entity, tenant_id: Option<&str>) -> OpenCarrierResult<String> {
         let store = self.knowledge.clone();
-        tokio::task::spawn_blocking(move || store.add_entity(entity))
+        let tenant_id = tenant_id.map(|s| s.to_string());
+        tokio::task::spawn_blocking(move || store.add_entity(entity, tenant_id.as_deref()))
             .await
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn add_relation(&self, relation: Relation) -> OpenCarrierResult<String> {
+    async fn add_relation(&self, relation: Relation, tenant_id: Option<&str>) -> OpenCarrierResult<String> {
         let store = self.knowledge.clone();
-        tokio::task::spawn_blocking(move || store.add_relation(relation))
+        let tenant_id = tenant_id.map(|s| s.to_string());
+        tokio::task::spawn_blocking(move || store.add_relation(relation, tenant_id.as_deref()))
             .await
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn query_graph(&self, pattern: GraphPattern) -> OpenCarrierResult<Vec<GraphMatch>> {
+    async fn query_graph(&self, pattern: GraphPattern, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<GraphMatch>> {
         let store = self.knowledge.clone();
-        tokio::task::spawn_blocking(move || store.query_graph(pattern))
+        let tenant_id = tenant_id.map(|s| s.to_string());
+        tokio::task::spawn_blocking(move || store.query_graph(pattern, tenant_id.as_deref()))
             .await
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }

@@ -4453,16 +4453,36 @@ impl KernelHandle for OpenCarrierKernel {
         message: &str,
         sender_id: Option<&str>,
         sender_name: Option<&str>,
+        caller_agent_id: Option<&str>,
     ) -> Result<String, String> {
-        // Try UUID first, then fall back to name lookup
-        let id: AgentId = match agent_id.parse() {
-            Ok(id) => id,
-            Err(_) => self
-                .registry
-                .find_by_name(agent_id)
-                .map(|e| e.id)
-                .ok_or_else(|| format!("Agent not found: {agent_id}"))?,
+        // Resolve target agent — UUID first, then name lookup
+        let (id, target_entry): (AgentId, AgentEntry) = match agent_id.parse() {
+            Ok(id) => {
+                let entry = self.registry.get(id)
+                    .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
+                (id, entry)
+            }
+            Err(_) => {
+                // Name lookup — requires caller context for tenant scoping
+                let caller_tid = caller_agent_id
+                    .and_then(|cid| self.get_agent_tenant_id(cid))
+                    .ok_or_else(|| "Agent name lookup requires a caller context. Use agent UUID instead.".to_string())?;
+                let entry = self.registry.find_by_name_and_tenant(agent_id, Some(&caller_tid))
+                    .ok_or_else(|| format!("Agent '{agent_id}' not found in your tenant"))?;
+                (entry.id, entry)
+            }
         };
+
+        // Tenant isolation: caller and target must share the same tenant
+        if let Some(caller_id) = caller_agent_id {
+            if let Some(caller_tid) = self.get_agent_tenant_id(caller_id) {
+                if let Some(ref target_tid) = target_entry.tenant_id {
+                    if caller_tid != *target_tid {
+                        return Err("Access denied: target agent belongs to another tenant".to_string());
+                    }
+                }
+            }
+        }
         let handle: Option<Arc<dyn KernelHandle>> = self
             .coordination
             .self_handle
@@ -4476,9 +4496,12 @@ impl KernelHandle for OpenCarrierKernel {
         Ok(result.response)
     }
 
-    fn list_agents(&self) -> Vec<kernel_handle::AgentInfo> {
-        self.registry
-            .list()
+    fn list_agents(&self, caller_tenant_id: Option<&str>) -> Vec<kernel_handle::AgentInfo> {
+        let agents = match caller_tenant_id {
+            Some(tid) => self.registry.list_by_tenant(tid),
+            None => self.registry.list(),
+        };
+        agents
             .into_iter()
             .map(|e| {
                 let (modality, model) = self.resolve_model_label(&e.manifest.model.modality);
@@ -4524,10 +4547,13 @@ impl KernelHandle for OpenCarrierKernel {
             .map_err(|e| format!("Memory list failed: {e}"))
     }
 
-    fn find_agents(&self, query: &str) -> Vec<kernel_handle::AgentInfo> {
+    fn find_agents(&self, query: &str, caller_tenant_id: Option<&str>) -> Vec<kernel_handle::AgentInfo> {
         let q = query.to_lowercase();
-        self.registry
-            .list()
+        let agents = match caller_tenant_id {
+            Some(tid) => self.registry.list_by_tenant(tid),
+            None => self.registry.list(),
+        };
+        agents
             .into_iter()
             .filter(|e| {
                 let name_match = e.name.to_lowercase().contains(&q);
@@ -4564,29 +4590,31 @@ impl KernelHandle for OpenCarrierKernel {
         assigned_to: Option<&str>,
         created_by: Option<&str>,
     ) -> Result<String, String> {
+        // Resolve tenant from created_by (agent ID)
+        let tenant_id = created_by.and_then(|cid| self.get_agent_tenant_id(cid));
         self.memory
-            .task_post(title, description, assigned_to, created_by)
+            .task_post(title, description, assigned_to, created_by, tenant_id.as_deref())
             .await
             .map_err(|e| format!("Task post failed: {e}"))
     }
 
-    async fn task_claim(&self, agent_id: &str) -> Result<Option<serde_json::Value>, String> {
+    async fn task_claim(&self, agent_id: &str, tenant_id: Option<&str>) -> Result<Option<serde_json::Value>, String> {
         self.memory
-            .task_claim(agent_id)
+            .task_claim(agent_id, tenant_id)
             .await
             .map_err(|e| format!("Task claim failed: {e}"))
     }
 
-    async fn task_complete(&self, task_id: &str, result: &str) -> Result<(), String> {
+    async fn task_complete(&self, task_id: &str, result: &str, tenant_id: Option<&str>) -> Result<(), String> {
         self.memory
-            .task_complete(task_id, result)
+            .task_complete(task_id, result, tenant_id)
             .await
             .map_err(|e| format!("Task complete failed: {e}"))
     }
 
-    async fn task_list(&self, status: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+    async fn task_list(&self, status: Option<&str>, tenant_id: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
         self.memory
-            .task_list(status)
+            .task_list(status, tenant_id)
             .await
             .map_err(|e| format!("Task list failed: {e}"))
     }
@@ -4612,9 +4640,10 @@ impl KernelHandle for OpenCarrierKernel {
     async fn knowledge_add_entity(
         &self,
         entity: opencarrier_types::memory::Entity,
+        tenant_id: Option<&str>,
     ) -> Result<String, String> {
         self.memory
-            .add_entity(entity)
+            .add_entity(entity, tenant_id)
             .await
             .map_err(|e| format!("Knowledge add entity failed: {e}"))
     }
@@ -4622,9 +4651,10 @@ impl KernelHandle for OpenCarrierKernel {
     async fn knowledge_add_relation(
         &self,
         relation: opencarrier_types::memory::Relation,
+        tenant_id: Option<&str>,
     ) -> Result<String, String> {
         self.memory
-            .add_relation(relation)
+            .add_relation(relation, tenant_id)
             .await
             .map_err(|e| format!("Knowledge add relation failed: {e}"))
     }
@@ -4632,9 +4662,10 @@ impl KernelHandle for OpenCarrierKernel {
     async fn knowledge_query(
         &self,
         pattern: opencarrier_types::memory::GraphPattern,
+        tenant_id: Option<&str>,
     ) -> Result<Vec<opencarrier_types::memory::GraphMatch>, String> {
         self.memory
-            .query_graph(pattern)
+            .query_graph(pattern, tenant_id)
             .await
             .map_err(|e| format!("Knowledge query failed: {e}"))
     }
@@ -4787,9 +4818,23 @@ impl KernelHandle for OpenCarrierKernel {
             .map(|p| p.to_string_lossy().to_string())
     }
 
+    fn resolve_agent_workspace_in_tenant(&self, agent_name: &str, tenant_id: Option<&str>) -> Option<String> {
+        self.registry
+            .find_by_name_and_tenant(agent_name, tenant_id)
+            .and_then(|entry| entry.manifest.workspace.clone())
+            .map(|p| p.to_string_lossy().to_string())
+    }
+
     fn get_agent_tenant_id(&self, agent_id: &str) -> Option<String> {
         let aid: opencarrier_types::agent::AgentId = agent_id.parse().ok()?;
         self.registry.get(aid).and_then(|entry| entry.tenant_id.clone())
+    }
+
+    fn set_agent_tenant(&self, agent_id: &str, tenant_id: Option<&str>) -> Result<(), String> {
+        let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
+        self.registry.get(aid).ok_or_else(|| "Agent not found".to_string())?;
+        self.registry.set_tenant_id(aid, tenant_id.map(|s| s.to_string()));
+        Ok(())
     }
 
     fn get_agent_tenant_id_from_name(&self, agent_name: &str) -> Option<String> {
@@ -4840,9 +4885,9 @@ impl KernelHandle for OpenCarrierKernel {
 
         let clone_name = name.to_string();
 
-        // Check for name collision
-        if self.registry.find_by_name(&clone_name).is_some() {
-            return Err(format!("Agent '{}' already exists", clone_name));
+        // Check for name collision within the same tenant
+        if self.registry.find_by_name_and_tenant(&clone_name, tenant_id).is_some() {
+            return Err(format!("Agent '{}' already exists in this tenant", clone_name));
         }
 
         // Atomically create workspace directory (fails if already exists)

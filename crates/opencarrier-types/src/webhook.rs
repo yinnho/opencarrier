@@ -31,6 +31,10 @@ pub struct AgentHookPayload {
     /// Target agent (by name or ID). None = default agent.
     #[serde(default)]
     pub agent: Option<String>,
+    /// Optional tenant_id for name-based agent lookup in multi-tenant deployments.
+    /// Required when `agent` is a name (not UUID) and multiple tenants share agent names.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
     /// Whether to deliver response to a channel.
     #[serde(default)]
     pub deliver: bool,
@@ -210,6 +214,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "summarize today's logs".to_string(),
             agent: None,
+            tenant_id: None,
             deliver: false,
             channel: None,
             model: None,
@@ -223,6 +228,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "deploy staging".to_string(),
             agent: Some("devops-lead".to_string()),
+            tenant_id: Some("tenant-1".to_string()),
             deliver: true,
             channel: Some("slack-ops".to_string()),
             model: Some("claude-sonnet-4-20250514".to_string()),
@@ -236,6 +242,7 @@ mod tests {
         let p = AgentHookPayload {
             message: String::new(),
             agent: None,
+            tenant_id: None,
             deliver: false,
             channel: None,
             model: None,
@@ -250,6 +257,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "m".repeat(16385),
             agent: None,
+            tenant_id: None,
             deliver: false,
             channel: None,
             model: None,
@@ -264,6 +272,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "m".repeat(16384),
             agent: None,
+            tenant_id: None,
             deliver: false,
             channel: None,
             model: None,
@@ -277,6 +286,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "hello".to_string(),
             agent: None,
+            tenant_id: None,
             deliver: false,
             channel: None,
             model: None,
@@ -291,6 +301,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "hello".to_string(),
             agent: None,
+            tenant_id: None,
             deliver: false,
             channel: None,
             model: None,
@@ -305,6 +316,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "hello".to_string(),
             agent: None,
+            tenant_id: None,
             deliver: false,
             channel: None,
             model: None,
@@ -318,6 +330,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "hello".to_string(),
             agent: None,
+            tenant_id: None,
             deliver: false,
             channel: None,
             model: None,
@@ -331,6 +344,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "hello".to_string(),
             agent: None,
+            tenant_id: None,
             deliver: true,
             channel: Some("c".repeat(65)),
             model: None,
@@ -345,6 +359,7 @@ mod tests {
         let p = AgentHookPayload {
             message: "hello".to_string(),
             agent: None,
+            tenant_id: None,
             deliver: true,
             channel: Some("c".repeat(64)),
             model: None,
@@ -391,6 +406,7 @@ mod tests {
         let orig = AgentHookPayload {
             message: "run diagnostics".to_string(),
             agent: Some("ops".to_string()),
+            tenant_id: Some("t-42".to_string()),
             deliver: true,
             channel: Some("slack-alerts".to_string()),
             model: Some("gemini-2.5-flash".to_string()),

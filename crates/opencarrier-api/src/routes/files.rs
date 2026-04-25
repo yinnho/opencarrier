@@ -369,6 +369,7 @@ pub async fn upload_file(
                             file_id.clone(),
                             UploadMeta {
                                 content_type: content_type.clone(),
+                                tenant_id: ctx.tenant_id.clone(),
                             },
                         );
 
@@ -446,6 +447,7 @@ pub async fn upload_file(
         file_id.clone(),
         UploadMeta {
             content_type: content_type.clone(),
+            tenant_id: ctx.tenant_id.clone(),
         },
     );
 
@@ -491,7 +493,12 @@ pub async fn upload_file(
     )
 }
 /// GET /api/uploads/{file_id} — Serve an uploaded file.
-pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
+pub async fn serve_upload(
+    extensions: axum::http::Extensions,
+    Path(file_id): Path<String>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+
     // Validate file_id is a UUID to prevent path traversal
     if uuid::Uuid::parse_str(&file_id).is_err() {
         return (
@@ -502,6 +509,20 @@ pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
             )],
             b"{\"error\":\"Invalid file ID\"}".to_vec(),
         );
+    }
+
+    // Tenant check: verify file belongs to caller's tenant
+    if let Some(meta) = UPLOAD_REGISTRY.get(&file_id) {
+        if !ctx.is_admin() && meta.tenant_id.as_ref() != ctx.tenant_id.as_ref() {
+            return (
+                StatusCode::FORBIDDEN,
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/json".to_string(),
+                )],
+                b"{\"error\":\"Access denied\"}".to_vec(),
+            );
+        }
     }
 
     let file_path = std::env::temp_dir()

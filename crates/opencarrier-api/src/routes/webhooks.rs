@@ -111,9 +111,21 @@ pub async fn webhook_agent(
         Some(agent_ref) => match agent_ref.parse() {
             Ok(id) => id,
             Err(_) => {
-                // Try name lookup
-                match state.kernel.registry.find_by_name(agent_ref) {
-                    Some(entry) => entry.id,
+                // Name lookup — use tenant-scoped if tenant_id provided
+                let entry = match &body.tenant_id {
+                    Some(tid) => state.kernel.registry.find_by_name_and_tenant(agent_ref, Some(tid)),
+                    None => {
+                        // No tenant context: reject name lookup to prevent cross-tenant ambiguity
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({
+                                "error": "Name-based agent lookup requires 'tenant_id' in multi-tenant mode. Use agent UUID instead."
+                            })),
+                        );
+                    }
+                };
+                match entry {
+                    Some(e) => e.id,
                     None => {
                         return (
                             StatusCode::NOT_FOUND,
