@@ -80,9 +80,8 @@ pub async fn create_tenant(
         Ok(()) => {
             // Try to auto-start clone-creator and clone-trainer for this tenant
             for clone_name in &["clone-creator", "clone-trainer"] {
-                if let Some(existing) = state.kernel.registry.find_by_name(clone_name) {
-                    // Already running globally — skip
-                    let _ = existing;
+                if state.kernel.registry.find_by_name_and_tenant(clone_name, Some(&tenant_id)).is_some() {
+                    // Already running in this tenant — skip
                     continue;
                 }
                 // Check if the clone is installed on disk (tenant-scoped path)

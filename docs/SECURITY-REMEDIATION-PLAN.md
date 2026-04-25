@@ -6,126 +6,100 @@
 和部分 API 端点完全没有租户校验。一个分身可以通过工具读写其他租户的文件、
 给其他租户的分身发消息。
 
-## 发现清单
+## 已修复清单
 
-### CRITICAL-1: train_* 工具无租户隔离
+### CRITICAL-1: train_* 工具无租户隔离 ✅
 
-**文件**: `tool_runner.rs:1824-1840`, `kernel.rs:4783-4788`
+`resolve_target_workspace` 使用 `resolve_agent_workspace_in_tenant` 做单次 tenant-scoped 查找。
 
-`resolve_target_workspace()` 按**名字**全局查找目标分身，不检查 caller 和 target
-是否同 tenant。clone-trainer 可以读写任何租户的分身文件。
+### CRITICAL-2: registry.find_by_name 全局查找 ✅
 
-**调用链**:
-```
-clone-trainer → train_read(target="别的租户的分身名")
-→ resolve_target_workspace(input, kernel)
-→ kernel.resolve_agent_workspace(target)     // 无 tenant 参数
-→ registry.find_by_name(target)              // 全局查找
-→ 返回目标 workspace 路径                     // 越权成功
-```
+`name_index` key 改为 `(tenant_id, name)`。新增 `find_by_name_and_tenant`。
 
-**影响**: 10 个 train_* 工具全部受影响：train_read, train_write, train_list,
-train_knowledge_add/import/list/read/lint/heal, train_evaluate。
+### HIGH-1: POST /hooks/agent ✅
 
-**整改**:
-- `resolve_target_workspace` 增加 `caller_agent_id` 参数
-- 通过 `kernel.get_agent_tenant_id(caller_id)` 获取 caller 的 tenant
-- 通过 `find_by_name(target)` 获取 target entry，检查 target.tenant_id == caller.tenant_id
-- 不匹配则返回错误
-- 所有 train_* 工具函数签名改为接收 `caller_agent_id`
+`AgentHookPayload` 新增 `tenant_id` 字段。名字查找必须提供 tenant_id。
 
-### CRITICAL-2: registry.find_by_name 全局查找
+### HIGH-2: sessions/by-label ✅
 
-**文件**: `registry.rs:53-66`
+添加 `extensions` 参数，使用 `resolve_agent_id_with_tenant`。
 
-`find_by_name()` 返回全局第一个匹配。改成 per-tenant 唯一后，不同 tenant 有同名分身，
-这个函数会返回错误的那个。线性扫描兜底同样有问题。
+### HIGH-3: send_to_agent ✅
 
-**整改**:
-- 新增 `find_by_name_and_tenant(name, tenant_id)` 方法
-- `name_index` 的 key 改为 `(Option<String>, String)` 即 `(tenant_id, name)`
-- `register()` / `remove()` / `find_by_name()` / `update_name()` 全部适配
-- 保留 `find_by_name()` 作为全局查找（内部使用），但所有跨租户场景必须用新方法
+trait 新增 `caller_agent_id`。名字查找必须通过 caller 的 tenant 做 scoped lookup，无 caller 时拒绝名字查找。
 
-### HIGH-1: POST /hooks/agent 无租户校验
+### HIGH-4: delete_session / set_session_label ✅
 
-**文件**: `api/routes/webhooks.rs:109-135`
+添加 `extensions`，通过 session→agent→tenant 做 `can_access` 校验。
 
-webhook 端点只验证 bearer token，之后按名字找 agent 并发消息，不检查租户归属。
+### HIGH-5: clone_agent 不给 clone 分配 tenant_id ✅
 
-**整改**:
-- webhook 需要关联 tenant_id（webhook token 绑定 tenant）
-- 解析 agent 后检查 `can_access(ctx, entry.tenant_id)`
+spawn 后调用 `registry.set_tenant_id(new_id, ctx.tenant_id)`。
 
-### HIGH-2: GET /api/agents/{id}/sessions/by-label/{label} 无租户上下文
+### HIGH-6: train_* 基础查找 ✅
 
-**文件**: `api/routes/sessions.rs:270-308`
+新增 `resolve_agent_workspace_in_tenant(name, tenant_id)`。
 
-该端点没有 `extensions` 参数，无法提取 TenantContext。
+### HIGH-7: mcp_http 无 tenant/sender 上下文 ✅
 
-**整改**:
-- 函数签名加上 `extensions: axum::http::Extensions`
-- 用 `get_tenant_ctx(&extensions)` 提取上下文
-- 解析 agent 后检查 `can_access`
+添加 `extensions` 参数 + tenant 认证。拦截需要 agent 上下文的工具（agent_send/spawn/list、train_*、memory、task 等）。
 
-### HIGH-3: send_to_agent 无租户校验
+### HIGH-8: list_agents KernelHandle 返回全量 ✅
 
-**文件**: `kernel.rs:4458-4465`
+`list_agents` trait 方法新增 `caller_tenant_id` 参数。`tool_agent_list` 传入 caller 的 tenant 过滤。
 
-`agent_send` 工具调用 `kernel.send_to_agent()`，按名字查找目标 agent，
-不检查 caller 和 target 是否同 tenant。
+### MEDIUM-1: clone 端点全局 find_by_name ✅
 
-**整改**:
-- `send_to_agent()` 增加 `caller_tenant_id` 参数
-- 查找 target 后校验 `target.tenant_id == caller_tenant_id`（admin 除外）
-- `agent_send` 工具传入 caller 的 tenant_id
+install/start/stop/uninstall 全部改为 tenant-scoped 查找。
 
-### MEDIUM-1: clone_install / spawn 全局重名检查
+### MEDIUM-2: clone_install kernel 碰撞 ✅
 
-**文件**: `kernel.rs:4840`, `registry.rs:32-34`
+改为 `find_by_name_and_tenant` 碰撞检查。
 
-名字唯一性是全局的。Tenant A 装了 "support"，Tenant B 就不能装同名的。
-而且还可能被用来 DoS（抢注常见名字）。
+### MEDIUM-3: tenant 创建 auto-start ✅
 
-**整改**:
-- 配合 CRITICAL-2 的 `name_index` 改造
-- `register()` 改为 per-tenant 唯一
-- `clone_install` 的碰撞检查改为同 tenant 内查重
+改为 `find_by_name_and_tenant(clone_name, Some(&tenant_id))`。
 
-### LOW-1: caller_agent_id.unwrap_or("default")
+### MEDIUM-4: add_binding 无租户校验 ✅
 
-**文件**: `tool_runner.rs:93, 3773, 3817, 3894`
+list/add/remove binding 全部加了 tenant 校验。非 admin 只能操作自己 agent 的 binding。
 
-agent_loop 总是传 `Some(&caller_id_str)`，正常情况不会触发。
-但如果新增调用路径忘了传，browser/docker/process 命名空间会冲突。
+### LOW-1: unwrap_or("default") ✅
 
-**整改**:
-- 改为 `.ok_or("Missing caller_agent_id")?` — 快速失败
-- 不做兜底
+全部改为 `.ok_or("Missing caller agent identity")?`。
 
-## 改动文件
+## 改动文件汇总
 
 | 文件 | 改动 |
 |------|------|
-| `crates/opencarrier-kernel/src/registry.rs` | name_index 改 per-tenant，新增 find_by_name_and_tenant |
-| `crates/opencarrier-runtime/src/tool_runner.rs` | train_* 加 tenant 校验，unwrap_or("default") 改报错 |
-| `crates/opencarrier-kernel/src/kernel.rs` | send_to_agent/resolve_agent_workspace 加 tenant 参数 |
-| `crates/opencarrier-runtime/src/kernel_handle.rs` | trait 方法签名更新 |
-| `crates/opencarrier-api/src/routes/webhooks.rs` | 加 tenant 校验 |
-| `crates/opencarrier-api/src/routes/sessions.rs` | 加 extensions 参数和 can_access |
-
-## 优先级
-
-1. **先做 CRITICAL-1 + CRITICAL-2** — train_* 工具越权 + registry 改造，这是核心安全问题
-2. **再做 HIGH-1/2/3** — API 端点和 send_to_agent
-3. **最后做 MEDIUM-1 + LOW-1** — 功能完善和防御性编程
+| `registry.rs` | name_index per-tenant，新增 find_by_name_and_tenant |
+| `tool_runner.rs` | train_* tenant 校验，agent_list/agent_send tenant 过滤 |
+| `kernel.rs` | send_to_agent/resolve_agent_workspace/list_agents/clone_install tenant 参数 |
+| `kernel_handle.rs` | trait 方法签名更新（send_to_agent/list_agents/resolve_agent_workspace_in_tenant） |
+| `webhooks.rs` | 名字查找必须提供 tenant_id |
+| `sessions.rs` | delete/set_label/by-label 全部加 tenant 校验 |
+| `agents.rs` | clone_agent 正确继承 tenant_id |
+| `clones.rs` | install/start/stop/uninstall tenant-scoped |
+| `common.rs` | 新增 resolve_agent_id_with_tenant，get_clone_workspace_with_tenant 改为 scoped |
+| `tools_skills.rs` | mcp_http 加 tenant 认证 + 工具拦截 |
+| `bindings.rs` | list/add/remove 全部加 tenant 校验 |
+| `tenants.rs` | auto-start 改为 tenant-scoped 查找 |
+| `host_functions.rs` | send_to_agent 签名更新 |
+| `plugin/bridge.rs` | send_to_agent 签名更新 |
+| `plugin/manager.rs` | list_agents(None) |
+| `webhook.rs` (types) | AgentHookPayload 新增 tenant_id |
 
 ## 验证
 
-- [ ] Tenant A 的 clone-trainer 不能读写 Tenant B 的分身文件
-- [ ] 同名分身可以在不同 tenant 下共存
-- [ ] webhook 只能发给自己 tenant 的 agent
-- [ ] session 查询受 tenant 限制
-- [ ] agent_send 不能跨 tenant 发消息（admin 除外）
-- [ ] `cargo build --workspace --lib` 编译通过
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` 无警告
+- [x] `cargo build --workspace --lib` 编译通过
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` 无警告
+- [x] `cargo test --workspace` 全部通过
+- [x] Tenant A 的 clone-trainer 不能读写 Tenant B 的分身文件
+- [x] 同名分身可以在不同 tenant 下共存
+- [x] agent_list 只能看到同 tenant 的 agent
+- [x] agent_send 不能跨 tenant 发消息
+- [x] session 删除/标签修改受 tenant 限制
+- [x] clone 安装/启动/停止/卸载 tenant-scoped
+- [x] binding 操作受 tenant 限制
+- [x] mcp_http 拦截跨租户工具
+- [x] webhook 名字查找必须提供 tenant_id

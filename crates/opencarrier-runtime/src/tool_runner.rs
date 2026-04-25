@@ -180,8 +180,8 @@ pub async fn execute_tool(
 
         // Clone management tools
         "clone_install" => tool_clone_install(input, kernel, caller_agent_id).await,
-        "clone_export" => tool_clone_export(input, kernel).await,
-        "clone_publish" => tool_clone_publish(input, kernel).await,
+        "clone_export" => tool_clone_export(input, kernel, caller_agent_id).await,
+        "clone_publish" => tool_clone_publish(input, kernel, caller_agent_id).await,
 
         // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
         "web_fetch" => {
@@ -271,10 +271,10 @@ pub async fn execute_tool(
         }
 
         // Inter-agent tools (require kernel handle)
-        "agent_send" => tool_agent_send(input, kernel).await,
+        "agent_send" => tool_agent_send(input, kernel, caller_agent_id).await,
         "agent_spawn" => tool_agent_spawn(input, kernel, caller_agent_id).await,
-        "agent_list" => tool_agent_list(kernel),
-        "agent_kill" => tool_agent_kill(input, kernel),
+        "agent_list" => tool_agent_list(kernel, caller_agent_id),
+        "agent_kill" => tool_agent_kill(input, kernel, caller_agent_id),
 
         // Memory tools (scoped to caller's agent namespace)
         "memory_store" => tool_memory_store(input, kernel, caller_agent_id),
@@ -282,12 +282,12 @@ pub async fn execute_tool(
         "memory_list" => tool_memory_list(input, kernel, caller_agent_id),
 
         // Collaboration tools
-        "agent_find" => tool_agent_find(input, kernel),
+        "agent_find" => tool_agent_find(input, kernel, caller_agent_id),
         "task_post" => tool_task_post(input, kernel, caller_agent_id).await,
         "task_claim" => tool_task_claim(kernel, caller_agent_id).await,
-        "task_complete" => tool_task_complete(input, kernel).await,
-        "task_list" => tool_task_list(input, kernel).await,
-        "event_publish" => tool_event_publish(input, kernel).await,
+        "task_complete" => tool_task_complete(input, kernel, caller_agent_id).await,
+        "task_list" => tool_task_list(input, kernel, caller_agent_id).await,
+        "event_publish" => tool_event_publish(input, kernel, caller_agent_id).await,
 
         // Scheduling tools
         "schedule_create" => tool_schedule_create(input, kernel, caller_agent_id).await,
@@ -295,9 +295,9 @@ pub async fn execute_tool(
         "schedule_delete" => tool_schedule_delete(input, kernel, caller_agent_id).await,
 
         // Knowledge graph tools
-        "knowledge_add_entity" => tool_knowledge_add_entity(input, kernel).await,
-        "knowledge_add_relation" => tool_knowledge_add_relation(input, kernel).await,
-        "knowledge_query" => tool_knowledge_query(input, kernel).await,
+        "knowledge_add_entity" => tool_knowledge_add_entity(input, kernel, caller_agent_id).await,
+        "knowledge_add_relation" => tool_knowledge_add_relation(input, kernel, caller_agent_id).await,
+        "knowledge_query" => tool_knowledge_query(input, kernel, caller_agent_id).await,
 
         // Image analysis tool
         "image_analyze" => tool_image_analyze(input).await,
@@ -327,13 +327,13 @@ pub async fn execute_tool(
         // Cron scheduling tools
         "cron_create" => tool_cron_create(input, kernel, caller_agent_id).await,
         "cron_list" => tool_cron_list(kernel, caller_agent_id).await,
-        "cron_cancel" => tool_cron_cancel(input, kernel).await,
+        "cron_cancel" => tool_cron_cancel(input, kernel, caller_agent_id).await,
 
         // Persistent process tools
         "process_start" => tool_process_start(input, process_manager, caller_agent_id).await,
-        "process_poll" => tool_process_poll(input, process_manager).await,
-        "process_write" => tool_process_write(input, process_manager).await,
-        "process_kill" => tool_process_kill(input, process_manager).await,
+        "process_poll" => tool_process_poll(input, process_manager, caller_agent_id).await,
+        "process_write" => tool_process_write(input, process_manager, caller_agent_id).await,
+        "process_kill" => tool_process_kill(input, process_manager, caller_agent_id).await,
         "process_list" => tool_process_list(process_manager, caller_agent_id).await,
 
         // A2A outbound tools (cross-instance agent communication)
@@ -1835,17 +1835,11 @@ fn resolve_target_workspace(
         .as_str()
         .ok_or("Missing 'target' parameter (target clone name)")?;
 
-    // Tenant isolation: caller and target must belong to the same tenant
+    // Tenant isolation: single tenant-scoped lookup for both workspace and tenant check
     let caller_tenant = kh.get_agent_tenant_id(caller_id);
     let target_workspace = kh
-        .resolve_agent_workspace(target)
-        .ok_or_else(|| format!("Agent '{}' not found or has no workspace", target))?;
-
-    // Verify target belongs to the same tenant as caller
-    let target_tenant = kh.get_agent_tenant_id_from_name(target);
-    if target_tenant != caller_tenant {
-        return Err(format!("Access denied: agent '{}' does not belong to your tenant", target));
-    }
+        .resolve_agent_workspace_in_tenant(target, caller_tenant.as_deref())
+        .ok_or_else(|| format!("Agent '{}' not found in your tenant or has no workspace", target))?;
 
     let path = PathBuf::from(&target_workspace);
     if !path.exists() {
@@ -2260,11 +2254,19 @@ async fn tool_clone_install(
 async fn tool_clone_export(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_export requires kernel access")?;
+    let caller_id = caller_agent_id.ok_or("clone_export requires caller agent identity")?;
     let name = validate_clone_name(
         input["name"].as_str().ok_or("Missing 'name' parameter")?
     )?.to_string();
+
+    // Tenant check: verify caller owns this clone
+    let caller_tenant = kernel.get_agent_tenant_id(caller_id)
+        .ok_or("Cannot determine caller tenant")?;
+    kernel.resolve_agent_workspace_in_tenant(&name, Some(&caller_tenant))
+        .ok_or_else(|| format!("Clone '{}' not found in your tenant", name))?;
 
     let agx_bytes = kernel.clone_export(&name)?;
 
@@ -2279,11 +2281,19 @@ async fn tool_clone_export(
 async fn tool_clone_publish(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_publish requires kernel access")?;
+    let caller_id = caller_agent_id.ok_or("clone_publish requires caller agent identity")?;
     let name = validate_clone_name(
         input["name"].as_str().ok_or("Missing 'name' parameter")?
     )?.to_string();
+
+    // Tenant check: verify caller owns this clone
+    let caller_tenant = kernel.get_agent_tenant_id(caller_id)
+        .ok_or("Cannot determine caller tenant")?;
+    kernel.resolve_agent_workspace_in_tenant(&name, Some(&caller_tenant))
+        .ok_or_else(|| format!("Clone '{}' not found in your tenant", name))?;
 
     // Export the clone first
     let agx_bytes = kernel.clone_export(&name)?;
@@ -2591,6 +2601,7 @@ fn require_kernel(
 async fn tool_agent_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = input["agent_id"]
@@ -2612,7 +2623,7 @@ async fn tool_agent_send(
 
     AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message, None, None).await
+            kh.send_to_agent(agent_id, message, None, None, caller_agent_id).await
         })
         .await
 }
@@ -2627,14 +2638,24 @@ async fn tool_agent_spawn(
         .as_str()
         .ok_or("Missing 'manifest_toml' parameter")?;
     let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await?;
+    // Inherit parent's tenant
+    if let Some(pid) = parent_id {
+        if let Some(tid) = kh.get_agent_tenant_id(pid) {
+            let _ = kh.set_agent_tenant(&id, Some(&tid));
+        }
+    }
     Ok(format!(
         "Agent spawned successfully.\n  ID: {id}\n  Name: {name}"
     ))
 }
 
-fn tool_agent_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, String> {
+fn tool_agent_list(
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let agents = kh.list_agents();
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
+    let agents = kh.list_agents(tenant_id.as_deref());
     if agents.is_empty() {
         return Ok("No agents currently running.".to_string());
     }
@@ -2651,13 +2672,22 @@ fn tool_agent_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, Str
 fn tool_agent_kill(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let agent_id = input["agent_id"]
+    let caller_id = caller_agent_id.ok_or("Missing caller agent identity")?;
+    let target_id = input["agent_id"]
         .as_str()
         .ok_or("Missing 'agent_id' parameter")?;
-    kh.kill_agent(agent_id)?;
-    Ok(format!("Agent {agent_id} killed successfully."))
+    // Tenant check: caller and target must share tenant
+    let caller_tenant = kh.get_agent_tenant_id(caller_id)
+        .ok_or("Cannot determine caller tenant")?;
+    let target_tenant = kh.get_agent_tenant_id(target_id);
+    if target_tenant.as_ref() != Some(&caller_tenant) {
+        return Err("Access denied: target agent belongs to another tenant".to_string());
+    }
+    kh.kill_agent(target_id)?;
+    Ok(format!("Agent {target_id} killed successfully."))
 }
 
 // ---------------------------------------------------------------------------
@@ -2720,10 +2750,12 @@ fn tool_memory_list(
 fn tool_agent_find(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
-    let agents = kh.find_agents(query);
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
+    let agents = kh.find_agents(query, tenant_id.as_deref());
     if agents.is_empty() {
         return Ok(format!("No agents found matching '{query}'."));
     }
@@ -2766,8 +2798,9 @@ async fn tool_task_claim(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let agent_id = caller_agent_id.unwrap_or("");
-    match kh.task_claim(agent_id).await? {
+    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
+    let tenant_id = kh.get_agent_tenant_id(agent_id);
+    match kh.task_claim(agent_id, tenant_id.as_deref()).await? {
         Some(task) => {
             serde_json::to_string_pretty(&task).map_err(|e| format!("Serialize error: {e}"))
         }
@@ -2778,25 +2811,30 @@ async fn tool_task_claim(
 async fn tool_task_complete(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let caller_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let task_id = input["task_id"]
         .as_str()
         .ok_or("Missing 'task_id' parameter")?;
     let result = input["result"]
         .as_str()
         .ok_or("Missing 'result' parameter")?;
-    kh.task_complete(task_id, result).await?;
+    let tenant_id = kh.get_agent_tenant_id(caller_id);
+    kh.task_complete(task_id, result, tenant_id.as_deref()).await?;
     Ok(format!("Task {task_id} marked as completed."))
 }
 
 async fn tool_task_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
     let status = input["status"].as_str();
-    let tasks = kh.task_list(status).await?;
+    let tasks = kh.task_list(status, tenant_id.as_deref()).await?;
     if tasks.is_empty() {
         return Ok("No tasks found.".to_string());
     }
@@ -2806,15 +2844,22 @@ async fn tool_task_list(
 async fn tool_event_publish(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let event_type = input["event_type"]
         .as_str()
         .ok_or("Missing 'event_type' parameter")?;
-    let payload = input
+    let mut payload = input
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::json!({}));
+    // Attach caller's tenant_id so the kernel can scope event delivery
+    if let Some(cid) = caller_agent_id {
+        if let Some(tid) = kh.get_agent_tenant_id(cid) {
+            payload["_tenant_id"] = serde_json::Value::String(tid);
+        }
+    }
     kh.publish_event(event_type, payload).await?;
     Ok(format!("Event '{event_type}' published successfully."))
 }
@@ -2858,8 +2903,10 @@ fn parse_relation_type(s: &str) -> opencarrier_types::memory::RelationType {
 async fn tool_knowledge_add_entity(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let entity_type_str = input["entity_type"]
         .as_str()
@@ -2879,15 +2926,17 @@ async fn tool_knowledge_add_entity(
         updated_at: chrono::Utc::now(),
     };
 
-    let id = kh.knowledge_add_entity(entity).await?;
+    let id = kh.knowledge_add_entity(entity, tenant_id.as_deref()).await?;
     Ok(format!("Entity '{name}' added with ID: {id}"))
 }
 
 async fn tool_knowledge_add_relation(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
     let source = input["source"]
         .as_str()
         .ok_or("Missing 'source' parameter")?;
@@ -2913,7 +2962,7 @@ async fn tool_knowledge_add_relation(
         created_at: chrono::Utc::now(),
     };
 
-    let id = kh.knowledge_add_relation(relation).await?;
+    let id = kh.knowledge_add_relation(relation, tenant_id.as_deref()).await?;
     Ok(format!(
         "Relation '{source}' --[{relation_str}]--> '{target}' added with ID: {id}"
     ))
@@ -2922,8 +2971,10 @@ async fn tool_knowledge_add_relation(
 async fn tool_knowledge_query(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
     let source = input["source"].as_str().map(|s| s.to_string());
     let target = input["target"].as_str().map(|s| s.to_string());
     let relation = input["relation"].as_str().map(parse_relation_type);
@@ -2936,7 +2987,7 @@ async fn tool_knowledge_query(
         max_depth,
     };
 
-    let matches = kh.knowledge_query(pattern).await?;
+    let matches = kh.knowledge_query(pattern, tenant_id.as_deref()).await?;
     if matches.is_empty() {
         return Ok("No matching knowledge graph entries found.".to_string());
     }
@@ -3207,11 +3258,19 @@ async fn tool_cron_list(
 async fn tool_cron_cancel(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let agent_id = caller_agent_id.ok_or("Agent ID required for cron_cancel")?;
     let job_id = input["job_id"]
         .as_str()
         .ok_or("Missing 'job_id' parameter")?;
+    // Ownership check: verify this job belongs to the caller
+    let jobs = kh.cron_list(agent_id).await?;
+    let owned = jobs.iter().any(|j| j.get("id").and_then(|v| v.as_str()) == Some(job_id));
+    if !owned {
+        return Err("Cron job not found or does not belong to you".to_string());
+    }
     kh.cron_cancel(job_id).await?;
     Ok(format!("Cron job '{job_id}' cancelled."))
 }
@@ -3864,11 +3923,17 @@ async fn tool_process_start(
 async fn tool_process_poll(
     input: &serde_json::Value,
     pm: Option<&crate::process_manager::ProcessManager>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
+    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let proc_id = input["process_id"]
         .as_str()
         .ok_or("Missing 'process_id' parameter")?;
+    // Ownership: verify the process belongs to the caller
+    if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
+        return Err("Process not found or does not belong to you".to_string());
+    }
     let (stdout, stderr) = pm.read(proc_id).await?;
     Ok(serde_json::json!({
         "stdout": stdout,
@@ -3881,11 +3946,17 @@ async fn tool_process_poll(
 async fn tool_process_write(
     input: &serde_json::Value,
     pm: Option<&crate::process_manager::ProcessManager>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
+    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let proc_id = input["process_id"]
         .as_str()
         .ok_or("Missing 'process_id' parameter")?;
+    // Ownership: verify the process belongs to the caller
+    if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
+        return Err("Process not found or does not belong to you".to_string());
+    }
     let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
     // Always append newline if not present (common expectation for REPLs)
     let data = if data.ends_with('\n') {
@@ -3901,11 +3972,17 @@ async fn tool_process_write(
 async fn tool_process_kill(
     input: &serde_json::Value,
     pm: Option<&crate::process_manager::ProcessManager>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
+    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let proc_id = input["process_id"]
         .as_str()
         .ok_or("Missing 'process_id' parameter")?;
+    // Ownership: verify the process belongs to the caller
+    if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
+        return Err("Process not found or does not belong to you".to_string());
+    }
     pm.kill(proc_id).await?;
     Ok(r#"{"status": "killed"}"#.to_string())
 }

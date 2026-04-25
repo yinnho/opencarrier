@@ -100,7 +100,7 @@ impl PluginBridgeManager {
             "Routing plugin message to agent"
         );
 
-        match self.kernel.send_to_agent(&agent_id, &text, Some(&msg.sender_id), Some(&msg.sender_name)).await {
+        match self.kernel.send_to_agent(&agent_id, &text, Some(&msg.sender_id), Some(&msg.sender_name), None).await {
             Ok(response) => {
                 self.send_response(&msg, &response);
             }

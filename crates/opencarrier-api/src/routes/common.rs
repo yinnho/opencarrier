@@ -65,8 +65,51 @@ pub fn parse_and_get_agent_with_tenant(
     Ok((agent_id, entry))
 }
 
+/// Resolve an agent by UUID or name with tenant-aware access control.
+///
+/// - UUID: look up by ID, then check `can_access`.
+/// - Name: look up scoped to the caller's tenant (or globally for admin),
+///   then check `can_access`.
+/// - Returns 403 if the caller can't access the resolved agent.
+pub fn resolve_agent_id_with_tenant(
+    id_or_name: &str,
+    registry: &opencarrier_kernel::registry::AgentRegistry,
+    ctx: &opencarrier_types::tenant::TenantContext,
+) -> Result<(AgentId, AgentEntry), (StatusCode, Json<serde_json::Value>)> {
+    // Try UUID first
+    if let Ok(id) = id_or_name.parse::<AgentId>() {
+        let entry = get_agent_or_404(registry, &id)?;
+        if !can_access(ctx, entry.tenant_id.as_deref()) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
+            ));
+        }
+        return Ok((id, entry));
+    }
+    // Name lookup — admin gets global, tenant gets scoped
+    let entry = if ctx.is_admin() {
+        registry.find_by_name(id_or_name)
+    } else {
+        ctx.tenant_id.as_ref().and_then(|tid| {
+            registry.find_by_name_and_tenant(id_or_name, Some(tid.as_str()))
+        })
+    }.ok_or_else(|| (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": format!("Agent not found: {id_or_name}")})),
+    ))?;
+    if !can_access(ctx, entry.tenant_id.as_deref()) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
+        ));
+    }
+    Ok((entry.id, entry))
+}
+
 /// Look up a clone by name and extract its workspace path.
 /// Returns (AgentEntry, PathBuf) or an error response.
+/// Uses global find_by_name — prefer `get_clone_workspace_with_tenant` for multi-tenant.
 pub fn get_clone_workspace(
     name: &str,
     registry: &opencarrier_kernel::registry::AgentRegistry,
@@ -87,18 +130,34 @@ pub fn get_clone_workspace(
 }
 
 /// Look up a clone by name, check tenant ownership, and extract its workspace path.
+/// Uses tenant-scoped lookup to avoid cross-tenant name collisions.
 pub fn get_clone_workspace_with_tenant(
     name: &str,
     registry: &opencarrier_kernel::registry::AgentRegistry,
     ctx: &opencarrier_types::tenant::TenantContext,
 ) -> Result<(AgentEntry, std::path::PathBuf), (StatusCode, Json<serde_json::Value>)> {
-    let (entry, workspace) = get_clone_workspace(name, registry)?;
+    let entry = if ctx.is_admin() {
+        registry.find_by_name(name)
+    } else {
+        ctx.tenant_id.as_ref().and_then(|tid| {
+            registry.find_by_name_and_tenant(name, Some(tid.as_str()))
+        })
+    }.ok_or_else(|| (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
+    ))?;
     if !can_access(ctx, entry.tenant_id.as_deref()) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
         ));
     }
+    let workspace = entry.manifest.workspace.clone().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Agent has no workspace"})),
+        )
+    })?;
     Ok((entry, workspace))
 }
 
@@ -133,6 +192,7 @@ use std::sync::LazyLock;
 /// Metadata stored alongside uploaded files.
 pub struct UploadMeta {
     pub content_type: String,
+    pub tenant_id: Option<String>,
 }
 
 /// In-memory upload metadata registry.

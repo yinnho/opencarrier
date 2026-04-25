@@ -62,6 +62,7 @@ pub async fn get_agent_session(
                                             file_id.clone(),
                                             UploadMeta {
                                                 content_type: media_type.clone(),
+                                                tenant_id: ctx.tenant_id.clone(),
                                             },
                                         );
                                         msg_images.push(serde_json::json!({
@@ -200,8 +201,10 @@ pub async fn list_sessions(
 /// DELETE /api/sessions/:id — Delete a session.
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let session_id = match id.parse::<uuid::Uuid>() {
         Ok(u) => opencarrier_types::agent::SessionId(u),
         Err(_) => {
@@ -211,6 +214,32 @@ pub async fn delete_session(
             );
         }
     };
+
+    // Tenant check: resolve session → agent → agent's tenant
+    match state.kernel.memory.get_session(session_id) {
+        Ok(Some(session)) => {
+            if let Some(entry) = state.kernel.registry.get(session.agent_id) {
+                if !can_access(&ctx, entry.tenant_id.as_deref()) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "Access denied"})),
+                    );
+                }
+            }
+        }
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Session not found"})),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            );
+        }
+    }
 
     match state.kernel.memory.delete_session(session_id) {
         Ok(()) => (
@@ -226,9 +255,11 @@ pub async fn delete_session(
 /// PUT /api/sessions/:id/label — Set a session label.
 pub async fn set_session_label(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
     let session_id = match id.parse::<uuid::Uuid>() {
         Ok(u) => opencarrier_types::agent::SessionId(u),
         Err(_) => {
@@ -238,6 +269,32 @@ pub async fn set_session_label(
             );
         }
     };
+
+    // Tenant check: resolve session → agent → agent's tenant
+    match state.kernel.memory.get_session(session_id) {
+        Ok(Some(session)) => {
+            if let Some(entry) = state.kernel.registry.get(session.agent_id) {
+                if !can_access(&ctx, entry.tenant_id.as_deref()) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "Access denied"})),
+                    );
+                }
+            }
+        }
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Session not found"})),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            );
+        }
+    }
 
     let label = req.get("label").and_then(|v| v.as_str());
 
@@ -269,22 +326,13 @@ pub async fn set_session_label(
 /// GET /api/sessions/by-label/:label — Find session by label (scoped to agent).
 pub async fn find_session_by_label(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     Path((agent_id_str, label)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id = match agent_id_str.parse::<uuid::Uuid>() {
-        Ok(u) => opencarrier_types::agent::AgentId(u),
-        Err(_) => {
-            // Try name lookup
-            match state.kernel.registry.find_by_name(&agent_id_str) {
-                Some(entry) => entry.id,
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        Json(serde_json::json!({"error": "Agent not found"})),
-                    );
-                }
-            }
-        }
+    let ctx = get_tenant_ctx(&extensions);
+    let (agent_id, _entry) = match resolve_agent_id_with_tenant(&agent_id_str, &state.kernel.registry, &ctx) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
 
     match state.kernel.memory.find_session_by_label(agent_id, &label) {

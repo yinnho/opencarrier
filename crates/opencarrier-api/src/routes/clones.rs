@@ -92,11 +92,17 @@ pub async fn install_clone(
     // Clean up temp file
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
-    // Check for name collision
-    if state.kernel.registry.find_by_name(&clone_data.name).is_some() {
+    // Check for name collision within the same tenant
+    // Determine target tenant first for the collision check
+    let target_tenant_for_check = if ctx.is_admin() {
+        req.tenant_id.as_deref().or(ctx.tenant_id.as_deref())
+    } else {
+        ctx.tenant_id.as_deref()
+    };
+    if state.kernel.registry.find_by_name_and_tenant(&clone_data.name, target_tenant_for_check).is_some() {
         return (
             StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": format!("Agent '{}' already exists", clone_data.name)})),
+            Json(serde_json::json!({"error": format!("Agent '{}' already exists in this tenant", clone_data.name)})),
         );
     }
 
@@ -193,7 +199,14 @@ pub async fn start_clone(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let entry = match state.kernel.registry.find_by_name(&name) {
+    let entry = if ctx.is_admin() {
+        state.kernel.registry.find_by_name(&name)
+    } else {
+        ctx.tenant_id.as_ref().and_then(|tid| {
+            state.kernel.registry.find_by_name_and_tenant(&name, Some(tid.as_str()))
+        })
+    };
+    let entry = match entry {
         Some(e) => e,
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
@@ -217,7 +230,14 @@ pub async fn stop_clone(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let entry = match state.kernel.registry.find_by_name(&name) {
+    let entry = if ctx.is_admin() {
+        state.kernel.registry.find_by_name(&name)
+    } else {
+        ctx.tenant_id.as_ref().and_then(|tid| {
+            state.kernel.registry.find_by_name_and_tenant(&name, Some(tid.as_str()))
+        })
+    };
+    let entry = match entry {
         Some(e) => e,
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
@@ -646,7 +666,14 @@ pub async fn uninstall_clone(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let entry = match state.kernel.registry.find_by_name(&name) {
+    let entry = if ctx.is_admin() {
+        state.kernel.registry.find_by_name(&name)
+    } else {
+        ctx.tenant_id.as_ref().and_then(|tid| {
+            state.kernel.registry.find_by_name_and_tenant(&name, Some(tid.as_str()))
+        })
+    };
+    let entry = match entry {
         Some(e) => e,
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
