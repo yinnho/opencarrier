@@ -2,7 +2,7 @@
 name = "feishu"
 version = "0.1.0"
 abi_version = 1
-description = "Feishu/Lark Bot channel plugin"
+description = "Feishu/Lark Bot channel and tools plugin"
 author = "Yinnhoo"
 
 [[channels]]
@@ -16,3 +16,402 @@ name = "Feishu Bot"
 # app_id = "cli_xxx"
 # app_secret = "xxx"
 # brand = "feishu"    # "feishu" (China) or "lark" (International)
+
+# ---- IM 即时通讯 (8 tools) ----
+
+[[tools]]
+name = "feishu_send_message"
+description = "发送飞书消息（文本/图片/富文本等）"
+parameters_json = '{"type":"object","properties":{"receive_id":{"type":"string","description":"接收者ID"},"receive_id_type":{"type":"string","description":"ID类型：open_id/user_id/union_id/chat_id/email","default":"open_id"},"msg_type":{"type":"string","description":"消息类型：text/image/post/file等","default":"text"},"content":{"type":"string","description":"消息内容（JSON字符串）"}},"required":["receive_id","content"]}'
+
+[[tools]]
+name = "feishu_reply_message"
+description = "回复飞书消息"
+parameters_json = '{"type":"object","properties":{"message_id":{"type":"string","description":"被回复的消息ID"},"msg_type":{"type":"string","description":"消息类型","default":"text"},"content":{"type":"string","description":"消息内容（JSON字符串）"}},"required":["message_id","content"]}'
+
+[[tools]]
+name = "feishu_search_messages"
+description = "搜索飞书消息"
+parameters_json = '{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"},"chat_id":{"type":"string","description":"限定群聊ID"},"message_type":{"type":"string","description":"消息类型过滤"},"page_size":{"type":"integer","description":"每页数量","default":20}},"required":["query"]}'
+
+[[tools]]
+name = "feishu_list_messages"
+description = "获取聊天会话消息记录"
+parameters_json = '{"type":"object","properties":{"container_id":{"type":"string","description":"群聊或单聊ID"},"container_id_type":{"type":"string","description":"容器类型","default":"chat"},"page_size":{"type":"integer","description":"每页数量","default":20},"page_token":{"type":"string","description":"翻页token"}},"required":["container_id"]}'
+
+[[tools]]
+name = "feishu_create_chat"
+description = "创建飞书群聊"
+parameters_json = '{"type":"object","properties":{"name":{"type":"string","description":"群名"},"description":{"type":"string","description":"群描述"},"chat_mode":{"type":"string","description":"群类型","default":"group"},"chat_type":{"type":"string","description":"群可见性","default":"private"},"user_id_list":{"type":"array","items":{"type":"string"},"description":"初始成员列表"}},"required":["name"]}'
+
+[[tools]]
+name = "feishu_update_chat"
+description = "更新飞书群聊信息"
+parameters_json = '{"type":"object","properties":{"chat_id":{"type":"string","description":"群聊ID"},"name":{"type":"string","description":"新群名"},"description":{"type":"string","description":"新描述"}},"required":["chat_id"]}'
+
+[[tools]]
+name = "feishu_list_chats"
+description = "列出用户所在的群聊"
+parameters_json = '{"type":"object","properties":{"page_size":{"type":"integer","description":"每页数量","default":20},"page_token":{"type":"string","description":"翻页token"}}}'
+
+[[tools]]
+name = "feishu_download_resource"
+description = "下载飞书消息中的文件资源"
+parameters_json = '{"type":"object","properties":{"message_id":{"type":"string","description":"消息ID"},"file_key":{"type":"string","description":"文件key"},"type":{"type":"string","description":"资源类型：file/image/video","default":"file"}},"required":["message_id","file_key"]}'
+
+# ---- Doc 云文档 (6 tools) ----
+
+[[tools]]
+name = "feishu_create_doc"
+description = "创建飞书文档"
+parameters_json = '{"type":"object","properties":{"title":{"type":"string","description":"文档标题"},"folder_token":{"type":"string","description":"所在文件夹token"}},"required":["title"]}'
+
+[[tools]]
+name = "feishu_get_doc"
+description = "获取飞书文档内容（块列表）"
+parameters_json = '{"type":"object","properties":{"document_id":{"type":"string","description":"文档ID"},"page_size":{"type":"integer","description":"每页数量","default":500},"page_token":{"type":"string","description":"翻页token"}},"required":["document_id"]}'
+
+[[tools]]
+name = "feishu_update_doc"
+description = "批量更新飞书文档块内容"
+parameters_json = '{"type":"object","properties":{"document_id":{"type":"string","description":"文档ID"},"requests":{"type":"array","description":"更新操作列表","items":{"type":"object"}}},"required":["document_id","requests"]}'
+
+[[tools]]
+name = "feishu_search_docs"
+description = "搜索飞书文档"
+parameters_json = '{"type":"object","properties":{"search_key":{"type":"string","description":"搜索关键词"},"owner_ids":{"type":"array","items":{"type":"string"},"description":"文档所有者ID列表"},"count":{"type":"integer","description":"返回数量","default":20},"offset":{"type":"integer","description":"偏移量","default":0}},"required":["search_key"]}'
+
+[[tools]]
+name = "feishu_get_doc_raw"
+description = "获取旧版文档内容"
+parameters_json = '{"type":"object","properties":{"document_id":{"type":"string","description":"文档ID"}},"required":["document_id"]}'
+
+[[tools]]
+name = "feishu_update_doc_raw"
+description = "更新旧版文档内容"
+parameters_json = '{"type":"object","properties":{"document_id":{"type":"string","description":"文档ID"},"content":{"type":"string","description":"文档内容"}},"required":["document_id","content"]}'
+
+# ---- Sheets 电子表格 (6 tools) ----
+
+[[tools]]
+name = "feishu_create_sheet"
+description = "创建飞书电子表格"
+parameters_json = '{"type":"object","properties":{"title":{"type":"string","description":"表格标题"},"folder_token":{"type":"string","description":"所在文件夹token"}},"required":["title"]}'
+
+[[tools]]
+name = "feishu_read_sheet"
+description = "读取电子表格数据"
+parameters_json = '{"type":"object","properties":{"spreadsheet_token":{"type":"string","description":"表格token"},"range":{"type":"string","description":"读取范围"}},"required":["spreadsheet_token","range"]}'
+
+[[tools]]
+name = "feishu_write_sheet"
+description = "写入电子表格数据"
+parameters_json = '{"type":"object","properties":{"spreadsheet_token":{"type":"string","description":"表格token"},"range":{"type":"string","description":"写入范围"},"values":{"type":"array","items":{"type":"array"},"description":"二维数组数据"}},"required":["spreadsheet_token","range","values"]}'
+
+[[tools]]
+name = "feishu_append_sheet"
+description = "追加数据到电子表格"
+parameters_json = '{"type":"object","properties":{"spreadsheet_token":{"type":"string","description":"表格token"},"range":{"type":"string","description":"追加起始范围"},"values":{"type":"array","items":{"type":"array"},"description":"二维数组数据"}},"required":["spreadsheet_token","range","values"]}'
+
+[[tools]]
+name = "feishu_find_in_sheet"
+description = "在电子表格中查找数据"
+parameters_json = '{"type":"object","properties":{"spreadsheet_token":{"type":"string","description":"表格token"},"sheet_id":{"type":"string","description":"子表ID"},"find_condition":{"type":"object","description":"查找条件"}},"required":["spreadsheet_token","sheet_id","find_condition"]}'
+
+[[tools]]
+name = "feishu_export_sheet"
+description = "导出电子表格"
+parameters_json = '{"type":"object","properties":{"spreadsheet_token":{"type":"string","description":"表格token"},"sheet_id":{"type":"string","description":"子表ID"},"export_format":{"type":"string","description":"导出格式","default":"xlsx"}},"required":["spreadsheet_token"]}'
+
+# ---- Base 多维表格 (8 tools) ----
+
+[[tools]]
+name = "feishu_list_tables"
+description = "列出多维表格的数据表"
+parameters_json = '{"type":"object","properties":{"app_token":{"type":"string","description":"多维表格app_token"},"page_size":{"type":"integer","description":"每页数量","default":20},"page_token":{"type":"string","description":"翻页token"}},"required":["app_token"]}'
+
+[[tools]]
+name = "feishu_create_table"
+description = "在多维表格中创建数据表"
+parameters_json = '{"type":"object","properties":{"app_token":{"type":"string","description":"多维表格app_token"},"table":{"type":"object","description":"数据表定义"}},"required":["app_token","table"]}'
+
+[[tools]]
+name = "feishu_list_fields"
+description = "列出多维表格字段"
+parameters_json = '{"type":"object","properties":{"app_token":{"type":"string","description":"多维表格app_token"},"table_id":{"type":"string","description":"数据表ID"},"page_size":{"type":"integer","description":"每页数量","default":20}},"required":["app_token","table_id"]}'
+
+[[tools]]
+name = "feishu_create_field"
+description = "在多维表格中创建字段"
+parameters_json = '{"type":"object","properties":{"app_token":{"type":"string","description":"多维表格app_token"},"table_id":{"type":"string","description":"数据表ID"},"field_name":{"type":"string","description":"字段名"},"type":{"type":"integer","description":"字段类型"}},"required":["app_token","table_id","field_name","type"]}'
+
+[[tools]]
+name = "feishu_list_records"
+description = "列出多维表格记录"
+parameters_json = '{"type":"object","properties":{"app_token":{"type":"string","description":"多维表格app_token"},"table_id":{"type":"string","description":"数据表ID"},"page_size":{"type":"integer","description":"每页数量","default":20},"page_token":{"type":"string","description":"翻页token"},"filter":{"type":"string","description":"过滤条件"},"sort":{"type":"string","description":"排序条件"}},"required":["app_token","table_id"]}'
+
+[[tools]]
+name = "feishu_create_record"
+description = "在多维表格中创建记录"
+parameters_json = '{"type":"object","properties":{"app_token":{"type":"string","description":"多维表格app_token"},"table_id":{"type":"string","description":"数据表ID"},"fields":{"type":"object","description":"字段值映射"}},"required":["app_token","table_id","fields"]}'
+
+[[tools]]
+name = "feishu_update_record"
+description = "更新多维表格记录"
+parameters_json = '{"type":"object","properties":{"app_token":{"type":"string","description":"多维表格app_token"},"table_id":{"type":"string","description":"数据表ID"},"record_id":{"type":"string","description":"记录ID"},"fields":{"type":"object","description":"要更新的字段值"}},"required":["app_token","table_id","record_id","fields"]}'
+
+[[tools]]
+name = "feishu_delete_record"
+description = "删除多维表格记录"
+parameters_json = '{"type":"object","properties":{"app_token":{"type":"string","description":"多维表格app_token"},"table_id":{"type":"string","description":"数据表ID"},"record_id":{"type":"string","description":"记录ID"}},"required":["app_token","table_id","record_id"]}'
+
+# ---- Calendar 日历 (6 tools) ----
+
+[[tools]]
+name = "feishu_create_event"
+description = "创建飞书日历日程"
+parameters_json = '{"type":"object","properties":{"calendar_id":{"type":"string","description":"日历ID"},"summary":{"type":"string","description":"日程标题"},"description":{"type":"string","description":"日程描述"},"start_time":{"type":"object","description":"开始时间"},"end_time":{"type":"object","description":"结束时间"},"attendees":{"type":"array","items":{"type":"object"},"description":"参与人列表"}},"required":["calendar_id","summary","start_time","end_time"]}'
+
+[[tools]]
+name = "feishu_get_event"
+description = "获取飞书日历日程详情"
+parameters_json = '{"type":"object","properties":{"calendar_id":{"type":"string","description":"日历ID"},"event_id":{"type":"string","description":"日程ID"}},"required":["calendar_id","event_id"]}'
+
+[[tools]]
+name = "feishu_list_events"
+description = "列出飞书日历日程"
+parameters_json = '{"type":"object","properties":{"calendar_id":{"type":"string","description":"日历ID"},"start_time":{"type":"string","description":"开始时间（Unix时间戳）"},"end_time":{"type":"string","description":"结束时间（Unix时间戳）"},"page_size":{"type":"integer","description":"每页数量","default":50}},"required":["calendar_id","start_time","end_time"]}'
+
+[[tools]]
+name = "feishu_update_event"
+description = "更新飞书日历日程"
+parameters_json = '{"type":"object","properties":{"calendar_id":{"type":"string","description":"日历ID"},"event_id":{"type":"string","description":"日程ID"},"summary":{"type":"string","description":"日程标题"},"description":{"type":"string","description":"日程描述"}},"required":["calendar_id","event_id"]}'
+
+[[tools]]
+name = "feishu_freebusy"
+description = "查询飞书用户忙闲状态"
+parameters_json = '{"type":"object","properties":{"time_min":{"type":"string","description":"查询开始时间"},"time_max":{"type":"string","description":"查询结束时间"},"user_id":{"type":"object","description":"查询用户ID列表"}},"required":["time_min","time_max","user_id"]}'
+
+[[tools]]
+name = "feishu_search_event"
+description = "搜索飞书日历日程"
+parameters_json = '{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"},"page_size":{"type":"integer","description":"每页数量","default":20}},"required":["query"]}'
+
+# ---- Drive 云空间 (6 tools) ----
+
+[[tools]]
+name = "feishu_upload_file"
+description = "上传文件到飞书云空间"
+parameters_json = '{"type":"object","properties":{"parent_node":{"type":"string","description":"父文件夹token"},"file_name":{"type":"string","description":"文件名"},"file_type":{"type":"string","description":"文件类型"},"title":{"type":"string","description":"文档标题"}},"required":["parent_node"]}'
+
+[[tools]]
+name = "feishu_download_file"
+description = "下载飞书云空间文件"
+parameters_json = '{"type":"object","properties":{"file_token":{"type":"string","description":"文件token"},"file_type":{"type":"string","description":"文件类型","default":"file"}},"required":["file_token"]}'
+
+[[tools]]
+name = "feishu_create_folder"
+description = "在飞书云空间创建文件夹"
+parameters_json = '{"type":"object","properties":{"parent_token":{"type":"string","description":"父文件夹token"},"name":{"type":"string","description":"文件夹名称"}},"required":["parent_token","name"]}'
+
+[[tools]]
+name = "feishu_search_drive"
+description = "搜索飞书云空间文件"
+parameters_json = '{"type":"object","properties":{"search_key":{"type":"string","description":"搜索关键词"},"count":{"type":"integer","description":"返回数量","default":20},"offset":{"type":"integer","description":"偏移量","default":0}},"required":["search_key"]}'
+
+[[tools]]
+name = "feishu_move_file"
+description = "移动飞书云空间文件"
+parameters_json = '{"type":"object","properties":{"file_token":{"type":"string","description":"文件token"},"folder_token":{"type":"string","description":"目标文件夹token"}},"required":["file_token","folder_token"]}'
+
+[[tools]]
+name = "feishu_delete_file"
+description = "删除飞书云空间文件"
+parameters_json = '{"type":"object","properties":{"file_token":{"type":"string","description":"文件token"}},"required":["file_token"]}'
+
+# ---- Contact 通讯录 (2 tools) ----
+
+[[tools]]
+name = "feishu_search_user"
+description = "搜索飞书用户"
+parameters_json = '{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"},"page_size":{"type":"integer","description":"返回数量","default":20}},"required":["query"]}'
+
+[[tools]]
+name = "feishu_get_user"
+description = "获取飞书用户信息"
+parameters_json = '{"type":"object","properties":{"user_id":{"type":"string","description":"用户ID"},"user_id_type":{"type":"string","description":"ID类型","default":"open_id"}},"required":["user_id"]}'
+
+# ---- Task 任务 (6 tools) ----
+
+[[tools]]
+name = "feishu_create_task"
+description = "创建飞书任务"
+parameters_json = '{"type":"object","properties":{"summary":{"type":"string","description":"任务标题"},"description":{"type":"string","description":"任务描述"},"due_date":{"type":"object","description":"截止时间"},"assignees":{"type":"array","items":{"type":"object"},"description":"负责人列表"}},"required":["summary"]}'
+
+[[tools]]
+name = "feishu_get_task"
+description = "获取飞书任务详情"
+parameters_json = '{"type":"object","properties":{"task_id":{"type":"string","description":"任务ID"}},"required":["task_id"]}'
+
+[[tools]]
+name = "feishu_update_task"
+description = "更新飞书任务"
+parameters_json = '{"type":"object","properties":{"task_id":{"type":"string","description":"任务ID"},"summary":{"type":"string","description":"任务标题"},"description":{"type":"string","description":"任务描述"}},"required":["task_id"]}'
+
+[[tools]]
+name = "feishu_complete_task"
+description = "完成飞书任务"
+parameters_json = '{"type":"object","properties":{"task_id":{"type":"string","description":"任务ID"}},"required":["task_id"]}'
+
+[[tools]]
+name = "feishu_list_my_tasks"
+description = "列出我的飞书任务"
+parameters_json = '{"type":"object","properties":{"page_size":{"type":"integer","description":"每页数量","default":20},"page_token":{"type":"string","description":"翻页token"}}}'
+
+[[tools]]
+name = "feishu_search_tasks"
+description = "搜索飞书任务"
+parameters_json = '{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"},"page_size":{"type":"integer","description":"每页数量","default":20}},"required":["query"]}'
+
+# ---- Mail 邮箱 (6 tools) ----
+
+[[tools]]
+name = "feishu_send_mail"
+description = "发送飞书邮件"
+parameters_json = '{"type":"object","properties":{"mailbox_id":{"type":"string","description":"邮箱ID"},"subject":{"type":"string","description":"邮件主题"},"content":{"type":"string","description":"邮件内容"},"to":{"type":"array","items":{"type":"object"},"description":"收件人列表"}},"required":["mailbox_id","subject","content","to"]}'
+
+[[tools]]
+name = "feishu_list_mail"
+description = "列出飞书邮箱邮件"
+parameters_json = '{"type":"object","properties":{"mailbox_id":{"type":"string","description":"邮箱ID"},"folder_id":{"type":"string","description":"文件夹ID","default":"INBOX"},"page_size":{"type":"integer","description":"每页数量","default":20}},"required":["mailbox_id"]}'
+
+[[tools]]
+name = "feishu_get_mail"
+description = "读取飞书邮件详情"
+parameters_json = '{"type":"object","properties":{"mailbox_id":{"type":"string","description":"邮箱ID"},"message_id":{"type":"string","description":"邮件ID"}},"required":["mailbox_id","message_id"]}'
+
+[[tools]]
+name = "feishu_reply_mail"
+description = "回复飞书邮件"
+parameters_json = '{"type":"object","properties":{"mailbox_id":{"type":"string","description":"邮箱ID"},"message_id":{"type":"string","description":"被回复邮件ID"},"content":{"type":"string","description":"回复内容"}},"required":["mailbox_id","message_id","content"]}'
+
+[[tools]]
+name = "feishu_forward_mail"
+description = "转发飞书邮件"
+parameters_json = '{"type":"object","properties":{"mailbox_id":{"type":"string","description":"邮箱ID"},"message_id":{"type":"string","description":"被转发邮件ID"},"to":{"type":"array","items":{"type":"object"},"description":"收件人"}},"required":["mailbox_id","message_id","to"]}'
+
+[[tools]]
+name = "feishu_triage_mail"
+description = "飞书邮件摘要/分类"
+parameters_json = '{"type":"object","properties":{"mailbox_id":{"type":"string","description":"邮箱ID"},"page_size":{"type":"integer","description":"返回数量","default":10}},"required":["mailbox_id"]}'
+
+# ---- VC 视频会议 (3 tools) ----
+
+[[tools]]
+name = "feishu_search_meeting"
+description = "搜索飞书视频会议"
+parameters_json = '{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"},"page_size":{"type":"integer","description":"返回数量","default":20}},"required":["query"]}'
+
+[[tools]]
+name = "feishu_get_meeting"
+description = "获取飞书视频会议详情"
+parameters_json = '{"type":"object","properties":{"meeting_id":{"type":"string","description":"会议ID"}},"required":["meeting_id"]}'
+
+[[tools]]
+name = "feishu_get_recording"
+description = "获取飞书视频会议录制"
+parameters_json = '{"type":"object","properties":{"meeting_id":{"type":"string","description":"会议ID"}},"required":["meeting_id"]}'
+
+# ---- Wiki 知识库 (3 tools) ----
+
+[[tools]]
+name = "feishu_list_spaces"
+description = "列出飞书知识库空间"
+parameters_json = '{"type":"object","properties":{"page_size":{"type":"integer","description":"每页数量","default":20},"page_token":{"type":"string","description":"翻页token"}}}'
+
+[[tools]]
+name = "feishu_create_node"
+description = "在飞书知识库中创建节点"
+parameters_json = '{"type":"object","properties":{"space_id":{"type":"string","description":"知识空间ID"},"node_type":{"type":"string","description":"节点类型","default":"docx"},"title":{"type":"string","description":"节点标题"}},"required":["space_id","title"]}'
+
+[[tools]]
+name = "feishu_get_node"
+description = "获取飞书知识库节点信息"
+parameters_json = '{"type":"object","properties":{"token":{"type":"string","description":"节点token"}},"required":["token"]}'
+
+# ---- Approval 审批 (4 tools) ----
+
+[[tools]]
+name = "feishu_get_approval"
+description = "获取飞书审批实例详情"
+parameters_json = '{"type":"object","properties":{"instance_id":{"type":"string","description":"审批实例ID"}},"required":["instance_id"]}'
+
+[[tools]]
+name = "feishu_approve_task"
+description = "同意飞书审批任务"
+parameters_json = '{"type":"object","properties":{"task_id":{"type":"string","description":"审批任务ID"},"user_id":{"type":"string","description":"审批人ID"},"comment":{"type":"string","description":"审批意见"}},"required":["task_id","user_id"]}'
+
+[[tools]]
+name = "feishu_reject_task"
+description = "拒绝飞书审批任务"
+parameters_json = '{"type":"object","properties":{"task_id":{"type":"string","description":"审批任务ID"},"user_id":{"type":"string","description":"审批人ID"},"comment":{"type":"string","description":"拒绝理由"}},"required":["task_id","user_id"]}'
+
+[[tools]]
+name = "feishu_list_approvals"
+description = "列出飞书审批实例"
+parameters_json = '{"type":"object","properties":{"approval_code":{"type":"string","description":"审批定义code"},"start_time":{"type":"string","description":"开始时间"},"end_time":{"type":"string","description":"结束时间"},"page_size":{"type":"integer","description":"每页数量","default":20}},"required":["approval_code","start_time","end_time"]}'
+
+# ---- OKR (2 tools) ----
+
+[[tools]]
+name = "feishu_list_okr_cycles"
+description = "列出飞书OKR周期"
+parameters_json = '{"type":"object","properties":{"page_size":{"type":"integer","description":"每页数量","default":20}}}'
+
+[[tools]]
+name = "feishu_get_okr_detail"
+description = "获取飞书OKR周期目标和关键结果"
+parameters_json = '{"type":"object","properties":{"cycle_id":{"type":"string","description":"OKR周期ID"},"user_id":{"type":"string","description":"用户ID"}},"required":["cycle_id"]}'
+
+# ---- Attendance 考勤 (1 tool) ----
+
+[[tools]]
+name = "feishu_get_attendance"
+description = "查询飞书考勤记录"
+parameters_json = '{"type":"object","properties":{"user_ids":{"type":"array","items":{"type":"string"},"description":"用户ID列表"},"start_time":{"type":"string","description":"查询开始时间"},"end_time":{"type":"string","description":"查询结束时间"}},"required":["user_ids","start_time","end_time"]}'
+
+# ---- Slides 幻灯片 (2 tools) ----
+
+[[tools]]
+name = "feishu_create_slides"
+description = "创建飞书幻灯片演示文稿"
+parameters_json = '{"type":"object","properties":{"title":{"type":"string","description":"演示文稿标题"},"folder_token":{"type":"string","description":"所在文件夹token"}},"required":["title"]}'
+
+[[tools]]
+name = "feishu_replace_slide"
+description = "替换飞书幻灯片内容"
+parameters_json = '{"type":"object","properties":{"presentation_id":{"type":"string","description":"演示文稿ID"},"slide_id":{"type":"string","description":"幻灯片ID"},"replacements":{"type":"object","description":"替换内容映射"}},"required":["presentation_id","slide_id","replacements"]}'
+
+# ---- Minutes 会议纪要 (2 tools) ----
+
+[[tools]]
+name = "feishu_search_minutes"
+description = "搜索飞书会议纪要"
+parameters_json = '{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"},"page_size":{"type":"integer","description":"返回数量","default":20}},"required":["query"]}'
+
+[[tools]]
+name = "feishu_get_minutes"
+description = "获取飞书会议纪要详情"
+parameters_json = '{"type":"object","properties":{"minutes_id":{"type":"string","description":"纪要ID"}},"required":["minutes_id"]}'
+
+# ---- Whiteboard 白板 (2 tools) ----
+
+[[tools]]
+name = "feishu_query_whiteboard"
+description = "查询飞书白板信息"
+parameters_json = '{"type":"object","properties":{"whiteboard_id":{"type":"string","description":"白板ID"}},"required":["whiteboard_id"]}'
+
+[[tools]]
+name = "feishu_update_whiteboard"
+description = "更新飞书白板"
+parameters_json = '{"type":"object","properties":{"whiteboard_id":{"type":"string","description":"白板ID"},"title":{"type":"string","description":"白板标题"}},"required":["whiteboard_id"]}'

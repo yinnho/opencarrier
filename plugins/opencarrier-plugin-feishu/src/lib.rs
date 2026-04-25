@@ -10,12 +10,14 @@
 #![allow(dead_code)]
 
 use opencarrier_plugin_sdk::{Plugin, PluginConfig, PluginContext, PluginError};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use types::FeishuTenantConfig;
 
 mod api;
+mod api_ext;
 mod channel;
 mod token;
+mod tools;
 mod types;
 mod ws;
 
@@ -24,9 +26,28 @@ mod ws;
 // ---------------------------------------------------------------------------
 
 use dashmap::DashMap;
+use token::TenantTokenCache;
+
+/// Runtime entry stored in FEISHU_TENANTS — config + pre-built token cache.
+pub(crate) struct FeishuTenantEntry {
+    pub config: FeishuTenantConfig,
+    pub token_cache: Arc<TenantTokenCache>,
+}
+
+impl FeishuTenantEntry {
+    pub fn new(config: FeishuTenantConfig) -> Self {
+        let api_base = config.api_base().to_string();
+        let token_cache = Arc::new(TenantTokenCache::new(
+            config.app_id.clone(),
+            config.app_secret.clone(),
+            &api_base,
+        ));
+        Self { config, token_cache }
+    }
+}
 
 /// Global registry of all configured Feishu tenants.
-static FEISHU_TENANTS: LazyLock<DashMap<String, FeishuTenantConfig>> =
+pub(crate) static FEISHU_TENANTS: LazyLock<DashMap<String, FeishuTenantEntry>> =
     LazyLock::new(DashMap::new);
 
 // ---------------------------------------------------------------------------
@@ -75,7 +96,7 @@ impl Plugin for FeishuPlugin {
                 .unwrap_or("feishu")
                 .to_string();
 
-            let tenant = FeishuTenantConfig {
+            let cfg = FeishuTenantConfig {
                 name: name.clone(),
                 app_id,
                 app_secret,
@@ -84,11 +105,11 @@ impl Plugin for FeishuPlugin {
 
             tracing::info!(
                 tenant = %name,
-                brand = %tenant.brand,
+                brand = %cfg.brand,
                 "Registered Feishu tenant"
             );
 
-            FEISHU_TENANTS.insert(name, tenant);
+            FEISHU_TENANTS.insert(name, FeishuTenantEntry::new(cfg));
         }
 
         let tenant_count = FEISHU_TENANTS.len();
@@ -105,14 +126,14 @@ impl Plugin for FeishuPlugin {
         FEISHU_TENANTS
             .iter()
             .map(|entry| {
-                let ch = channel::FeishuChannel::new(entry.value().clone());
+                let ch = channel::FeishuChannel::from_entry(entry.value());
                 Box::new(ch) as Box<dyn opencarrier_plugin_sdk::ChannelAdapter>
             })
             .collect()
     }
 
     fn tools(&self) -> Vec<Box<dyn opencarrier_plugin_sdk::ToolProvider>> {
-        vec![]
+        tools::build_all_tools()
     }
 }
 
