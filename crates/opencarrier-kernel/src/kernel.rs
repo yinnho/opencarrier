@@ -5151,8 +5151,13 @@ impl KernelHandle for OpenCarrierKernel {
     ) -> Result<String, String> {
         let guard = self.plugins.plugin_tool_dispatcher.lock().unwrap();
         if let Some(ref dispatcher) = *guard {
+            let tenant_id = self
+                .registry
+                .find_by_id(agent_id)
+                .and_then(|e| e.tenant_id.clone())
+                .unwrap_or_default();
             let context = opencarrier_types::plugin::PluginToolContext {
-                tenant_id: String::new(),
+                tenant_id,
                 sender_id: sender_id.to_string(),
                 agent_id: agent_id.to_string(),
                 channel_type: String::new(),

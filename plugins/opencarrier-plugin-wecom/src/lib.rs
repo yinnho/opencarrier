@@ -1,12 +1,12 @@
 //! WeChat Work (WeCom) plugin for OpenCarrier.
 //!
 //! Provides:
-//! - **Channel**: receives messages via webhook, sends replies via WeCom API
-//! - **Tools**: create_spreadsheet, add_rows, query_spreadsheet,
-//!   send_wecom_message, send_webhook_message
+//! - **Channel**: receives messages via webhook (App/Kf) or WebSocket (SmartBot)
+//! - **MCP Tools**: 36+ tools via WeCom MCP protocol (doc/msg/contact/todo/meeting/schedule)
+//! - **Channel Tool**: send_wecom_message (direct REST API for App/Kf message delivery)
 //!
 //! Multi-tenant: configure multiple tenants in plugin.toml `[[tenants]]`.
-//! Three modes: `app` (企业应用), `kf` (微信客服), `bot` (群机器人).
+//! Three modes: `app` (企业应用), `kf` (微信客服), `smartbot` (智能机器人).
 
 use std::sync::LazyLock;
 
@@ -17,6 +17,7 @@ use token::TokenManager;
 
 mod channel;
 mod crypto;
+mod mcp;
 mod smartbot;
 mod token;
 mod tools;
@@ -56,6 +57,19 @@ impl Plugin for WeComPlugin {
                 .as_str()
                 .unwrap_or("WECOM_SECRET");
             let secret = std::env::var(secret_env).unwrap_or_default();
+
+            // Read MCP bot credentials (optional, for App/Kf modes)
+            let mcp_bot_id = tenant_config["mcp_bot_id"]
+                .as_str()
+                .map(|s| s.to_string());
+            let mcp_bot_secret = tenant_config["mcp_bot_secret_env"]
+                .as_str()
+                .and_then(|env_name| std::env::var(env_name).ok())
+                .or_else(|| {
+                    tenant_config["mcp_bot_secret"]
+                        .as_str()
+                        .map(|s| s.to_string())
+                });
 
             match mode {
                 "smartbot" => {
@@ -114,6 +128,8 @@ impl Plugin for WeComPlugin {
                         webhook_port,
                         encoding_aes_key,
                         callback_token,
+                        mcp_bot_id,
+                        mcp_bot_secret,
                     );
 
                     tracing::info!(
@@ -156,6 +172,8 @@ impl Plugin for WeComPlugin {
                         webhook_port,
                         encoding_aes_key,
                         callback_token,
+                        mcp_bot_id,
+                        mcp_bot_secret,
                     );
 
                     tracing::info!(
@@ -207,12 +225,10 @@ impl Plugin for WeComPlugin {
     }
 
     fn tools(&self) -> Vec<Box<dyn ToolProvider>> {
-        vec![
-            Box::new(tools::CreateSpreadsheetTool),
-            Box::new(tools::AddRowsTool),
-            Box::new(tools::QuerySpreadsheetTool),
-            Box::new(tools::SendMessageTool),
-        ]
+        let mut tools: Vec<Box<dyn ToolProvider>> = vec![Box::new(tools::SendMessageTool)];
+        tools.extend(mcp::build_mcp_tools());
+        tracing::info!(tool_count = tools.len(), "Registered WeCom plugin tools");
+        tools
     }
 }
 
