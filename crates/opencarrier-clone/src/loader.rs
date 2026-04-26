@@ -28,6 +28,9 @@ pub struct TemplateManifest {
     pub exported_at: String,
     #[serde(default)]
     pub knowledge_version: u32,
+    /// Required plugins for this clone.
+    #[serde(default)]
+    pub plugins: Vec<String>,
 }
 
 /// A parsed skill from the .agx archive.
@@ -88,6 +91,8 @@ pub struct CloneData {
     pub evolution: String,
     /// Style files: filename → content.
     pub style: HashMap<String, String>,
+    /// Required plugins (from template.json manifest.plugins).
+    pub plugins: Vec<String>,
 }
 
 /// Load a .agx file (tar.gz) and parse it into CloneData.
@@ -183,6 +188,8 @@ pub fn load_agx(path: &Path) -> Result<CloneData> {
         name, soul.len(), system_prompt.len(), knowledge.len(), skills.len(), agents.len(), style.len(), evolution.len(), memory_index.len()
     );
 
+    let plugins = manifest.as_ref().map(|m| m.plugins.clone()).unwrap_or_default();
+
     Ok(CloneData {
         manifest,
         name,
@@ -197,6 +204,7 @@ pub fn load_agx(path: &Path) -> Result<CloneData> {
         agents,
         evolution,
         style,
+        plugins,
     })
 }
 
