@@ -108,6 +108,7 @@ pub async fn build_router(
         .merge(routes::files::router())
         .merge(routes::hub::router())
         .merge(routes::kv::router())
+        .merge(routes::plugins::router())
         .merge(routes::messaging::router())
         .merge(routes::observability::router())
         .merge(routes::providers::router())
@@ -119,7 +120,7 @@ pub async fn build_router(
         .merge(routes::weixin::router())
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route("/api/commands", axum::routing::get(routes::list_commands))
-        .route("/api/plugins", axum::routing::get(routes::plugins_list))
+        // plugins routes handled by routes::plugins::router() above
         .route("/api/profiles", axum::routing::get(routes::list_profiles))
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .route("/api/status", axum::routing::get(routes::status))

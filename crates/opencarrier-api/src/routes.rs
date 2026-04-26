@@ -22,6 +22,7 @@ pub mod cron;
 pub mod tenants;
 pub mod clones;
 pub mod hub;
+pub mod plugins;
 
 pub use common::*;
 pub use messaging::{inject_attachments_into_session, resolve_attachments};

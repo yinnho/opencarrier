@@ -675,6 +675,7 @@ mod tests {
             tool_blocklist: Vec::new(),
             clone_source: None,
             knowledge_files: Vec::new(),
+            plugins: Vec::new(),
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let deserialized: AgentManifest = serde_json::from_str(&json).unwrap();
