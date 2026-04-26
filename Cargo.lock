@@ -2393,6 +2393,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencarrier-plugin-twitter"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "opencarrier-plugin-sdk",
+ "opencarrier-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "opencarrier-plugin-wecom"
 version = "1.0.0"
 dependencies = [
@@ -2410,6 +2424,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tracing",

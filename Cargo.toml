@@ -14,6 +14,7 @@ members = [
     "plugins/opencarrier-plugin-wecom",
     "plugins/opencarrier-plugin-weixin",
     "plugins/opencarrier-plugin-feishu",
+    "plugins/opencarrier-plugin-twitter",
     "xtask",
     "tools/wechat-oa-mcp",
 ]
