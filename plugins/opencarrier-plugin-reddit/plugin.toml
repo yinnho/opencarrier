@@ -1,0 +1,88 @@
+[plugin]
+name = "reddit"
+version = "0.1.0"
+abi_version = 1
+description = "Reddit platform tools via REST API"
+author = "Yinnhoo"
+
+# Configure tenants with Reddit credentials:
+# [[tenants]]
+# name = "default"
+# [tenants.config]
+# cookie = "reddit_session=your_session_cookie_value; edgebucket=your_edgebucket_value"
+# username = "your_reddit_username"  # optional, for saved/upvoted endpoints
+
+[[tools]]
+name = "reddit_hot"
+description = "获取 Reddit 热门帖子"
+parameters_json = '{"type":"object","properties":{"subreddit":{"type":"string","description":"Subreddit 名称（不含 r/），留空则为全站热门"},"limit":{"type":"integer","description":"返回数量","default":20}},"required":[]}'
+
+[[tools]]
+name = "reddit_frontpage"
+description = "获取 Reddit 全站热门 (r/all)"
+parameters_json = '{"type":"object","properties":{"limit":{"type":"integer","description":"返回数量","default":15}},"required":[]}'
+
+[[tools]]
+name = "reddit_popular"
+description = "获取 Reddit Popular 帖子"
+parameters_json = '{"type":"object","properties":{"limit":{"type":"integer","description":"返回数量","default":20}},"required":[]}'
+
+[[tools]]
+name = "reddit_subreddit"
+description = "获取 Subreddit 帖子列表"
+parameters_json = '{"type":"object","properties":{"name":{"type":"string","description":"Subreddit 名称（不含 r/）"},"sort":{"type":"string","description":"排序方式","default":"hot","enum":["hot","new","top","rising"]},"time":{"type":"string","description":"时间范围（仅 top 有效）","default":"all","enum":["hour","day","week","month","year","all"]},"limit":{"type":"integer","description":"返回数量","default":15}},"required":["name"]}'
+
+[[tools]]
+name = "reddit_search"
+description = "搜索 Reddit 帖子"
+parameters_json = '{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"},"subreddit":{"type":"string","description":"限定 Subreddit（不含 r/）"},"sort":{"type":"string","description":"排序方式","default":"relevance","enum":["relevance","hot","top","new","comments"]},"time":{"type":"string","description":"时间范围","default":"all","enum":["hour","day","week","month","year","all"]},"limit":{"type":"integer","description":"返回数量","default":15}},"required":["query"]}'
+
+[[tools]]
+name = "reddit_read"
+description = "获取 Reddit 帖子详情及评论"
+parameters_json = '{"type":"object","properties":{"post_id":{"type":"string","description":"帖子 ID（如 t3_xxxxx）"},"sort":{"type":"string","description":"评论排序","default":"best","enum":["best","top","new","controversial","old","qa"]},"limit":{"type":"integer","description":"评论数量","default":25},"depth":{"type":"integer","description":"评论深度","default":2}},"required":["post_id"]}'
+
+[[tools]]
+name = "reddit_user"
+description = "获取 Reddit 用户资料"
+parameters_json = '{"type":"object","properties":{"username":{"type":"string","description":"用户名"}},"required":["username"]}'
+
+[[tools]]
+name = "reddit_user_posts"
+description = "获取 Reddit 用户帖子"
+parameters_json = '{"type":"object","properties":{"username":{"type":"string","description":"用户名"},"limit":{"type":"integer","description":"返回数量","default":15}},"required":["username"]}'
+
+[[tools]]
+name = "reddit_user_comments"
+description = "获取 Reddit 用户评论"
+parameters_json = '{"type":"object","properties":{"username":{"type":"string","description":"用户名"},"limit":{"type":"integer","description":"返回数量","default":15}},"required":["username"]}'
+
+[[tools]]
+name = "reddit_saved"
+description = "获取 Reddit 收藏列表"
+parameters_json = '{"type":"object","properties":{"limit":{"type":"integer","description":"返回数量","default":15}},"required":[]}'
+
+[[tools]]
+name = "reddit_upvoted"
+description = "获取 Reddit 点赞列表"
+parameters_json = '{"type":"object","properties":{"limit":{"type":"integer","description":"返回数量","default":15}},"required":[]}'
+
+[[tools]]
+name = "reddit_upvote"
+description = "对 Reddit 帖子/评论投票"
+parameters_json = '{"type":"object","properties":{"post_id":{"type":"string","description":"帖子/评论 ID（如 t3_xxxxx 或 t1_xxxxx）"},"direction":{"type":"string","description":"投票方向","default":"up","enum":["up","down","none"]}},"required":["post_id"]}'
+
+[[tools]]
+name = "reddit_comment"
+description = "在 Reddit 帖子/评论下发表评论"
+parameters_json = '{"type":"object","properties":{"post_id":{"type":"string","description":"父级帖子/评论 ID（如 t3_xxxxx 或 t1_xxxxx）"},"text":{"type":"string","description":"评论内容（支持 Markdown）"}},"required":["post_id","text"]}'
+
+[[tools]]
+name = "reddit_save"
+description = "收藏/取消收藏 Reddit 帖子"
+parameters_json = '{"type":"object","properties":{"post_id":{"type":"string","description":"帖子 ID（如 t3_xxxxx）"},"undo":{"type":"boolean","description":"true 为取消收藏","default":false}},"required":["post_id"]}'
+
+[[tools]]
+name = "reddit_subscribe"
+description = "订阅/取消订阅 Subreddit"
+parameters_json = '{"type":"object","properties":{"subreddit":{"type":"string","description":"Subreddit 名称（不含 r/）"},"undo":{"type":"boolean","description":"true 为取消订阅","default":false}},"required":["subreddit"]}'

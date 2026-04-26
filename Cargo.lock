@@ -2050,6 +2050,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2367,6 +2377,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencarrier-plugin-bilibili"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "md-5",
+ "opencarrier-plugin-sdk",
+ "opencarrier-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "opencarrier-plugin-feishu"
 version = "0.1.0"
 dependencies = [
@@ -2381,6 +2406,20 @@ dependencies = [
  "tokio-tungstenite 0.24.0",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "opencarrier-plugin-reddit"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "opencarrier-plugin-sdk",
+ "opencarrier-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2447,6 +2486,35 @@ dependencies = [
  "tracing",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "opencarrier-plugin-xiaohongshu"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "opencarrier-plugin-sdk",
+ "opencarrier-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "opencarrier-plugin-zhihu"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "opencarrier-plugin-sdk",
+ "opencarrier-types",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

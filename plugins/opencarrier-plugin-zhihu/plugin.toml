@@ -1,0 +1,21 @@
+[plugin]
+name = "zhihu"
+version = "0.1.0"
+abi_version = 1
+description = "Zhihu platform tools via REST API"
+author = "Yinnhoo"
+
+[[tools]]
+name = "zhihu_hot"
+description = "获取知乎热榜"
+parameters_json = '{"type":"object","properties":{"limit":{"type":"integer","description":"返回数量","default":20}},"required":[]}'
+
+[[tools]]
+name = "zhihu_question"
+description = "获取知乎问题回答"
+parameters_json = '{"type":"object","properties":{"question_id":{"type":"string","description":"问题ID"},"limit":{"type":"integer","description":"返回回答数量","default":5}},"required":["question_id"]}'
+
+[[tools]]
+name = "zhihu_search"
+description = "搜索知乎内容"
+parameters_json = '{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"},"limit":{"type":"integer","description":"返回数量","default":10}},"required":["query"]}'

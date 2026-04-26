@@ -1,0 +1,37 @@
+[plugin]
+name = "xiaohongshu"
+version = "0.1.0"
+abi_version = 1
+description = "Xiaohongshu Creator API tools via cookie auth"
+author = "Yinnhoo"
+
+# Configure tenants with Xiaohongshu cookies:
+# [[tenants]]
+# name = "default"
+# [tenants.config]
+# cookie = "your_full_cookie_string"
+
+[[tools]]
+name = "xhs_creator_notes"
+description = "获取小红书创作者笔记列表"
+parameters_json = '{"type":"object","properties":{"limit":{"type":"integer","description":"返回数量","default":20}},"required":[]}'
+
+[[tools]]
+name = "xhs_creator_note_detail"
+description = "获取小红书单篇笔记详情"
+parameters_json = '{"type":"object","properties":{"note_id":{"type":"string","description":"笔记ID"}},"required":["note_id"]}'
+
+[[tools]]
+name = "xhs_creator_profile"
+description = "获取小红书创作者账号信息"
+parameters_json = '{"type":"object","properties":{},"required":[]}'
+
+[[tools]]
+name = "xhs_creator_stats"
+description = "获取小红书数据总览"
+parameters_json = '{"type":"object","properties":{"period":{"type":"string","description":"统计周期：seven(7天) 或 thirty(30天)","default":"seven","enum":["seven","thirty"]}},"required":[]}'
+
+[[tools]]
+name = "xhs_creator_notes_summary"
+description = "获取小红书笔记批量摘要（笔记列表+详情汇总）"
+parameters_json = '{"type":"object","properties":{"limit":{"type":"integer","description":"返回数量","default":3}},"required":[]}'
