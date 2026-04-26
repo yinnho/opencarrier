@@ -272,6 +272,31 @@ fn format_stars(avg: f64) -> String {
         .join("")
 }
 
+/// Search plugins on Hub. Returns the raw JSON value so callers can format as needed.
+pub async fn search_plugins(hub_url: &str, api_key: &str, query: &str) -> Result<serde_json::Value> {
+    validate_hub_url(hub_url)?;
+    let base = hub_url.trim_end_matches('/');
+    let url = if query.is_empty() {
+        format!("{}/api/plugins?limit=20", base)
+    } else {
+        format!("{}/api/plugins?q={}&limit=20", base, urlencoding::encode(query))
+    };
+
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .context("无法连接 Hub")?;
+
+    if !resp.status().is_success() {
+        bail!("Hub 返回错误: {}", resp.status());
+    }
+
+    let data: serde_json::Value = resp.json().await.context("解析 Hub 响应失败")?;
+    Ok(data)
+}
+
 /// Detect the current platform string for plugin downloads.
 pub fn current_platform() -> String {
     let os = if cfg!(target_os = "linux") { "linux" }

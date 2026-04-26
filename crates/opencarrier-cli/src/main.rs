@@ -228,6 +228,9 @@ enum Commands {
         #[command(subcommand)]
         sub: HubCommands,
     },
+    /// Manage plugins — list, install, remove, search [*].
+    #[command(subcommand)]
+    Plugin(PluginCommands),
 }
 
 #[derive(Subcommand)]
@@ -244,6 +247,34 @@ enum HubCommands {
         /// Specific version (default: latest).
         #[arg(short, long)]
         version: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginCommands {
+    /// List installed plugins.
+    List {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install a plugin from Hub.
+    Install {
+        /// Plugin name to install.
+        name: String,
+        /// Specific version (default: latest).
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// Remove an installed plugin.
+    Remove {
+        /// Plugin name to remove.
+        name: String,
+    },
+    /// Search plugins on Hub.
+    Search {
+        /// Search query.
+        query: Option<String>,
     },
 }
 
@@ -607,6 +638,10 @@ fn main() {
         Commands::Hub { sub } => {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             rt.block_on(cmd_hub(sub));
+        }
+        Commands::Plugin(sub) => {
+            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+            rt.block_on(cmd_plugin(sub));
         }
     }
 }
@@ -4095,6 +4130,182 @@ async fn cmd_hub(cmd: HubCommands) {
                     println!("运行 'opencarrier agent spawn {}' 启动分身", clone_name);
                 }
                 Err(e) => eprintln!("安装失败: {e}"),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_plugin(cmd: PluginCommands) {
+    let config = opencarrier_kernel::config::load_config(None::<&std::path::Path>);
+
+    let plugins_dir = match &config.plugins_dir {
+        Some(dir) => dir.clone(),
+        None => config.home_dir.join("plugins"),
+    };
+
+    match cmd {
+        PluginCommands::List { json } => {
+            // Try daemon first
+            if let Some(base_url) = find_daemon() {
+                let client = daemon_client();
+                let resp = client.get(format!("{base_url}/api/plugins")).send();
+                let body = daemon_json(resp);
+                if json {
+                    print_json(&body);
+                } else {
+                    let plugins = body["plugins"].as_array();
+                    match plugins {
+                        Some(list) if !list.is_empty() => {
+                            println!("{}", "已安装插件:".bold());
+                            println!();
+                            for p in list {
+                                let name = p["name"].as_str().unwrap_or("?");
+                                let version = p["version"].as_str().unwrap_or("?");
+                                let tools = p["tools"].as_array().map(|a| a.len()).unwrap_or(0);
+                                let loaded = p["loaded"].as_bool().unwrap_or(false);
+                                println!(
+                                    "  {} {} {} ({} tools)",
+                                    if loaded { "●".green() } else { "○".yellow() },
+                                    name.bold(),
+                                    version.dimmed(),
+                                    tools
+                                );
+                            }
+                            println!();
+                            println!("共 {} 个插件", list.len());
+                        }
+                        _ => println!("没有已安装的插件"),
+                    }
+                }
+            } else {
+                // Fallback: scan plugins_dir directly
+                if !plugins_dir.is_dir() {
+                    println!("没有已安装的插件 (目录不存在: {})", plugins_dir.display());
+                    return;
+                }
+                let mut found = Vec::new();
+                if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() && path.join("plugin.toml").exists() {
+                            found.push(entry.file_name().to_string_lossy().to_string());
+                        }
+                    }
+                }
+                if json {
+                    print_json(&serde_json::json!({
+                        "plugins": found.iter().map(|n| serde_json::json!({"name": n})).collect::<Vec<_>>(),
+                        "count": found.len(),
+                    }));
+                } else if found.is_empty() {
+                    println!("没有已安装的插件");
+                } else {
+                    println!("{}", "已安装插件:".bold());
+                    println!();
+                    for name in &found {
+                        println!("  {} {}", "●".green(), name.bold());
+                    }
+                    println!();
+                    println!("共 {} 个插件", found.len());
+                }
+            }
+        }
+        PluginCommands::Install { name, version } => {
+            let hub_url = if config.hub.url.is_empty() {
+                eprintln!("Hub URL 未配置。请在 config.toml 中设置 [hub] url");
+                std::process::exit(1);
+            } else {
+                config.hub.url.clone()
+            };
+            let api_key = match opencarrier_clone::hub::read_api_key(&config.hub.api_key_env) {
+                Ok(k) => k,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+
+            // Check if already installed
+            if opencarrier_clone::hub::is_plugin_installed(&plugins_dir, &name) {
+                println!("插件 '{}' 已安装", name);
+                return;
+            }
+
+            println!("正在安装插件 '{}'...", name);
+            match opencarrier_clone::hub::install_plugin(
+                &hub_url,
+                &api_key,
+                &name,
+                version.as_deref(),
+                &plugins_dir,
+            )
+            .await
+            {
+                Ok(installed_name) => {
+                    println!("插件 '{}' 安装成功!", installed_name.green());
+                    println!("重启 daemon 以加载插件: {}", "opencarrier stop && opencarrier start".cyan());
+                }
+                Err(e) => eprintln!("安装失败: {e}"),
+            }
+        }
+        PluginCommands::Remove { name } => {
+            let plugin_dir = plugins_dir.join(&name);
+            if !plugin_dir.is_dir() {
+                eprintln!("插件 '{}' 未安装", name);
+                std::process::exit(1);
+            }
+            // Security: path traversal check
+            if !plugin_dir.starts_with(&plugins_dir) {
+                eprintln!("无效的插件名称");
+                std::process::exit(1);
+            }
+            match std::fs::remove_dir_all(&plugin_dir) {
+                Ok(_) => {
+                    println!("插件 '{}' 已删除", name.green());
+                    println!("重启 daemon 以卸载插件: {}", "opencarrier stop && opencarrier start".cyan());
+                }
+                Err(e) => eprintln!("删除失败: {e}"),
+            }
+        }
+        PluginCommands::Search { query } => {
+            let hub_url = if config.hub.url.is_empty() {
+                eprintln!("Hub URL 未配置。请在 config.toml 中设置 [hub] url");
+                std::process::exit(1);
+            } else {
+                config.hub.url.clone()
+            };
+            let api_key = match opencarrier_clone::hub::read_api_key(&config.hub.api_key_env) {
+                Ok(k) => k,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            let q = query.unwrap_or_default();
+            match opencarrier_clone::hub::search_plugins(&hub_url, &api_key, &q).await {
+                Ok(result) => {
+                    let plugins = result["plugins"].as_array();
+                    match plugins {
+                        Some(list) if !list.is_empty() => {
+                            println!("{}", "Hub 插件搜索结果:".bold());
+                            println!();
+                            for p in list {
+                                let name = p["name"].as_str().unwrap_or("?");
+                                let desc = p["description"].as_str().unwrap_or("");
+                                let ver = p["latest_version"].as_str().unwrap_or("?");
+                                println!("  {} {} — {}", name.bold(), ver.dimmed(), desc);
+                            }
+                            println!();
+                            println!("共 {} 个插件", list.len());
+                        }
+                        _ => println!("没有找到匹配的插件"),
+                    }
+                }
+                Err(e) => eprintln!("搜索失败: {e}"),
             }
         }
     }

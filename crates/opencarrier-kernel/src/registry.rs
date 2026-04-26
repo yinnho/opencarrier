@@ -395,6 +395,7 @@ mod tests {
                 tool_blocklist: vec![],
                 clone_source: None,
                 knowledge_files: vec![],
+                plugins: vec![],
             },
             state: AgentState::Created,
             mode: AgentMode::default(),

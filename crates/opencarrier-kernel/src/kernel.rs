@@ -5304,6 +5304,7 @@ mod tests {
             tool_blocklist: vec![],
             clone_source: None,
             knowledge_files: vec![],
+            plugins: vec![],
         };
         manifest.capabilities.tools = vec!["file_read".to_string(), "web_fetch".to_string()];
         manifest.capabilities.agent_spawn = true;
@@ -5340,6 +5341,7 @@ mod tests {
             tool_blocklist: vec![],
             clone_source: None,
             knowledge_files: vec![],
+            plugins: vec![],
         }
     }
 
