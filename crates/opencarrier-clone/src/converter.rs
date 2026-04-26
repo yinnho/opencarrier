@@ -109,6 +109,7 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
         tags: data.manifest.as_ref().map(|m| m.tags.clone()).unwrap_or_default(),
         clone_source: Some(clone_source),
         knowledge_files,
+        plugins: data.plugins.clone(),
         generate_identity_files: false, // .agx already has its own identity files
         ..Default::default()
     }

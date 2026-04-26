@@ -408,6 +408,9 @@ pub struct AgentManifest {
     /// Knowledge file list — populated when agent is loaded from .agx template.
     #[serde(default)]
     pub knowledge_files: Vec<String>,
+    /// Required plugins — populated when agent is loaded from .agx template.
+    #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
+    pub plugins: Vec<String>,
 }
 
 /// Metadata about the .agx template this agent was loaded from.
@@ -460,6 +463,7 @@ impl Default for AgentManifest {
             tool_blocklist: Vec::new(),
             clone_source: None,
             knowledge_files: Vec::new(),
+            plugins: Vec::new(),
         }
     }
 }

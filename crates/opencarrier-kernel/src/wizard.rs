@@ -177,6 +177,7 @@ impl SetupWizard {
             tool_blocklist: vec![],
             clone_source: None,
             knowledge_files: vec![],
+            plugins: vec![],
         };
 
         let skills_to_install: Vec<String> = intent

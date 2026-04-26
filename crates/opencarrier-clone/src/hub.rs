@@ -271,3 +271,90 @@ fn format_stars(avg: f64) -> String {
         .collect::<Vec<_>>()
         .join("")
 }
+
+/// Detect the current platform string for plugin downloads.
+pub fn current_platform() -> String {
+    let os = if cfg!(target_os = "linux") { "linux" }
+        else if cfg!(target_os = "macos") { "macos" }
+        else if cfg!(target_os = "windows") { "windows" }
+        else { "unknown" };
+    let arch = if cfg!(target_arch = "x86_64") { "x86_64" }
+        else if cfg!(target_arch = "aarch64") { "aarch64" }
+        else { "unknown" };
+    format!("{os}-{arch}")
+}
+
+/// Download and install a pre-compiled plugin from Hub.
+/// The plugin is a tar.gz containing `plugin.toml` + shared library.
+pub async fn install_plugin(
+    hub_url: &str,
+    api_key: &str,
+    name: &str,
+    version: Option<&str>,
+    plugins_dir: &Path,
+) -> Result<String> {
+    validate_hub_url(hub_url)?;
+    let base = hub_url.trim_end_matches('/');
+    let platform = current_platform();
+    let url = if let Some(v) = version {
+        format!("{}/api/plugins/{}/download/{}?platform={}", base, urlencoding::encode(name), urlencoding::encode(v), platform)
+    } else {
+        format!("{}/api/plugins/{}/download?platform={}", base, urlencoding::encode(name), platform)
+    };
+
+    tracing::info!("正在从 Hub 下载插件 {} (platform={})...", name, platform);
+
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .context("无法连接 Hub")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("下载插件失败 {}: {} — {}", name, status, body);
+    }
+
+    let bytes = resp.bytes().await.context("读取响应失败")?;
+    tracing::info!("已下载插件 {} 字节", bytes.len());
+
+    // Create plugin directory
+    let plugin_dir = plugins_dir.join(name);
+    std::fs::create_dir_all(&plugin_dir)
+        .with_context(|| format!("创建插件目录失败: {}", plugin_dir.display()))?;
+
+    // Decompress tar.gz to plugin directory
+    let cursor = std::io::Cursor::new(&bytes[..]);
+    let gz = flate2::read::GzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(gz);
+    archive.unpack(&plugin_dir)
+        .with_context(|| format!("解压插件失败: {}", plugin_dir.display()))?;
+
+    tracing::info!("插件 '{}' 安装完成 → {}", name, plugin_dir.display());
+    Ok(name.to_string())
+}
+
+/// Check if a plugin is already installed in the plugins directory.
+pub fn is_plugin_installed(plugins_dir: &Path, name: &str) -> bool {
+    let plugin_dir = plugins_dir.join(name);
+    if !plugin_dir.is_dir() {
+        return false;
+    }
+    // Check for plugin.toml
+    if !plugin_dir.join("plugin.toml").exists() {
+        return false;
+    }
+    // Check for any shared library
+    if let Ok(entries) = std::fs::read_dir(&plugin_dir) {
+        for entry in entries.flatten() {
+            if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
+                if ["so", "dylib", "dll"].contains(&ext) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}

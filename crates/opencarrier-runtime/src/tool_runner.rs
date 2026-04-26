@@ -2232,6 +2232,7 @@ async fn tool_clone_install(
         agents,
         evolution,
         style,
+        plugins: Vec::new(),
     };
 
     // Pack into .agx bytes
