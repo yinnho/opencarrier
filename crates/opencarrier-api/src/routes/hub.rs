@@ -102,10 +102,7 @@ pub async fn install_hub_template(
         }
     };
 
-    let home_dir = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let device_id = opencarrier_clone::hub::get_or_create_device_id(&home_dir)
+    let device_id = opencarrier_clone::hub::get_or_create_device_id(&state.kernel.config.home_dir)
         .unwrap_or_else(|_| "unknown".to_string());
 
     let base = hub_url.trim_end_matches('/');
@@ -136,6 +133,7 @@ pub async fn install_hub_template(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        tracing::warn!(%status, %body, key_prefix = &hub_api_key[..8.min(hub_api_key.len())], "Hub download failed");
         return (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({"error": format!("Hub download failed: {} — {}", status, body)})),

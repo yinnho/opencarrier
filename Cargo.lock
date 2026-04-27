@@ -2268,6 +2268,7 @@ dependencies = [
  "opencarrier-runtime",
  "opencarrier-skills",
  "opencarrier-types",
+ "rand 0.8.5",
  "ratatui",
  "reqwest",
  "rusqlite",

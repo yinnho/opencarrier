@@ -1030,11 +1030,6 @@ fn cmd_start(config: Option<PathBuf>) {
     let opencarrier_dir = cli_opencarrier_home();
     let mut setup_credentials: Option<(String, String)> = None;
     if setup::needs_setup(&opencarrier_dir) {
-        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            ui::error("First-time setup requires an interactive terminal.");
-            ui::hint("Run: opencarrier init");
-            std::process::exit(1);
-        }
         // Ensure directories exist
         std::fs::create_dir_all(&opencarrier_dir).ok();
         for sub in ["data", "agents"] {
@@ -1088,9 +1083,13 @@ fn cmd_start(config: Option<PathBuf>) {
                 );
                 eprintln!("  Installing default clone '{}' from Hub...", clone_name);
 
+                let device_id = opencarrier_clone::hub::get_or_create_device_id(&kernel.config.home_dir)
+                    .unwrap_or_else(|_| "unknown".to_string());
+
                 match reqwest::Client::new()
                     .get(&url)
                     .bearer_auth(&api_key)
+                    .header("X-Device-ID", &device_id)
                     .send()
                     .await
                 {
