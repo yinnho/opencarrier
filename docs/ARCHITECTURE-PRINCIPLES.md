@@ -33,7 +33,7 @@
 ### 1.3 分身归 Hub 管理
 
 ```
-Hub (hub.yinnho.cn)  ←→  opencarrier (本地)
+Hub (hub.aginx.net)  ←→  opencarrier (本地)
      │                        │
      ├─ 发布/搜索/下载         ├─ 运行分身
      ├─ 版本管理               ├─ 自动进化
