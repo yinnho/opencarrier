@@ -139,12 +139,14 @@ async fn register_and_get_key(
         .map_err(|e| format!("Connection failed: {e}"))?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        if body.contains("already") || body.contains("exists") {
+        // 409 CONFLICT = username/email already taken → try login
+        if status == reqwest::StatusCode::CONFLICT {
             println!("  {} Account exists, logging in...", "-".bright_yellow());
             return login_and_get_key(hub_url, username, password).await;
         }
-        return Err(format!("Registration failed: {}", body));
+        return Err(format!("Registration failed ({}): {}", status, body));
     }
 
     let auth: AuthResponse = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
