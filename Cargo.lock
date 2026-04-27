@@ -2458,6 +2458,7 @@ dependencies = [
  "hex",
  "opencarrier-plugin-sdk",
  "opencarrier-types",
+ "rand 0.9.2",
  "reqwest",
  "roxmltree",
  "serde",

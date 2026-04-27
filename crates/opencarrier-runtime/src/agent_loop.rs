@@ -6,7 +6,6 @@
 use crate::auth_cooldown::{CooldownVerdict, ProviderCooldown};
 use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, ContextBudget};
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
-use crate::embedding::EmbeddingDriver;
 use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::{Brain, CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
 use crate::llm_errors;
@@ -122,7 +121,6 @@ pub async fn run_agent_loop(
     mcp_connections: Option<&tokio::sync::Mutex<Vec<McpConnection>>>,
     web_ctx: Option<&WebToolsContext>,
     browser_ctx: Option<&crate::browser::BrowserManager>,
-    embedding_driver: Option<&(dyn EmbeddingDriver + Send + Sync)>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
     media_engine: Option<&crate::media_understanding::MediaEngine>,
@@ -144,52 +142,18 @@ pub async fn run_agent_loop(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    // Recall relevant memories — prefer vector similarity search when embedding driver is available
-    let memories = if let Some(emb) = embedding_driver {
-        match emb.embed_one(user_message).await {
-            Ok(query_vec) => {
-                debug!("Using vector recall (dims={})", query_vec.len());
-                memory
-                    .recall_with_embedding_async(
-                        user_message,
-                        5,
-                        Some(MemoryFilter {
-                            agent_id: Some(session.agent_id),
-                            ..Default::default()
-                        }),
-                        Some(&query_vec),
-                    )
-                    .await
-                    .unwrap_or_default()
-            }
-            Err(e) => {
-                warn!("Embedding recall failed, falling back to text search: {e}");
-                memory
-                    .recall(
-                        user_message,
-                        5,
-                        Some(MemoryFilter {
-                            agent_id: Some(session.agent_id),
-                            ..Default::default()
-                        }),
-                    )
-                    .await
-                    .unwrap_or_default()
-            }
-        }
-    } else {
-        memory
-            .recall(
-                user_message,
-                5,
-                Some(MemoryFilter {
-                    agent_id: Some(session.agent_id),
-                    ..Default::default()
-                }),
-            )
-            .await
-            .unwrap_or_default()
-    };
+    // Recall relevant memories via text search
+    let memories = memory
+        .recall(
+            user_message,
+            5,
+            Some(MemoryFilter {
+                agent_id: Some(session.agent_id),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap_or_default();
 
     // Fire BeforePromptBuild hook
     let agent_id_str = session.agent_id.0.to_string();
@@ -464,49 +428,20 @@ pub async fn run_agent_loop(
                     .await
                     .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-                // Remember this interaction (with embedding if available)
+                // Remember this interaction
                 let interaction_text = format!(
                     "User asked: {}\nI responded: {}",
                     user_message, final_response
                 );
-                if let Some(emb) = embedding_driver {
-                    match emb.embed_one(&interaction_text).await {
-                        Ok(vec) => {
-                            let _ = memory
-                                .remember_with_embedding_async(
-                                    session.agent_id,
-                                    &interaction_text,
-                                    MemorySource::Conversation,
-                                    "episodic",
-                                    HashMap::new(),
-                                    Some(&vec),
-                                )
-                                .await;
-                        }
-                        Err(e) => {
-                            warn!("Embedding for remember failed: {e}");
-                            let _ = memory
-                                .remember(
-                                    session.agent_id,
-                                    &interaction_text,
-                                    MemorySource::Conversation,
-                                    "episodic",
-                                    HashMap::new(),
-                                )
-                                .await;
-                        }
-                    }
-                } else {
-                    let _ = memory
-                        .remember(
-                            session.agent_id,
-                            &interaction_text,
-                            MemorySource::Conversation,
-                            "episodic",
-                            HashMap::new(),
-                        )
-                        .await;
-                }
+                let _ = memory
+                    .remember(
+                        session.agent_id,
+                        &interaction_text,
+                        MemorySource::Conversation,
+                        "episodic",
+                        HashMap::new(),
+                    )
+                    .await;
 
                 // Notify phase: Done
                 if let Some(cb) = on_phase {
@@ -1066,7 +1001,6 @@ pub async fn run_agent_loop_streaming(
     mcp_connections: Option<&tokio::sync::Mutex<Vec<McpConnection>>>,
     web_ctx: Option<&WebToolsContext>,
     browser_ctx: Option<&crate::browser::BrowserManager>,
-    embedding_driver: Option<&(dyn EmbeddingDriver + Send + Sync)>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
     media_engine: Option<&crate::media_understanding::MediaEngine>,
@@ -1088,52 +1022,18 @@ pub async fn run_agent_loop_streaming(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    // Recall relevant memories — prefer vector similarity search when embedding driver is available
-    let memories = if let Some(emb) = embedding_driver {
-        match emb.embed_one(user_message).await {
-            Ok(query_vec) => {
-                debug!("Using vector recall (streaming, dims={})", query_vec.len());
-                memory
-                    .recall_with_embedding_async(
-                        user_message,
-                        5,
-                        Some(MemoryFilter {
-                            agent_id: Some(session.agent_id),
-                            ..Default::default()
-                        }),
-                        Some(&query_vec),
-                    )
-                    .await
-                    .unwrap_or_default()
-            }
-            Err(e) => {
-                warn!("Embedding recall failed (streaming), falling back to text search: {e}");
-                memory
-                    .recall(
-                        user_message,
-                        5,
-                        Some(MemoryFilter {
-                            agent_id: Some(session.agent_id),
-                            ..Default::default()
-                        }),
-                    )
-                    .await
-                    .unwrap_or_default()
-            }
-        }
-    } else {
-        memory
-            .recall(
-                user_message,
-                5,
-                Some(MemoryFilter {
-                    agent_id: Some(session.agent_id),
-                    ..Default::default()
-                }),
-            )
-            .await
-            .unwrap_or_default()
-    };
+    // Recall relevant memories via text search
+    let memories = memory
+        .recall(
+            user_message,
+            5,
+            Some(MemoryFilter {
+                agent_id: Some(session.agent_id),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap_or_default();
 
     // Fire BeforePromptBuild hook
     let agent_id_str = session.agent_id.0.to_string();
@@ -1419,49 +1319,20 @@ pub async fn run_agent_loop_streaming(
                     .await
                     .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-                // Remember this interaction (with embedding if available)
+                // Remember this interaction
                 let interaction_text = format!(
                     "User asked: {}\nI responded: {}",
                     user_message, final_response
                 );
-                if let Some(emb) = embedding_driver {
-                    match emb.embed_one(&interaction_text).await {
-                        Ok(vec) => {
-                            let _ = memory
-                                .remember_with_embedding_async(
-                                    session.agent_id,
-                                    &interaction_text,
-                                    MemorySource::Conversation,
-                                    "episodic",
-                                    HashMap::new(),
-                                    Some(&vec),
-                                )
-                                .await;
-                        }
-                        Err(e) => {
-                            warn!("Embedding for remember failed (streaming): {e}");
-                            let _ = memory
-                                .remember(
-                                    session.agent_id,
-                                    &interaction_text,
-                                    MemorySource::Conversation,
-                                    "episodic",
-                                    HashMap::new(),
-                                )
-                                .await;
-                        }
-                    }
-                } else {
-                    let _ = memory
-                        .remember(
-                            session.agent_id,
-                            &interaction_text,
-                            MemorySource::Conversation,
-                            "episodic",
-                            HashMap::new(),
-                        )
-                        .await;
-                }
+                let _ = memory
+                    .remember(
+                        session.agent_id,
+                        &interaction_text,
+                        MemorySource::Conversation,
+                        "episodic",
+                        HashMap::new(),
+                    )
+                    .await;
 
                 // Notify phase: Done
                 if let Some(cb) = on_phase {
@@ -2838,7 +2709,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -2888,7 +2758,6 @@ mod tests {
             &memory,
             driver,
             &[], // no tools registered — the tool call will fail, which is fine
-            None,
             None,
             None,
             None,
@@ -2952,7 +2821,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -3008,7 +2876,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -3052,7 +2919,6 @@ mod tests {
             &[],
             None,
             tx,
-            None,
             None,
             None,
             None,
@@ -3186,7 +3052,7 @@ mod tests {
             None,
             None,
             None,
-            None,
+
             None,
             None,
             None,
@@ -3236,7 +3102,7 @@ mod tests {
             None,
             None,
             None,
-            None,
+
             None,
             None,
             None,
@@ -3287,7 +3153,6 @@ mod tests {
             &[],
             None,
             tx,
-            None,
             None,
             None,
             None,
@@ -4183,7 +4048,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -4255,7 +4119,7 @@ mod tests {
             None,
             None,
             None,
-            None,
+
             None,
             None,
             None,
@@ -4314,7 +4178,6 @@ mod tests {
             &tools,
             None,
             tx,
-            None,
             None,
             None,
             None,

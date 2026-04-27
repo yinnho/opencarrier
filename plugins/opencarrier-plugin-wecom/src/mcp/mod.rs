@@ -8,7 +8,7 @@ pub mod schema;
 use opencarrier_plugin_sdk::{PluginError, PluginToolContext, ToolDef, ToolProvider};
 use serde_json::Value;
 
-use crate::token::TOKEN_MANAGER;
+use crate::TOKEN_MANAGER;
 use schema::ToolSpec;
 
 /// Maximum result size (60KB, leaving 4KB margin for the 64KB FFI buffer).

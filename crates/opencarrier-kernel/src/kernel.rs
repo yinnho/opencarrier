@@ -64,9 +64,6 @@ pub struct KernelServices {
     pub media_engine: opencarrier_runtime::media_understanding::MediaEngine,
     /// Text-to-speech engine.
     pub tts_engine: opencarrier_runtime::tts::TtsEngine,
-    /// Embedding driver for vector similarity search (None = text fallback).
-    pub embedding_driver:
-        Option<Arc<dyn opencarrier_runtime::embedding::EmbeddingDriver + Send + Sync>>,
 }
 
 /// Plugin and MCP tooling subsystem.
@@ -1181,75 +1178,6 @@ impl OpenCarrierKernel {
             ),
         };
 
-        // Auto-detect embedding driver for vector similarity search
-        let embedding_driver: Option<
-            Arc<dyn opencarrier_runtime::embedding::EmbeddingDriver + Send + Sync>,
-        > = {
-            use opencarrier_runtime::embedding::create_embedding_driver;
-            let configured_model = &config.memory.embedding_model;
-            if let Some(ref provider) = config.memory.embedding_provider {
-                // Explicit config takes priority — use the configured embedding model.
-                // If the user left embedding_model at the default ("all-MiniLM-L6-v2"),
-                // pick a sensible default for the chosen provider so we don't send a
-                // local model name to a cloud API.
-                let model = if configured_model == "all-MiniLM-L6-v2" {
-                    default_embedding_model_for_provider(provider)
-                } else {
-                    configured_model.as_str()
-                };
-                let api_key_env = config.memory.embedding_api_key_env.as_deref().unwrap_or("");
-                let custom_url = config
-                    .provider_urls
-                    .get(provider.as_str())
-                    .map(|s| s.as_str());
-                match create_embedding_driver(provider, model, api_key_env, custom_url) {
-                    Ok(d) => {
-                        info!(provider = %provider, model = %model, "Embedding driver configured from memory config");
-                        Some(Arc::from(d))
-                    }
-                    Err(e) => {
-                        warn!(provider = %provider, error = %e, "Embedding driver init failed — falling back to text search");
-                        None
-                    }
-                }
-            } else if std::env::var("OPENAI_API_KEY").is_ok() {
-                let model = if configured_model == "all-MiniLM-L6-v2" {
-                    default_embedding_model_for_provider("openai")
-                } else {
-                    configured_model.as_str()
-                };
-                let openai_url = config.provider_urls.get("openai").map(|s| s.as_str());
-                match create_embedding_driver("openai", model, "OPENAI_API_KEY", openai_url) {
-                    Ok(d) => {
-                        info!(model = %model, "Embedding driver auto-detected: OpenAI");
-                        Some(Arc::from(d))
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "OpenAI embedding auto-detect failed");
-                        None
-                    }
-                }
-            } else {
-                // Try Ollama (local, no key needed)
-                let model = if configured_model == "all-MiniLM-L6-v2" {
-                    default_embedding_model_for_provider("ollama")
-                } else {
-                    configured_model.as_str()
-                };
-                let ollama_url = config.provider_urls.get("ollama").map(|s| s.as_str());
-                match create_embedding_driver("ollama", model, "", ollama_url) {
-                    Ok(d) => {
-                        info!(model = %model, "Embedding driver auto-detected: Ollama (local)");
-                        Some(Arc::from(d))
-                    }
-                    Err(e) => {
-                        debug!("No embedding driver available (Ollama probe failed: {e}) — using text search fallback");
-                        None
-                    }
-                }
-            }
-        };
-
         let browser_ctx = opencarrier_runtime::browser::BrowserManager::new(config.browser.clone());
 
         // Initialize media understanding engine
@@ -1296,7 +1224,6 @@ impl OpenCarrierKernel {
                 browser_ctx,
                 media_engine,
                 tts_engine,
-                embedding_driver,
             },
             plugins: KernelPlugins {
                 mcp_connections: tokio::sync::Mutex::new(Vec::new()),
@@ -1932,7 +1859,6 @@ impl OpenCarrierKernel {
                 Some(&kernel_clone.plugins.mcp_connections),
                 Some(&kernel_clone.services.web_ctx),
                 Some(&kernel_clone.services.browser_ctx),
-                kernel_clone.services.embedding_driver.as_deref(),
                 manifest.workspace.as_deref(),
                 Some(&phase_cb),
                 Some(&kernel_clone.services.media_engine),
@@ -2343,7 +2269,6 @@ impl OpenCarrierKernel {
             Some(&self.plugins.mcp_connections),
             Some(&self.services.web_ctx),
             Some(&self.services.browser_ctx),
-            self.services.embedding_driver.as_deref(),
             manifest.workspace.as_deref(),
             None, // on_phase callback
             Some(&self.services.media_engine),
@@ -4376,18 +4301,6 @@ fn manifest_to_capabilities(manifest: &AgentManifest) -> Vec<Capability> {
 /// Pick a sensible default embedding model for a given provider when the user
 /// configured an explicit `embedding_provider` but left `embedding_model` at the
 /// default value (which is a local model name that cloud APIs wouldn't recognise).
-fn default_embedding_model_for_provider(provider: &str) -> &'static str {
-    match provider {
-        "openai" => "text-embedding-3-small",
-        "mistral" => "mistral-embed",
-        "cohere" => "embed-english-v3.0",
-        // Local providers use nomic-embed-text as a good default
-        "ollama" | "vllm" | "lmstudio" => "nomic-embed-text",
-        // Other OpenAI-compatible APIs typically support the OpenAI model names
-        _ => "text-embedding-3-small",
-    }
-}
-
 
 /// Deliver a cron job's agent response to the configured delivery target.
 async fn cron_deliver_response(
