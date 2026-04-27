@@ -216,6 +216,28 @@ document.addEventListener('alpine:init', function() {
     },
 
     async checkAuth() {
+      // Auto-login via URL session token (e.g. ?session=xxx from first-run setup)
+      var urlParams = new URLSearchParams(window.location.search);
+      var autoSession = urlParams.get('session');
+      if (autoSession) {
+        window.history.replaceState({}, '', window.location.pathname);
+        // Set the session cookie directly
+        document.cookie = 'opencarrier_session=' + autoSession + '; Path=/; SameSite=Strict; Max-Age=604800';
+        // Verify it worked
+        try {
+          var authInfo = await OpenCarrierAPI.get('/api/auth/check');
+          if (authInfo.authenticated) {
+            this.authMode = 'session';
+            this.sessionUser = authInfo.username;
+            this.userRole = authInfo.role || null;
+            this.tenantId = authInfo.tenant_id || null;
+            this.showAuthPrompt = false;
+            this.refreshAgents();
+            return;
+          }
+        } catch(e) { /* fall through */ }
+      }
+
       try {
         // First check if session-based auth is configured
         var authInfo = await OpenCarrierAPI.get('/api/auth/check');

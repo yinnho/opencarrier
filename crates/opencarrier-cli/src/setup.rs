@@ -1,4 +1,4 @@
-//! First-run setup: register with Hub, obtain API key, write config.
+//! First-run setup: register with Hub, obtain API key, write config, enable auth.
 
 use colored::Colorize;
 use serde::Deserialize;
@@ -15,8 +15,14 @@ struct KeyResponse {
     key: String,
 }
 
-/// Run the first-run setup flow. Returns Ok(()) if config was written.
-pub fn run_first_time_setup(opencarrier_dir: &Path, hub_url: &str) -> Result<(), String> {
+#[derive(Deserialize)]
+struct SessionResponse {
+    status: String,
+    token: String,
+}
+
+/// Run the first-run setup flow. Returns (username, password) if config was written.
+pub fn run_first_time_setup(opencarrier_dir: &Path, hub_url: &str) -> Result<(String, String), String> {
     println!();
     println!("  {} {}", ">>".bright_cyan().bold(), "First-time Setup".bold());
     println!("  {}", "This will create a Hub account and configure OpenCarrier.".dimmed());
@@ -69,12 +75,28 @@ pub fn run_first_time_setup(opencarrier_dir: &Path, hub_url: &str) -> Result<(),
     std::fs::write(&env_path, &env_content).map_err(|e| e.to_string())?;
     crate::restrict_file_permissions(&env_path);
 
-    // Write default config.toml
+    // Write config.toml with auth enabled
+    let password_hash = opencarrier_api::session_auth::hash_password(&password);
+    let config_content = format!(
+        r#"# OpenCarrier Agent OS configuration
+api_listen = "127.0.0.1:4200"
+
+[brain]
+config = "brain.json"
+
+[memory]
+decay_rate = 0.05
+
+[auth]
+enabled = true
+username = "{username}"
+password_hash = "{password_hash}"
+session_ttl_hours = 168
+"#
+    );
     let config_path = opencarrier_dir.join("config.toml");
-    if !config_path.exists() {
-        std::fs::write(&config_path, crate::DEFAULT_CONFIG_TOML).map_err(|e| e.to_string())?;
-        crate::restrict_file_permissions(&config_path);
-    }
+    std::fs::write(&config_path, &config_content).map_err(|e| e.to_string())?;
+    crate::restrict_file_permissions(&config_path);
 
     // Load .env into current process so the kernel picks it up
     std::env::set_var("OPENCLONE_HUB_KEY", &api_key);
@@ -88,7 +110,7 @@ pub fn run_first_time_setup(opencarrier_dir: &Path, hub_url: &str) -> Result<(),
     println!("  {} API key: {}", "\u{2714}".bright_green(), masked);
     println!();
 
-    Ok(())
+    Ok((username, password))
 }
 
 /// Check if first-run setup is needed (no config.toml or no Hub API key).
@@ -117,6 +139,66 @@ pub fn needs_setup(opencarrier_dir: &Path) -> bool {
     true
 }
 
+/// Auto-login to the local daemon and return the session token.
+pub fn auto_login(api_base: &str, username: &str, password: &str) -> Option<String> {
+    let resp = reqwest::blocking::Client::new()
+        .post(format!("{}/api/auth/login", api_base))
+        .json(&serde_json::json!({
+            "username": username,
+            "password": password,
+        }))
+        .send()
+        .ok()?;
+
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let data: SessionResponse = resp.json().ok()?;
+    if data.status == "ok" {
+        Some(data.token)
+    } else {
+        None
+    }
+}
+
+/// Load saved credentials for auto-login (username, password_hash).
+pub fn load_saved_credentials(opencarrier_dir: &Path) -> Option<(String, String)> {
+    let config_path = opencarrier_dir.join("config.toml");
+    let content = std::fs::read_to_string(config_path).ok()?;
+    let table = content.parse::<toml::Value>().ok()?;
+
+    let auth = table.get("auth")?;
+    let enabled = auth.get("enabled")?.as_bool()?;
+    if !enabled {
+        return None;
+    }
+
+    let username = auth.get("username")?.as_str()?.to_string();
+    // We can't reverse the hash, so store password in a separate file during setup
+    None
+}
+
+/// Save the plain password for auto-login (stored in restricted file).
+pub fn save_login_secret(opencarrier_dir: &Path, password: &str) -> Result<(), String> {
+    let secret_path = opencarrier_dir.join(".login");
+    std::fs::write(&secret_path, password).map_err(|e| e.to_string())?;
+    crate::restrict_file_permissions(&secret_path);
+    Ok(())
+}
+
+/// Read the saved login password.
+pub fn read_login_secret(opencarrier_dir: &Path) -> Option<String> {
+    let secret_path = opencarrier_dir.join(".login");
+    let password = std::fs::read_to_string(secret_path).ok()?;
+    let p = password.trim().to_string();
+    if p.is_empty() {
+        None
+    } else {
+        Some(p)
+    }
+}
+
 async fn register_and_get_key(
     hub_url: &str,
     username: &str,
@@ -141,7 +223,6 @@ async fn register_and_get_key(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        // 409 CONFLICT = username/email already taken → try login
         if status == reqwest::StatusCode::CONFLICT {
             println!("  {} Account exists, logging in...", "-".bright_yellow());
             return login_and_get_key(hub_url, username, password).await;
@@ -180,7 +261,7 @@ async fn login_and_get_key(
     let resp = client
         .post(format!("{}/api/auth/login", base))
         .json(&serde_json::json!({
-            "username": username,
+            "login": username,
             "password": password,
         }))
         .send()
