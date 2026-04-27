@@ -5,6 +5,7 @@
 
 mod mcp;
 pub mod serve;
+mod setup;
 mod acp;
 mod templates;
 mod tui;
@@ -1025,6 +1026,26 @@ fn cmd_start(config: Option<PathBuf>) {
     ui::banner();
     ui::blank();
 
+    // ── First-run setup ────────────────────────────────────────────
+    let opencarrier_dir = cli_opencarrier_home();
+    if setup::needs_setup(&opencarrier_dir) {
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            ui::error("First-time setup requires an interactive terminal.");
+            ui::hint("Run: opencarrier init");
+            std::process::exit(1);
+        }
+        // Ensure directories exist
+        std::fs::create_dir_all(&opencarrier_dir).ok();
+        for sub in ["data", "agents"] {
+            std::fs::create_dir_all(opencarrier_dir.join(sub)).ok();
+        }
+        if let Err(e) = setup::run_first_time_setup(&opencarrier_dir, "https://hub.aginx.net") {
+            ui::error(&format!("Setup failed: {e}"));
+            ui::hint("You can run `opencarrier init` to configure manually");
+            std::process::exit(1);
+        }
+    }
+
     println!("  启动服务中...");
     ui::blank();
 
@@ -1209,6 +1230,15 @@ fn cmd_start(config: Option<PathBuf>) {
         ui::hint("Open the dashboard in your browser, or run `opencarrier chat`");
         ui::hint("Press Ctrl+C to stop the daemon");
         ui::blank();
+
+        // ── Version check (best-effort) ────────────────────────────
+        if let Some(latest) = setup::check_for_update("https://hub.aginx.net").await {
+            ui::check_warn(&format!(
+                "New version {} available! Current: {}. Re-install: curl -sSL https://hub.aginx.net/api/install.sh | sh",
+                latest,
+                env!("CARGO_PKG_VERSION")
+            ));
+        }
 
         if let Err(e) =
             opencarrier_api::server::run_daemon(kernel, &listen_addr, Some(&daemon_info_path)).await
