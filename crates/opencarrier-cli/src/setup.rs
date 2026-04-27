@@ -15,12 +15,6 @@ struct KeyResponse {
     key: String,
 }
 
-#[derive(Deserialize)]
-struct SessionResponse {
-    status: String,
-    token: String,
-}
-
 /// Run the first-run setup flow. Returns (username, password) if config was written.
 pub fn run_first_time_setup(opencarrier_dir: &Path, hub_url: &str) -> Result<(String, String), String> {
     println!();
@@ -137,46 +131,6 @@ pub fn needs_setup(opencarrier_dir: &Path) -> bool {
         }
     }
     true
-}
-
-/// Auto-login to the local daemon and return the session token.
-pub fn auto_login(api_base: &str, username: &str, password: &str) -> Option<String> {
-    let resp = reqwest::blocking::Client::new()
-        .post(format!("{}/api/auth/login", api_base))
-        .json(&serde_json::json!({
-            "username": username,
-            "password": password,
-        }))
-        .send()
-        .ok()?;
-
-    if !resp.status().is_success() {
-        return None;
-    }
-
-    let data: SessionResponse = resp.json().ok()?;
-    if data.status == "ok" {
-        Some(data.token)
-    } else {
-        None
-    }
-}
-
-/// Load saved credentials for auto-login (username, password_hash).
-pub fn load_saved_credentials(opencarrier_dir: &Path) -> Option<(String, String)> {
-    let config_path = opencarrier_dir.join("config.toml");
-    let content = std::fs::read_to_string(config_path).ok()?;
-    let table = content.parse::<toml::Value>().ok()?;
-
-    let auth = table.get("auth")?;
-    let enabled = auth.get("enabled")?.as_bool()?;
-    if !enabled {
-        return None;
-    }
-
-    let username = auth.get("username")?.as_str()?.to_string();
-    // We can't reverse the hash, so store password in a separate file during setup
-    None
 }
 
 /// Save the plain password for auto-login (stored in restricted file).

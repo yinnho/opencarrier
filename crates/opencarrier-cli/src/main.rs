@@ -1071,6 +1071,10 @@ fn cmd_start(config: Option<PathBuf>) {
         // ── Install default clones from Hub (only if missing) ─────────
         const DEFAULT_CLONES: &[&str] = &["clone-creator", "clone-trainer"];
         let hub = &kernel.config.hub;
+        // Resolve admin tenant_id so clones are visible after login
+        let admin_tenant_id = kernel.config.auth.enabled
+            .then(|| kernel.memory.tenant().get_tenant_by_name(&kernel.config.auth.username).ok().flatten().map(|t| t.id))
+            .flatten();
         if let Ok(api_key) = std::env::var(&hub.api_key_env) {
             for clone_name in DEFAULT_CLONES {
                 if kernel.registry.find_by_name(clone_name).is_some() {
@@ -1094,7 +1098,7 @@ fn cmd_start(config: Option<PathBuf>) {
                         if resp.status().is_success() {
                             match resp.bytes().await {
                                 Ok(bytes) => {
-                                    match kernel.clone_install(clone_name, &bytes, None).await {
+                                    match kernel.clone_install(clone_name, &bytes, admin_tenant_id.as_deref()).await {
                                         Ok((id, name)) => {
                                             eprintln!("  ✓ Clone '{}' installed (id={})", name, id);
                                         }
@@ -1154,7 +1158,7 @@ fn cmd_start(config: Option<PathBuf>) {
                 .map(|(_, p)| p.clone())
                 .or_else(|| setup::read_login_secret(&kernel.config.home_dir));
 
-            if let (Some(u), Some(p)) = (Some(username.clone()), password) {
+            if let (Some(u), Some(_p)) = (Some(username.clone()), password) {
                 let secret = if !kernel.config.api_key.trim().is_empty() {
                     kernel.config.api_key.trim().to_string()
                 } else {
