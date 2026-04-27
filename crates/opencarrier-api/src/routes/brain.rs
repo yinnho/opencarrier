@@ -22,7 +22,7 @@ pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse
             "model": ep.model,
             "base_url": ep.base_url,
             "format": ep.format.to_string(),
-            "ready": ready.contains(&name.as_str()),
+            "ready": ready.contains(name),
         }));
     }
 

@@ -117,71 +117,27 @@ fn now_ms() -> u64 {
 /// The carrier's brain — manages all LLM drivers and routes by modality.
 pub struct Brain {
     config: BrainConfig,
-    /// Pre-created drivers, keyed by endpoint name.
-    drivers: HashMap<String, Arc<dyn LlmDriver>>,
+    /// Lazily-created drivers, keyed by endpoint name.
+    drivers: DashMap<String, Arc<dyn LlmDriver>>,
     /// Per-endpoint health tracking. Thread-safe for concurrent report() calls.
     health: DashMap<String, EndpointTracker>,
 }
 
 impl Brain {
-    /// Create a new Brain from config, pre-creating all endpoint drivers.
+    /// Create a new Brain from config. Drivers are created lazily on first use.
     pub fn new(config: BrainConfig) -> Result<Self, BrainError> {
-        let mut drivers = HashMap::new();
-
-        for (name, endpoint) in &config.endpoints {
-            match Self::create_driver(name, endpoint, &config.providers) {
-                Ok(driver) => {
-                    info!(
-                        endpoint = %name,
-                        provider = %endpoint.provider,
-                        model = %endpoint.model,
-                        format = %endpoint.format,
-                        "Brain endpoint ready"
-                    );
-                    drivers.insert(name.clone(), driver);
-                }
-                Err(e) => {
-                    warn!(
-                        endpoint = %name,
-                        error = %e,
-                        "Failed to create driver for endpoint — skipping"
-                    );
-                }
-            }
-        }
-
-        if drivers.is_empty() {
+        if config.endpoints.is_empty() {
             return Err(BrainError::NoEndpoints);
         }
 
-        // Validate modalities reference existing endpoints
-        for (mod_name, mod_config) in &config.modalities {
-            if !drivers.contains_key(&mod_config.primary) {
-                warn!(
-                    modality = %mod_name,
-                    primary = %mod_config.primary,
-                    "Modality primary endpoint has no driver — will fail at runtime"
-                );
-            }
-            for fb in &mod_config.fallbacks {
-                if !drivers.contains_key(fb) {
-                    warn!(
-                        modality = %mod_name,
-                        fallback = %fb,
-                        "Modality fallback endpoint has no driver"
-                    );
-                }
-            }
-        }
-
         info!(
-            endpoints = drivers.len(),
+            endpoints = config.endpoints.len(),
             modalities = config.modalities.len(),
             default_modality = %config.default_modality,
             "Brain initialized"
         );
 
-        Ok(Self { config, drivers, health: DashMap::new() })
+        Ok(Self { config, drivers: DashMap::new(), health: DashMap::new() })
     }
 
     // ── New query interface ─────────────────────────────────────
@@ -215,8 +171,8 @@ impl Brain {
         chain.into_iter()
             .filter_map(|name| {
                 let endpoint = self.config.endpoints.get(&name)?;
-                // Only include endpoints with live drivers
-                if !self.drivers.contains_key(&name) {
+                // Only include endpoints that can produce a driver
+                if self.get_or_create_driver(&name).is_none() {
                     return None;
                 }
                 // Circuit-breaker: skip endpoints with too many consecutive failures
@@ -239,9 +195,9 @@ impl Brain {
             .collect()
     }
 
-    /// Get a driver for a specific endpoint. Returns None if no driver.
+    /// Get a driver for a specific endpoint, creating it lazily if needed.
     pub fn driver_for_endpoint(&self, endpoint_id: &str) -> Option<Arc<dyn LlmDriver>> {
-        self.drivers.get(endpoint_id).cloned()
+        self.get_or_create_driver(endpoint_id)
     }
 
     /// Report the result of an endpoint call. Non-blocking.
@@ -349,20 +305,41 @@ impl Brain {
         &self.config
     }
 
-    /// Get the cached driver for a modality's primary endpoint.
-    /// Returns None if no driver exists for the resolved endpoint.
+    /// Get the driver for a modality's primary endpoint, creating lazily.
     pub fn driver_for_modality(&self, modality: &str) -> Option<Arc<dyn LlmDriver>> {
         let mod_config = self.config.modalities.get(modality)
             .or_else(|| self.config.modalities.get(&self.config.default_modality))?;
-        self.drivers.get(&mod_config.primary).cloned()
+        self.get_or_create_driver(&mod_config.primary)
     }
 
     /// Get the endpoint names that have been successfully initialized (have drivers).
-    pub fn ready_endpoints(&self) -> Vec<&str> {
-        self.drivers.keys().map(|s| s.as_str()).collect()
+    pub fn ready_endpoints(&self) -> Vec<String> {
+        self.drivers.iter().map(|entry| entry.key().clone()).collect()
     }
 
     // ── Internal helpers ──────────────────────────────────────
+
+    /// Get a cached driver or create one lazily.
+    fn get_or_create_driver(&self, endpoint_name: &str) -> Option<Arc<dyn LlmDriver>> {
+        if let Some(entry) = self.drivers.get(endpoint_name) {
+            return Some(entry.value().clone());
+        }
+        let endpoint = self.config.endpoints.get(endpoint_name)?;
+        match Self::create_driver(endpoint_name, endpoint, &self.config.providers) {
+            Ok(driver) => {
+                self.drivers.insert(endpoint_name.to_string(), driver.clone());
+                Some(driver)
+            }
+            Err(e) => {
+                warn!(
+                    endpoint = %endpoint_name,
+                    error = %e,
+                    "Failed to create driver for endpoint"
+                );
+                None
+            }
+        }
+    }
 
     fn model_for_endpoint(&self, endpoint_name: &str) -> &str {
         self.config.endpoints.get(endpoint_name)

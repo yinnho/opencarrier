@@ -335,10 +335,7 @@ fn append_daily_memory_log(workspace: &Path, response: &str) {
 }
 
 impl OpenCarrierKernel {
-    /// Fetch brain configuration from Hub synchronously.
-    ///
-    /// Uses a temporary tokio runtime to perform the async HTTP request.
-    /// On success, writes the config to `brain_path` and returns the parsed config.
+    /// Fetch brain configuration from Hub (blocking HTTP).
     fn fetch_brain_from_hub_sync(
         hub: &opencarrier_types::config::HubConfig,
         brain_path: &std::path::Path,
@@ -346,32 +343,24 @@ impl OpenCarrierKernel {
         let api_key = std::env::var(&hub.api_key_env)
             .map_err(|_| format!("Environment variable {} not set", hub.api_key_env))?;
 
-        // SECURITY: Validate hub URL before fetching
         opencarrier_clone::hub::validate_hub_url(&hub.url)
             .map_err(|e| format!("Invalid hub URL: {e}"))?;
 
         let url = format!("{}/api/brain/config", hub.url.trim_end_matches('/'));
 
-        let json_str = {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
-            rt.block_on(async {
-                let client = reqwest::Client::new();
-                let resp = client
-                    .get(&url)
-                    .bearer_auth(&api_key)
-                    .send()
-                    .await
-                    .map_err(|e| format!("HTTP request failed: {e}"))?;
+        let resp = reqwest::blocking::Client::new()
+            .get(&url)
+            .bearer_auth(&api_key)
+            .send()
+            .map_err(|e| format!("HTTP request failed: {e}"))?;
 
-                if !resp.status().is_success() {
-                    return Err(format!("Hub returned {}: {}", resp.status(), resp.text().await.unwrap_or_default()));
-                }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Err(format!("Hub returned {}: {}", status, resp.text().unwrap_or_default()));
+        }
 
-                resp.text().await
-                    .map_err(|e| format!("Failed to read response body: {e}"))
-            })?
-        };
+        let json_str = resp.text()
+            .map_err(|e| format!("Failed to read response body: {e}"))?;
 
         // Validate JSON before saving
         let config: opencarrier_types::brain::BrainConfig = serde_json::from_str(&json_str)
@@ -1306,24 +1295,6 @@ impl OpenCarrierKernel {
             }
             Err(e) => {
                 tracing::warn!("Failed to load persisted agents: {e}");
-            }
-        }
-
-        // If no agents exist (fresh install), spawn a default assistant
-        if kernel.registry.list().is_empty() {
-            info!("No agents found — spawning default assistant");
-            let manifest = AgentManifest {
-                name: "assistant".to_string(),
-                description: "General-purpose assistant".to_string(),
-                model: opencarrier_types::agent::ModelConfig {
-                    system_prompt: "You are a helpful AI assistant.".to_string(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            match kernel.spawn_agent(manifest) {
-                Ok(id) => info!(id = %id, "Default assistant spawned"),
-                Err(e) => warn!("Failed to spawn default assistant: {e}"),
             }
         }
 
@@ -4873,8 +4844,8 @@ impl KernelHandle for OpenCarrierKernel {
             return Err(format!("Agent '{}' already exists in this tenant", clone_name));
         }
 
-        // Atomically create workspace directory (fails if already exists)
-        if let Err(e) = std::fs::create_dir(&workspace_dir) {
+        // Create workspace directory (including parents)
+        if let Err(e) = std::fs::create_dir_all(&workspace_dir) {
             return Err(format!(
                 "Workspace for '{}' already exists or cannot be created: {e}",
                 clone_name

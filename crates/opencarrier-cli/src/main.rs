@@ -1028,6 +1028,7 @@ fn cmd_start(config: Option<PathBuf>) {
 
     // ── First-run setup ────────────────────────────────────────────
     let opencarrier_dir = cli_opencarrier_home();
+    let mut setup_credentials: Option<(String, String)> = None;
     if setup::needs_setup(&opencarrier_dir) {
         if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
             ui::error("First-time setup requires an interactive terminal.");
@@ -1039,10 +1040,16 @@ fn cmd_start(config: Option<PathBuf>) {
         for sub in ["data", "agents"] {
             std::fs::create_dir_all(opencarrier_dir.join(sub)).ok();
         }
-        if let Err(e) = setup::run_first_time_setup(&opencarrier_dir, "https://hub.aginx.net") {
-            ui::error(&format!("Setup failed: {e}"));
-            ui::hint("You can run `opencarrier init` to configure manually");
-            std::process::exit(1);
+        match setup::run_first_time_setup(&opencarrier_dir, "https://hub.aginx.net") {
+            Ok(creds) => {
+                let _ = setup::save_login_secret(&opencarrier_dir, &creds.1);
+                setup_credentials = Some(creds);
+            }
+            Err(e) => {
+                ui::error(&format!("Setup failed: {e}"));
+                ui::hint("You can run `opencarrier init` to configure manually");
+                std::process::exit(1);
+            }
         }
     }
 
@@ -1052,81 +1059,6 @@ fn cmd_start(config: Option<PathBuf>) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let kernel_config = opencarrier_kernel::config::load_config(config.as_deref());
-
-        // ── Brain config: sync from Hub ─────────────────────────────
-        let brain_path = kernel_config.home_dir.join(&kernel_config.brain.config);
-        let brain_ts_path = kernel_config.home_dir.join(".brain_updated_at");
-        let hub = &kernel_config.hub;
-        match std::env::var(&hub.api_key_env) {
-            Ok(api_key) => {
-                let url = format!("{}/api/brain/config", hub.url.trim_end_matches('/'));
-                match reqwest::Client::new()
-                    .get(&url)
-                    .bearer_auth(&api_key)
-                    .send().await
-                {
-                    Ok(resp) if resp.status().is_success() => {
-                        let hub_updated_at: i64 = resp
-                            .headers()
-                            .get("X-Brain-Updated-At")
-                            .and_then(|v| v.to_str().ok())
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-                        let local_updated_at: i64 = std::fs::read_to_string(&brain_ts_path)
-                            .ok()
-                            .and_then(|s| s.trim().parse().ok())
-                            .unwrap_or(0);
-                        if hub_updated_at > local_updated_at || !brain_path.exists() {
-                            match resp.text().await {
-                                Ok(json) => {
-                                    if let Some(parent) = brain_path.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
-                                    }
-                                    if let Err(e) = std::fs::write(&brain_path, &json) {
-                                        eprintln!("  ✘ Failed to save brain.json: {e}");
-                                        std::process::exit(1);
-                                    }
-                                    if let Err(e) = std::fs::write(&brain_ts_path, hub_updated_at.to_string()) {
-                                        eprintln!("  ✘ Failed to save brain timestamp: {e}");
-                                    }
-                                    if local_updated_at == 0 {
-                                        eprintln!("  ✓ Brain config saved to {}", brain_path.display());
-                                    } else {
-                                        eprintln!("  ✓ Brain config updated from Hub ({} → {})", local_updated_at, hub_updated_at);
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("  ✘ Failed to read Hub response: {e}");
-                                    if !brain_path.exists() {
-                                        std::process::exit(1);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Ok(resp) => {
-                        let body = resp.text().await.unwrap_or_default();
-                        eprintln!("  ⚠ Hub returned error for brain config: {body}");
-                        if !brain_path.exists() {
-                            std::process::exit(1);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("  ⚠ Cannot connect to Hub for brain config: {e}");
-                        if !brain_path.exists() {
-                            eprintln!("  ✘ Brain config not found and Hub unreachable.");
-                            std::process::exit(1);
-                        }
-                    }
-                }
-            }
-            Err(_) => {
-                if !brain_path.exists() {
-                    eprintln!("  ✘ Brain config not found and {} is not set.", hub.api_key_env);
-                    std::process::exit(1);
-                }
-            }
-        }
 
         let kernel = match OpenCarrierKernel::boot_with_config(kernel_config) {
             Ok(k) => k,
@@ -1204,32 +1136,40 @@ fn cmd_start(config: Option<PathBuf>) {
 
         let listen_addr = kernel.config.api_listen.clone();
         let daemon_info_path = kernel.config.home_dir.join("daemon.json");
-        let provider = kernel.config.default_model.provider.clone();
-        let model = kernel.config.default_model.model.clone();
         let agent_count = kernel.registry.count();
-        let model_count = kernel
-            .brain
-            .model_catalog
-            .read()
-            .map(|c| c.list_models().len())
-            .unwrap_or(0);
 
-        ui::success(&format!("Kernel booted ({provider}/{model})"));
-        if model_count > 0 {
-            ui::success(&format!("{model_count} models available"));
-        }
+        ui::success("Kernel booted");
         if agent_count > 0 {
             ui::success(&format!("{agent_count} agent(s) loaded"));
         }
         ui::blank();
-        ui::kv("API", &format!("http://{listen_addr}"));
-        ui::kv("Dashboard", &format!("http://{listen_addr}/"));
-        ui::kv("Modality", &provider);
-        ui::kv("Model", &model);
-        ui::blank();
-        ui::hint("Open the dashboard in your browser, or run `opencarrier chat`");
-        ui::hint("Press Ctrl+C to stop the daemon");
-        ui::blank();
+
+        let dashboard_url = format!("http://{listen_addr}/");
+
+        // Auto-login: generate session token locally and pass via URL
+        let mut open_url = dashboard_url.clone();
+        if kernel.config.auth.enabled {
+            let username = kernel.config.auth.username.clone();
+            let password = setup_credentials.as_ref()
+                .map(|(_, p)| p.clone())
+                .or_else(|| setup::read_login_secret(&kernel.config.home_dir));
+
+            if let (Some(u), Some(p)) = (Some(username.clone()), password) {
+                let secret = if !kernel.config.api_key.trim().is_empty() {
+                    kernel.config.api_key.trim().to_string()
+                } else {
+                    kernel.config.auth.password_hash.clone()
+                };
+                let token = opencarrier_api::session_auth::create_session_token(
+                    None, "admin", &u, &secret, kernel.config.auth.session_ttl_hours,
+                );
+                open_url = format!("{}?session={}", dashboard_url, token);
+            }
+        }
+
+        if !open_in_browser(&open_url) {
+            ui::hint(&format!("Dashboard: {dashboard_url}"));
+        }
 
         // ── Version check (best-effort) ────────────────────────────
         if let Some(latest) = setup::check_for_update("https://hub.aginx.net").await {
