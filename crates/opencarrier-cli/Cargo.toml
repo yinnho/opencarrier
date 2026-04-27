@@ -33,3 +33,4 @@ ratatui = { workspace = true }
 colored = { workspace = true }
 rusqlite = { workspace = true }
 chrono = { workspace = true }
+rand = { workspace = true }

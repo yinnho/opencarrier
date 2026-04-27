@@ -88,9 +88,7 @@ pub async fn search(hub_url: &str, api_key: &str, query: &str) -> Result<String>
         format!("{}/api/templates?q={}&limit=20", base, urlencoding::encode(query))
     };
 
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .bearer_auth(api_key)
+    let resp = hub_get(&url, api_key)
         .send()
         .await
         .context("无法连接 Hub")?;
@@ -133,7 +131,7 @@ pub async fn install(
     name: &str,
     version: Option<&str>,
     workspace_dir: &Path,
-    device_id: &str,
+    _device_id: &str,
 ) -> Result<String> {
     validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
@@ -145,10 +143,7 @@ pub async fn install(
 
     tracing::info!("正在从 Hub 下载 {} ...", name);
 
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .bearer_auth(api_key)
-        .header("X-Device-ID", device_id)
+    let resp = hub_get(&url, api_key)
         .send()
         .await
         .context("无法连接 Hub")?;
@@ -181,8 +176,8 @@ pub async fn install(
 
 /// Generate or load a persistent device ID.
 /// Stored in ~/.opencarrier/device_id as a simple hex string.
-pub fn get_or_create_device_id(home_dir: &Path) -> Result<String> {
-    let path = home_dir.join("device_id");
+pub fn get_or_create_device_id(opencarrier_dir: &Path) -> Result<String> {
+    let path = opencarrier_dir.join("device_id");
     if path.exists() {
         let id = std::fs::read_to_string(&path)?.trim().to_string();
         if !id.is_empty() {
@@ -204,12 +199,66 @@ pub fn get_or_create_device_id(home_dir: &Path) -> Result<String> {
     Ok(id)
 }
 
-/// Read API key from the configured env var. Returns error if not set.
+/// Read API key from the configured env var. Falls back to reading ~/.opencarrier/.env directly.
 pub fn read_api_key(env_var: &str) -> Result<String> {
-    std::env::var(env_var).context(format!(
+    // Try env var first (set by dotenv::load_dotenv or std::env::set_var)
+    if let Ok(v) = std::env::var(env_var) {
+        if !v.trim().is_empty() {
+            return Ok(v);
+        }
+    }
+    // Fallback: read ~/.opencarrier/.env directly
+    let home = std::env::var("OPENCARRIER_HOME")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from));
+    if let Some(home) = home {
+        let env_path = home.join(".opencarrier").join(".env");
+        if let Ok(content) = std::fs::read_to_string(&env_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if let Some(value) = trimmed.strip_prefix(&format!("{}=", env_var)) {
+                    let value = value.trim().to_string();
+                    if !value.is_empty() {
+                        // Also set it in the process env so subsequent calls don't need file read
+                        std::env::set_var(env_var, &value);
+                        return Ok(value);
+                    }
+                }
+            }
+        }
+    }
+    anyhow::bail!(
         "API Key 未设置。请设置环境变量 {} (从 Hub 的 Keys 页面获取)",
         env_var
-    ))
+    )
+}
+
+/// Resolve device_id from ~/.opencarrier/device_id, or generate a new one.
+/// Returns "unknown" if neither OPENCARRIER_HOME nor HOME is set.
+pub fn resolve_device_id() -> String {
+    let opencarrier_dir = std::env::var("OPENCARRIER_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".opencarrier")));
+    match opencarrier_dir {
+        Ok(dir) => get_or_create_device_id(&dir).unwrap_or_else(|_| "unknown".to_string()),
+        Err(_) => "unknown".to_string(),
+    }
+}
+
+/// Build an authenticated reqwest request builder with both Bearer token and X-Device-ID.
+fn hub_get(url: &str, api_key: &str) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .get(url)
+        .bearer_auth(api_key)
+        .header("X-Device-ID", resolve_device_id())
+}
+
+fn hub_post(url: &str, api_key: &str) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .post(url)
+        .bearer_auth(api_key)
+        .header("X-Device-ID", resolve_device_id())
 }
 
 /// Publish (upload) a clone .agx to Hub.
@@ -218,7 +267,7 @@ pub async fn publish(
     hub_url: &str,
     api_key: &str,
     agx_bytes: &[u8],
-    device_id: &str,
+    _device_id: &str,
     category: Option<&str>,
     visibility: Option<&str>,
 ) -> Result<String> {
@@ -241,10 +290,7 @@ pub async fn publish(
 
     tracing::info!("正在发布到 Hub ({} bytes / {:.1} KB)...", agx_bytes.len(), agx_bytes.len() as f64 / 1024.0);
 
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(api_key)
-        .header("X-Device-ID", device_id)
+    let resp = hub_post(&url, api_key)
         .json(&payload)
         .send()
         .await
@@ -282,9 +328,7 @@ pub async fn search_plugins(hub_url: &str, api_key: &str, query: &str) -> Result
         format!("{}/api/plugins?q={}&limit=20", base, urlencoding::encode(query))
     };
 
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .bearer_auth(api_key)
+    let resp = hub_get(&url, api_key)
         .send()
         .await
         .context("无法连接 Hub")?;
@@ -329,9 +373,7 @@ pub async fn install_plugin(
 
     tracing::info!("正在从 Hub 下载插件 {} (platform={})...", name, platform);
 
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .bearer_auth(api_key)
+    let resp = hub_get(&url, api_key)
         .send()
         .await
         .context("无法连接 Hub")?;

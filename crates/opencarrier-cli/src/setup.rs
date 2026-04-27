@@ -1,8 +1,11 @@
-//! First-run setup: register with Hub, obtain API key, write config, enable auth.
+//! First-run setup: device-based auto-registration with Hub.
+//!
+//! No user interaction needed. Generates random device_id + credentials,
+//! registers with Hub, obtains API key, writes config, enables auto-login.
+//! User can change username/password later in the dashboard UI.
 
 use colored::Colorize;
 use serde::Deserialize;
-use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 #[derive(Deserialize)]
@@ -15,52 +18,45 @@ struct KeyResponse {
     key: String,
 }
 
-/// Run the first-run setup flow. Returns (username, password) if config was written.
+/// Generate a random alphanumeric string of the given length.
+fn random_string(len: usize) -> String {
+    use rand::Rng;
+    let charset = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::thread_rng();
+    (0..len).map(|_| charset[rng.gen_range(0..charset.len())] as char).collect()
+}
+
+/// Generate a random password (alphanumeric, mixed case + digits).
+fn random_password(len: usize) -> String {
+    use rand::Rng;
+    let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::thread_rng();
+    (0..len).map(|_| charset[rng.gen_range(0..charset.len())] as char).collect()
+}
+
+/// Run the first-run setup flow. Zero interaction — device is identity.
+/// Returns (username, password) if config was written.
 pub fn run_first_time_setup(opencarrier_dir: &Path, hub_url: &str) -> Result<(String, String), String> {
     println!();
-    println!("  {} {}", ">>".bright_cyan().bold(), "First-time Setup".bold());
-    println!("  {}", "This will create a Hub account and configure OpenCarrier.".dimmed());
+    println!("  {} {}", ">>".bright_cyan().bold(), "Setting up OpenCarrier".bold());
+    println!("  {}", "Registering device with Hub...".dimmed());
     println!();
 
-    let stdin = io::stdin();
-    let mut input = String::new();
+    // Generate device_id → saved to ~/.opencarrier/device_id
+    let device_id = opencarrier_clone::hub::get_or_create_device_id(opencarrier_dir)
+        .unwrap_or_else(|_| random_string(32));
 
-    // Username
-    print!("  {}: ", "Username".bold());
-    io::stdout().flush().map_err(|e| e.to_string())?;
-    input.clear();
-    stdin.lock().read_line(&mut input).map_err(|e| e.to_string())?;
-    let username = input.trim().to_string();
-    if username.is_empty() {
-        return Err("Username cannot be empty".to_string());
-    }
+    // Auto-generate credentials based on device_id
+    let device_short = &device_id[..8.min(device_id.len())];
+    let username = format!("dev_{}", device_short);
+    let password = random_password(16);
+    let email = format!("{}@device.opencarrier", username);
 
-    // Email
-    print!("  {}: ", "Email".bold());
-    io::stdout().flush().map_err(|e| e.to_string())?;
-    input.clear();
-    stdin.lock().read_line(&mut input).map_err(|e| e.to_string())?;
-    let email = input.trim().to_string();
-    if email.is_empty() {
-        return Err("Email cannot be empty".to_string());
-    }
-
-    // Password
-    print!("  {}: ", "Password".bold());
-    io::stdout().flush().map_err(|e| e.to_string())?;
-    input.clear();
-    stdin.lock().read_line(&mut input).map_err(|e| e.to_string())?;
-    let password = input.trim().to_string();
-    if password.len() < 6 {
-        return Err("Password must be at least 6 characters".to_string());
-    }
-
-    println!();
     println!("  {} Registering with {}...", "-".bright_yellow(), hub_url);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let api_key: String = rt.block_on(async {
-        register_and_get_key(hub_url, &username, &email, &password).await
+        register_and_get_key(hub_url, &username, &email, &password, &device_id).await
     })?;
 
     // Save API key to .env
@@ -95,13 +91,8 @@ session_ttl_hours = 168
     // Load .env into current process so the kernel picks it up
     std::env::set_var("OPENCLONE_HUB_KEY", &api_key);
 
-    println!("  {} Account created and API key saved!", "\u{2714}".bright_green());
-    let masked = if api_key.len() > 6 {
-        format!("{}***", &api_key[..6])
-    } else {
-        "***".to_string()
-    };
-    println!("  {} API key: {}", "\u{2714}".bright_green(), masked);
+    println!("  {} Device registered and API key saved!", "\u{2714}".bright_green());
+    println!("  {} Username: {}", "\u{2714}".bright_green(), username);
     println!();
 
     Ok((username, password))
@@ -158,6 +149,7 @@ async fn register_and_get_key(
     username: &str,
     email: &str,
     password: &str,
+    device_id: &str,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let base = hub_url.trim_end_matches('/');
@@ -178,18 +170,19 @@ async fn register_and_get_key(
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::CONFLICT {
-            println!("  {} Account exists, logging in...", "-".bright_yellow());
-            return login_and_get_key(hub_url, username, password).await;
+            println!("  {} Device already registered, logging in...", "-".bright_yellow());
+            return login_and_get_key(hub_url, username, password, device_id).await;
         }
         return Err(format!("Registration failed ({}): {}", status, body));
     }
 
     let auth: AuthResponse = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
 
-    // Create API key
+    // Create API key (bound to this device)
     let key_resp = client
         .post(format!("{}/api/keys", base))
         .bearer_auth(&auth.token)
+        .header("X-Device-ID", device_id)
         .json(&serde_json::json!({ "name": "opencarrier" }))
         .send()
         .await
@@ -208,6 +201,7 @@ async fn login_and_get_key(
     hub_url: &str,
     username: &str,
     password: &str,
+    device_id: &str,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let base = hub_url.trim_end_matches('/');
@@ -250,10 +244,11 @@ async fn login_and_get_key(
         }
     }
 
-    // Create new API key
+    // Create new API key (bound to this device)
     let key_resp = client
         .post(format!("{}/api/keys", base))
         .bearer_auth(&auth.token)
+        .header("X-Device-ID", device_id)
         .json(&serde_json::json!({ "name": "opencarrier" }))
         .send()
         .await
