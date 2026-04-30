@@ -219,7 +219,7 @@ impl StructuredStore {
         let identity_json = serde_json::to_string(&entry.identity)
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
 
-        let tenant_id_str = entry.tenant_id.as_deref().unwrap_or("");
+        let tenant_id_str = entry.tenant_id.as_str();
 
         conn.execute(
             "INSERT INTO agents (id, name, manifest, state, created_at, updated_at, session_id, identity, tenant_id)
@@ -310,7 +310,7 @@ impl StructuredStore {
                 let identity = identity_str
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
-                let tenant_id = tenant_id_str.filter(|s| !s.is_empty());
+                let tenant_id = tenant_id_str.unwrap_or_default();
                 Ok(Some(AgentEntry {
                     id: agent_id,
                     name,
@@ -481,7 +481,7 @@ impl StructuredStore {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
 
-            let tenant_id = tid_str.filter(|s| !s.is_empty());
+            let tenant_id = tid_str.unwrap_or_default();
 
             agents.push(AgentEntry {
                 id: agent_id,

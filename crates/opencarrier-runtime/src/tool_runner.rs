@@ -1836,9 +1836,10 @@ fn resolve_target_workspace(
         .ok_or("Missing 'target' parameter (target clone name)")?;
 
     // Tenant isolation: single tenant-scoped lookup for both workspace and tenant check
-    let caller_tenant = kh.get_agent_tenant_id(caller_id);
+    let caller_tenant = kh.get_agent_tenant_id(caller_id)
+        .ok_or("Cannot determine caller tenant")?;
     let target_workspace = kh
-        .resolve_agent_workspace_in_tenant(target, caller_tenant.as_deref())
+        .resolve_agent_workspace_in_tenant(target, &caller_tenant)
         .ok_or_else(|| format!("Agent '{}' not found in your tenant or has no workspace", target))?;
 
     let path = PathBuf::from(&target_workspace);
@@ -2240,8 +2241,9 @@ async fn tool_clone_install(
         .map_err(|e| format!("Failed to pack .agx: {e}"))?;
 
     // Install via kernel — inherit tenant_id from the calling agent
-    let tenant_id = caller_agent_id.and_then(|aid| kernel.get_agent_tenant_id(aid));
-    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes, tenant_id.as_deref()).await?;
+    let tenant_id = caller_agent_id.and_then(|aid| kernel.get_agent_tenant_id(aid))
+        .ok_or("Cannot determine caller tenant")?;
+    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes, &tenant_id).await?;
 
     Ok(format!(
         "Clone '{}' installed successfully. Agent ID: {}. {} knowledge files, {} skills, {} agents.",
@@ -2266,7 +2268,7 @@ async fn tool_clone_export(
     // Tenant check: verify caller owns this clone
     let caller_tenant = kernel.get_agent_tenant_id(caller_id)
         .ok_or("Cannot determine caller tenant")?;
-    kernel.resolve_agent_workspace_in_tenant(&name, Some(&caller_tenant))
+    kernel.resolve_agent_workspace_in_tenant(&name, &caller_tenant)
         .ok_or_else(|| format!("Clone '{}' not found in your tenant", name))?;
 
     let agx_bytes = kernel.clone_export(&name)?;
@@ -2293,7 +2295,7 @@ async fn tool_clone_publish(
     // Tenant check: verify caller owns this clone
     let caller_tenant = kernel.get_agent_tenant_id(caller_id)
         .ok_or("Cannot determine caller tenant")?;
-    kernel.resolve_agent_workspace_in_tenant(&name, Some(&caller_tenant))
+    kernel.resolve_agent_workspace_in_tenant(&name, &caller_tenant)
         .ok_or_else(|| format!("Clone '{}' not found in your tenant", name))?;
 
     // Export the clone first
@@ -2638,11 +2640,13 @@ async fn tool_agent_spawn(
     let manifest_toml = input["manifest_toml"]
         .as_str()
         .ok_or("Missing 'manifest_toml' parameter")?;
-    let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await?;
+    let tenant_id = parent_id.and_then(|pid| kh.get_agent_tenant_id(pid))
+        .ok_or("Cannot determine tenant for spawn")?;
+    let (id, name) = kh.spawn_agent(manifest_toml, parent_id, &tenant_id).await?;
     // Inherit parent's tenant
     if let Some(pid) = parent_id {
         if let Some(tid) = kh.get_agent_tenant_id(pid) {
-            let _ = kh.set_agent_tenant(&id, Some(&tid));
+            let _ = kh.set_agent_tenant(&id, &tid);
         }
     }
     Ok(format!(
@@ -2655,8 +2659,9 @@ fn tool_agent_list(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
-    let agents = kh.list_agents(tenant_id.as_deref());
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+        .ok_or("Cannot determine caller tenant")?;
+    let agents = kh.list_agents(&tenant_id);
     if agents.is_empty() {
         return Ok("No agents currently running.".to_string());
     }
@@ -2755,8 +2760,9 @@ fn tool_agent_find(
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
-    let agents = kh.find_agents(query, tenant_id.as_deref());
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+        .ok_or("Cannot determine caller tenant")?;
+    let agents = kh.find_agents(query, &tenant_id);
     if agents.is_empty() {
         return Ok(format!("No agents found matching '{query}'."));
     }
@@ -2800,8 +2806,9 @@ async fn tool_task_claim(
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    let tenant_id = kh.get_agent_tenant_id(agent_id);
-    match kh.task_claim(agent_id, tenant_id.as_deref()).await? {
+    let tenant_id = kh.get_agent_tenant_id(agent_id)
+        .ok_or("Cannot determine caller tenant")?;
+    match kh.task_claim(agent_id, &tenant_id).await? {
         Some(task) => {
             serde_json::to_string_pretty(&task).map_err(|e| format!("Serialize error: {e}"))
         }
@@ -2822,8 +2829,9 @@ async fn tool_task_complete(
     let result = input["result"]
         .as_str()
         .ok_or("Missing 'result' parameter")?;
-    let tenant_id = kh.get_agent_tenant_id(caller_id);
-    kh.task_complete(task_id, result, tenant_id.as_deref()).await?;
+    let tenant_id = kh.get_agent_tenant_id(caller_id)
+        .ok_or("Cannot determine caller tenant")?;
+    kh.task_complete(task_id, result, &tenant_id).await?;
     Ok(format!("Task {task_id} marked as completed."))
 }
 
@@ -2833,9 +2841,10 @@ async fn tool_task_list(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+        .ok_or("Cannot determine caller tenant")?;
     let status = input["status"].as_str();
-    let tasks = kh.task_list(status, tenant_id.as_deref()).await?;
+    let tasks = kh.task_list(status, &tenant_id).await?;
     if tasks.is_empty() {
         return Ok("No tasks found.".to_string());
     }
@@ -2907,7 +2916,8 @@ async fn tool_knowledge_add_entity(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+        .ok_or("Cannot determine caller tenant")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let entity_type_str = input["entity_type"]
         .as_str()
@@ -2927,7 +2937,7 @@ async fn tool_knowledge_add_entity(
         updated_at: chrono::Utc::now(),
     };
 
-    let id = kh.knowledge_add_entity(entity, tenant_id.as_deref()).await?;
+    let id = kh.knowledge_add_entity(entity, &tenant_id).await?;
     Ok(format!("Entity '{name}' added with ID: {id}"))
 }
 
@@ -2937,7 +2947,8 @@ async fn tool_knowledge_add_relation(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+        .ok_or("Cannot determine caller tenant")?;
     let source = input["source"]
         .as_str()
         .ok_or("Missing 'source' parameter")?;
@@ -2963,7 +2974,7 @@ async fn tool_knowledge_add_relation(
         created_at: chrono::Utc::now(),
     };
 
-    let id = kh.knowledge_add_relation(relation, tenant_id.as_deref()).await?;
+    let id = kh.knowledge_add_relation(relation, &tenant_id).await?;
     Ok(format!(
         "Relation '{source}' --[{relation_str}]--> '{target}' added with ID: {id}"
     ))
@@ -2975,7 +2986,8 @@ async fn tool_knowledge_query(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id));
+    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+        .ok_or("Cannot determine caller tenant")?;
     let source = input["source"].as_str().map(|s| s.to_string());
     let target = input["target"].as_str().map(|s| s.to_string());
     let relation = input["relation"].as_str().map(parse_relation_type);
@@ -2988,7 +3000,7 @@ async fn tool_knowledge_query(
         max_depth,
     };
 
-    let matches = kh.knowledge_query(pattern, tenant_id.as_deref()).await?;
+    let matches = kh.knowledge_query(pattern, &tenant_id).await?;
     if matches.is_empty() {
         return Ok("No matching knowledge graph entries found.".to_string());
     }

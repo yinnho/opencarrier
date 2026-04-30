@@ -80,7 +80,7 @@ memory_write = ["self.*"]
     )
     .unwrap();
 
-    let agent_id = kernel.spawn_agent(manifest).expect("Agent should spawn");
+    let agent_id = kernel.spawn_agent(manifest, "test-tenant").expect("Agent should spawn");
 
     // Send message
     let result = kernel
@@ -158,8 +158,8 @@ memory_write = ["self.*"]
     )
     .unwrap();
 
-    let id1 = kernel.spawn_agent(manifest1).expect("Agent 1 should spawn");
-    let id2 = kernel.spawn_agent(manifest2).expect("Agent 2 should spawn");
+    let id1 = kernel.spawn_agent(manifest1, "test-tenant").expect("Agent 1 should spawn");
+    let id2 = kernel.spawn_agent(manifest2, "test-tenant").expect("Agent 2 should spawn");
 
     // Send messages to both
     let r1 = kernel

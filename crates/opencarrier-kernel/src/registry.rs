@@ -10,7 +10,7 @@ pub struct AgentRegistry {
     agents: DashMap<AgentId, AgentEntry>,
     /// Name index: (tenant_id, agent_name) → agent ID.
     /// Per-tenant uniqueness: same name allowed across different tenants.
-    name_index: DashMap<(Option<String>, String), AgentId>,
+    name_index: DashMap<(String, String), AgentId>,
     /// Tag index: tag → list of agent IDs.
     tag_index: DashMap<String, Vec<AgentId>>,
     /// Tenant index: tenant_id → list of agent IDs.
@@ -40,9 +40,7 @@ impl AgentRegistry {
         for tag in &entry.tags {
             self.tag_index.entry(tag.clone()).or_default().push(id);
         }
-        if let Some(ref tid) = entry.tenant_id {
-            self.tenant_index.entry(tid.clone()).or_default().push(id);
-        }
+        self.tenant_index.entry(entry.tenant_id.clone()).or_default().push(id);
         self.agents.insert(id, entry);
         Ok(())
     }
@@ -53,9 +51,8 @@ impl AgentRegistry {
     }
 
     /// Find an agent by name within a specific tenant scope.
-    /// Returns None if no agent with that name exists under the given tenant.
-    pub fn find_by_name_and_tenant(&self, name: &str, tenant_id: Option<&str>) -> Option<AgentEntry> {
-        let key = (tenant_id.map(|s| s.to_string()), name.to_string());
+    pub fn find_by_name_and_tenant(&self, name: &str, tenant_id: &str) -> Option<AgentEntry> {
+        let key = (tenant_id.to_string(), name.to_string());
         self.name_index
             .get(&key)
             .and_then(|id| self.agents.get(id.value()).map(|e| e.value().clone()))
@@ -64,7 +61,6 @@ impl AgentRegistry {
     /// Find an agent by name (global, returns first match).
     /// Prefer `find_by_name_and_tenant` for tenant-scoped lookups.
     pub fn find_by_name(&self, name: &str) -> Option<AgentEntry> {
-        // Scan name_index for any entry matching this name
         for entry in self.name_index.iter() {
             if entry.key().1 == name {
                 let id = entry.value();
@@ -75,8 +71,8 @@ impl AgentRegistry {
     }
 
     /// Check if an agent with the given name exists under a specific tenant.
-    pub fn exists_in_tenant(&self, name: &str, tenant_id: Option<&str>) -> bool {
-        let key = (tenant_id.map(|s| s.to_string()), name.to_string());
+    pub fn exists_in_tenant(&self, name: &str, tenant_id: &str) -> bool {
+        let key = (tenant_id.to_string(), name.to_string());
         self.name_index.contains_key(&key)
     }
 
@@ -115,10 +111,8 @@ impl AgentRegistry {
                 ids.retain(|&agent_id| agent_id != id);
             }
         }
-        if let Some(ref tid) = entry.tenant_id {
-            if let Some(mut ids) = self.tenant_index.get_mut(tid) {
-                ids.retain(|&agent_id| agent_id != id);
-            }
+        if let Some(mut ids) = self.tenant_index.get_mut(&entry.tenant_id) {
+            ids.retain(|&agent_id| agent_id != id);
         }
         Ok(entry)
     }
@@ -147,20 +141,17 @@ impl AgentRegistry {
         }
     }
 
-    /// Set the tenant_id on an agent entry (used after spawn to assign ownership).
-    pub fn set_tenant_id(&self, agent_id: AgentId, tenant_id: Option<String>) {
+    /// Update the tenant_id on an agent entry and re-index.
+    pub fn set_tenant_id(&self, agent_id: AgentId, tenant_id: String) {
         if let Some(mut entry) = self.agents.get_mut(&agent_id) {
             let old_tid = entry.tenant_id.clone();
             entry.tenant_id = tenant_id.clone();
-            // Update tenant_index
-            if let Some(ref old) = old_tid {
-                if let Some(mut ids) = self.tenant_index.get_mut(old) {
-                    ids.retain(|id| *id != agent_id);
-                }
+            // Remove from old tenant index
+            if let Some(mut ids) = self.tenant_index.get_mut(&old_tid) {
+                ids.retain(|id| *id != agent_id);
             }
-            if let Some(ref tid) = tenant_id {
-                self.tenant_index.entry(tid.clone()).or_default().push(agent_id);
-            }
+            // Add to new tenant index
+            self.tenant_index.entry(tenant_id).or_default().push(agent_id);
         }
     }
 
@@ -363,10 +354,10 @@ mod tests {
     use std::collections::HashMap;
 
     fn test_entry(name: &str) -> AgentEntry {
-        test_entry_with_tenant(name, None)
+        test_entry_with_tenant(name, "test-tenant")
     }
 
-    fn test_entry_with_tenant(name: &str, tenant_id: Option<&str>) -> AgentEntry {
+    fn test_entry_with_tenant(name: &str, tenant_id: &str) -> AgentEntry {
         AgentEntry {
             id: AgentId::new(),
             name: name.to_string(),
@@ -408,7 +399,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: tenant_id.map(|s| s.to_string()),
+            tenant_id: tenant_id.to_string(),
         }
     }
 
@@ -432,17 +423,17 @@ mod tests {
     #[test]
     fn test_duplicate_name_same_tenant() {
         let registry = AgentRegistry::new();
-        registry.register(test_entry_with_tenant("dup", Some("t1"))).unwrap();
-        assert!(registry.register(test_entry_with_tenant("dup", Some("t1"))).is_err());
+        registry.register(test_entry_with_tenant("dup", "t1")).unwrap();
+        assert!(registry.register(test_entry_with_tenant("dup", "t1")).is_err());
     }
 
     #[test]
     fn test_same_name_different_tenant() {
         let registry = AgentRegistry::new();
-        registry.register(test_entry_with_tenant("helper", Some("t1"))).unwrap();
-        registry.register(test_entry_with_tenant("helper", Some("t2"))).unwrap();
-        assert!(registry.find_by_name_and_tenant("helper", Some("t1")).is_some());
-        assert!(registry.find_by_name_and_tenant("helper", Some("t2")).is_some());
+        registry.register(test_entry_with_tenant("helper", "t1")).unwrap();
+        registry.register(test_entry_with_tenant("helper", "t2")).unwrap();
+        assert!(registry.find_by_name_and_tenant("helper", "t1").is_some());
+        assert!(registry.find_by_name_and_tenant("helper", "t2").is_some());
     }
 
     #[test]

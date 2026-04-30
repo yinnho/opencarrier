@@ -439,7 +439,7 @@ pub async fn create_bot(
             let agent_uuid = if uuid::Uuid::parse_str(v).is_ok() {
                 v.to_string()
             } else {
-                let agents = state.kernel.list_agents(None);
+                let agents = state.kernel.list_agents("");
                 match agents.iter().find(|a| a.name == v) {
                     Some(agent) => agent.id.clone(),
                     None => {
@@ -637,7 +637,7 @@ pub async fn bind_bot(
     let agent_uuid = if uuid::Uuid::parse_str(&agent_input).is_ok() {
         agent_input.clone()
     } else {
-        let agents = state.kernel.list_agents(None);
+        let agents = state.kernel.list_agents("");
         match agents.iter().find(|a| a.name == agent_input) {
             Some(agent) => agent.id.clone(),
             None => {

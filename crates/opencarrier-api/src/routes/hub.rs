@@ -150,7 +150,7 @@ pub async fn install_hub_template(
         }
     };
 
-    match state.kernel.clone_install(&name, &agx_bytes, target_tenant.as_deref()).await {
+    match state.kernel.clone_install(&name, &agx_bytes, target_tenant.as_deref().unwrap_or("")).await {
         Ok((agent_id, agent_name)) => (
             StatusCode::CREATED,
             Json(serde_json::json!({

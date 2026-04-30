@@ -61,7 +61,7 @@ mod tests {
                 input_tokens: 500,
                 output_tokens: 200,
                 tool_calls: 3,
-                tenant_id: None,
+                tenant_id: String::new(),
             })
             .unwrap();
 

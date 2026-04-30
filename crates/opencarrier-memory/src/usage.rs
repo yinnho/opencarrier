@@ -21,7 +21,7 @@ pub struct UsageRecord {
     /// Number of tool calls in this interaction.
     pub tool_calls: u32,
     /// Owning tenant ID (for multi-tenant isolation).
-    pub tenant_id: Option<String>,
+    pub tenant_id: String,
 }
 
 /// Summary of usage over a period.
@@ -81,7 +81,7 @@ impl UsageStore {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        let tenant_id_str = record.tenant_id.as_deref().unwrap_or("");
+        let tenant_id_str = record.tenant_id.as_str();
         conn.execute(
             "INSERT INTO usage_events (id, agent_id, timestamp, model, input_tokens, output_tokens, tool_calls, tenant_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -306,7 +306,7 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 50,
                 tool_calls: 2,
-                tenant_id: None,
+                tenant_id: String::new(),
             })
             .unwrap();
 
@@ -317,7 +317,7 @@ mod tests {
                 input_tokens: 500,
                 output_tokens: 200,
                 tool_calls: 1,
-                tenant_id: None,
+                tenant_id: String::new(),
             })
             .unwrap();
 
@@ -341,7 +341,7 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 50,
                 tool_calls: 0,
-                tenant_id: None,
+                tenant_id: String::new(),
             })
             .unwrap();
 
@@ -352,7 +352,7 @@ mod tests {
                 input_tokens: 200,
                 output_tokens: 100,
                 tool_calls: 1,
-                tenant_id: None,
+                tenant_id: String::new(),
             })
             .unwrap();
 
@@ -374,7 +374,7 @@ mod tests {
                     input_tokens: 100,
                     output_tokens: 50,
                     tool_calls: 0,
-                    tenant_id: None,
+                    tenant_id: String::new(),
                 })
                 .unwrap();
         }
@@ -386,7 +386,7 @@ mod tests {
                 input_tokens: 500,
                 output_tokens: 200,
                 tool_calls: 1,
-                tenant_id: None,
+                tenant_id: String::new(),
             })
             .unwrap();
 
@@ -410,7 +410,7 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 50,
                 tool_calls: 0,
-                tenant_id: None,
+                tenant_id: String::new(),
             })
             .unwrap();
 

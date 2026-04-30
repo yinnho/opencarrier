@@ -26,7 +26,7 @@ pub async fn comms_topology(
     } else {
         all_agents
             .into_iter()
-            .filter(|a| can_access(&ctx, a.tenant_id.as_deref()))
+            .filter(|a| can_access(&ctx, a.tenant_id.as_str()))
             .collect()
     };
 
@@ -259,7 +259,7 @@ pub async fn comms_events(
     } else {
         all_agents
             .into_iter()
-            .filter(|a| can_access(&ctx, a.tenant_id.as_deref()))
+            .filter(|a| can_access(&ctx, a.tenant_id.as_str()))
             .collect()
     };
 
@@ -359,7 +359,7 @@ pub async fn comms_send(
         Err(resp) => return resp,
     };
     if let Some(from_entry) = state.kernel.registry.get(from_id) {
-        if !can_access(&ctx, from_entry.tenant_id.as_deref()) {
+        if !can_access(&ctx, from_entry.tenant_id.as_str()) {
             return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied to source agent"})));
         }
     } else {
@@ -372,7 +372,7 @@ pub async fn comms_send(
         Err(resp) => return resp,
     };
     if let Some(to_entry) = state.kernel.registry.get(to_id) {
-        if !can_access(&ctx, to_entry.tenant_id.as_deref()) {
+        if !can_access(&ctx, &to_entry.tenant_id) {
             return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied to target agent"})));
         }
     } else {

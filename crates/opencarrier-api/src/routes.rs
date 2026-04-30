@@ -57,7 +57,7 @@ pub async fn status(
     let agents_owned = if ctx.is_admin() {
         all_agents
     } else {
-        all_agents.into_iter().filter(|e| can_access(&ctx, e.tenant_id.as_deref())).collect()
+        all_agents.into_iter().filter(|e| can_access(&ctx, e.tenant_id.as_str())).collect()
     };
     let agents: Vec<serde_json::Value> = agents_owned
         .into_iter()

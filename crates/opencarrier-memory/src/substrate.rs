@@ -723,12 +723,13 @@ mod tests {
                 "Check the auth module for issues",
                 Some("auditor"),
                 Some("orchestrator"),
+                None,
             )
             .await
             .unwrap();
         assert!(!id.is_empty());
 
-        let tasks = substrate.task_list(Some("pending")).await.unwrap();
+        let tasks = substrate.task_list(Some("pending"), None).await.unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "Review code");
         assert_eq!(tasks[0]["assigned_to"], "auditor");
@@ -744,12 +745,13 @@ mod tests {
                 "Security audit the /api/login endpoint",
                 Some("auditor"),
                 None,
+                None,
             )
             .await
             .unwrap();
 
         // Claim the task
-        let claimed = substrate.task_claim("auditor").await.unwrap();
+        let claimed = substrate.task_claim("auditor", None).await.unwrap();
         assert!(claimed.is_some());
         let claimed = claimed.unwrap();
         assert_eq!(claimed["id"], task_id);
@@ -757,12 +759,12 @@ mod tests {
 
         // Complete the task
         substrate
-            .task_complete(&task_id, "No vulnerabilities found")
+            .task_complete(&task_id, "No vulnerabilities found", None)
             .await
             .unwrap();
 
         // Verify it shows as completed
-        let tasks = substrate.task_list(Some("completed")).await.unwrap();
+        let tasks = substrate.task_list(Some("completed"), None).await.unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["result"], "No vulnerabilities found");
     }
@@ -770,7 +772,7 @@ mod tests {
     #[tokio::test]
     async fn test_task_claim_empty() {
         let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
-        let claimed = substrate.task_claim("nobody").await.unwrap();
+        let claimed = substrate.task_claim("nobody", None).await.unwrap();
         assert!(claimed.is_none());
     }
 }

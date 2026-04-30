@@ -157,16 +157,20 @@ pub async fn spawn_agent(
     };
 
     let name = manifest.name.clone();
-    match state.kernel.spawn_agent(manifest) {
+    // Determine target tenant: admin can override, otherwise use context
+    let target_tenant = if ctx.is_admin() {
+        req.tenant_id.clone().or_else(|| ctx.tenant_id.clone())
+    } else {
+        ctx.tenant_id.clone()
+    };
+    let target_tenant_str = match target_tenant {
+        Some(ref tid) => tid.as_str(),
+        None => "",
+    };
+    match state.kernel.spawn_agent(manifest, target_tenant_str) {
         Ok(id) => {
-            // Determine target tenant: admin can override, otherwise use context
-            let target_tenant = if ctx.is_admin() {
-                req.tenant_id.clone().or_else(|| ctx.tenant_id.clone())
-            } else {
-                ctx.tenant_id.clone()
-            };
-            if target_tenant.is_some() {
-                state.kernel.registry.set_tenant_id(id, target_tenant);
+            if let Some(tid) = target_tenant {
+                state.kernel.registry.set_tenant_id(id, tid);
             }
             (
                 StatusCode::CREATED,
@@ -813,8 +817,9 @@ pub async fn clone_agent(
     cloned_manifest.name = req.new_name.clone();
     cloned_manifest.workspace = None; // Let kernel assign a new workspace
 
-    // Spawn the cloned agent
-    let new_id = match state.kernel.spawn_agent(cloned_manifest) {
+    // Spawn the cloned agent — inherit source agent's tenant
+    let target_tenant_str = source.tenant_id.as_str();
+    let new_id = match state.kernel.spawn_agent(cloned_manifest, target_tenant_str) {
         Ok(id) => id,
         Err(e) => {
             return (
@@ -825,7 +830,9 @@ pub async fn clone_agent(
     };
 
     // Assign tenant ownership — clone inherits source agent's tenant
-    state.kernel.registry.set_tenant_id(new_id, ctx.tenant_id.clone());
+    if let Some(tid) = ctx.tenant_id.clone() {
+        state.kernel.registry.set_tenant_id(new_id, tid);
+    }
 
     // Copy workspace files from source to destination
     let new_entry = state.kernel.registry.get(new_id);

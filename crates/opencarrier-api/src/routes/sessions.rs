@@ -219,7 +219,7 @@ pub async fn delete_session(
     match state.kernel.memory.get_session(session_id) {
         Ok(Some(session)) => {
             if let Some(entry) = state.kernel.registry.get(session.agent_id) {
-                if !can_access(&ctx, entry.tenant_id.as_deref()) {
+                if !can_access(&ctx, &entry.tenant_id) {
                     return (
                         StatusCode::FORBIDDEN,
                         Json(serde_json::json!({"error": "Access denied"})),
@@ -274,7 +274,7 @@ pub async fn set_session_label(
     match state.kernel.memory.get_session(session_id) {
         Ok(Some(session)) => {
             if let Some(entry) = state.kernel.registry.get(session.agent_id) {
-                if !can_access(&ctx, entry.tenant_id.as_deref()) {
+                if !can_access(&ctx, &entry.tenant_id) {
                     return (
                         StatusCode::FORBIDDEN,
                         Json(serde_json::json!({"error": "Access denied"})),

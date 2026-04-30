@@ -99,7 +99,16 @@ pub async fn install_clone(
     } else {
         ctx.tenant_id.as_deref()
     };
-    if state.kernel.registry.find_by_name_and_tenant(&clone_data.name, target_tenant_for_check).is_some() {
+    let target_tenant_str = match target_tenant_for_check {
+        Some(tid) => tid,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Tenant ID required"})),
+            );
+        }
+    };
+    if state.kernel.registry.find_by_name_and_tenant(&clone_data.name, target_tenant_str).is_some() {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": format!("Agent '{}' already exists in this tenant", clone_data.name)})),
@@ -107,14 +116,10 @@ pub async fn install_clone(
     }
 
     // Determine target tenant: admin can override, otherwise use context
-    let target_tenant = if ctx.is_admin() {
-        req.tenant_id.as_deref().or(ctx.tenant_id.as_deref())
-    } else {
-        ctx.tenant_id.as_deref()
-    };
+    // Reuse target_tenant_str from collision check above
 
     // Create workspace directory (tenant-scoped)
-    let workspace_dir = state.kernel.config.tenant_workspaces_dir(target_tenant).join(&clone_data.name);
+    let workspace_dir = state.kernel.config.tenant_workspaces_dir(target_tenant_str).join(&clone_data.name);
     if workspace_dir.exists() {
         return (
             StatusCode::CONFLICT,
@@ -139,7 +144,7 @@ pub async fn install_clone(
     let name = manifest.name.clone();
     let warnings = clone_data.security_warnings.clone();
 
-    match state.kernel.spawn_agent_with_parent(manifest, None, None, target_tenant) {
+    match state.kernel.spawn_agent_with_parent(manifest, None, None, target_tenant_str) {
         Ok(id) => {
             tracing::info!("Clone '{}' installed and spawned: {}", name, id);
             (
@@ -169,8 +174,10 @@ pub async fn list_clones(
     let ctx = get_tenant_ctx(&extensions);
     let agents = if ctx.is_admin() {
         state.kernel.registry.list()
+    } else if let Some(ref tid) = ctx.tenant_id {
+        state.kernel.registry.list_by_tenant(tid)
     } else {
-        state.kernel.registry.list_by_tenant(ctx.tenant_id.as_deref().unwrap_or(""))
+        vec![]
     };
     let clones: Vec<serde_json::Value> = agents
         .into_iter()
@@ -203,14 +210,14 @@ pub async fn start_clone(
         state.kernel.registry.find_by_name(&name)
     } else {
         ctx.tenant_id.as_ref().and_then(|tid| {
-            state.kernel.registry.find_by_name_and_tenant(&name, Some(tid.as_str()))
+            state.kernel.registry.find_by_name_and_tenant(&name, tid.as_str())
         })
     };
     let entry = match entry {
         Some(e) => e,
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
-    if !can_access(&ctx, entry.tenant_id.as_deref()) {
+    if !can_access(&ctx, entry.tenant_id.as_str()) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
     }
 
@@ -234,14 +241,14 @@ pub async fn stop_clone(
         state.kernel.registry.find_by_name(&name)
     } else {
         ctx.tenant_id.as_ref().and_then(|tid| {
-            state.kernel.registry.find_by_name_and_tenant(&name, Some(tid.as_str()))
+            state.kernel.registry.find_by_name_and_tenant(&name, tid.as_str())
         })
     };
     let entry = match entry {
         Some(e) => e,
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
-    if !can_access(&ctx, entry.tenant_id.as_deref()) {
+    if !can_access(&ctx, entry.tenant_id.as_str()) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
     }
 
@@ -670,14 +677,14 @@ pub async fn uninstall_clone(
         state.kernel.registry.find_by_name(&name)
     } else {
         ctx.tenant_id.as_ref().and_then(|tid| {
-            state.kernel.registry.find_by_name_and_tenant(&name, Some(tid.as_str()))
+            state.kernel.registry.find_by_name_and_tenant(&name, tid.as_str())
         })
     };
     let entry = match entry {
         Some(e) => e,
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
     };
-    if !can_access(&ctx, entry.tenant_id.as_deref()) {
+    if !can_access(&ctx, entry.tenant_id.as_str()) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
     }
 

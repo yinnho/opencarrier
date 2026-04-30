@@ -56,7 +56,7 @@ pub fn parse_and_get_agent_with_tenant(
     ctx: &opencarrier_types::tenant::TenantContext,
 ) -> Result<(AgentId, AgentEntry), (StatusCode, Json<serde_json::Value>)> {
     let (agent_id, entry) = parse_and_get_agent(id, registry)?;
-    if !can_access(ctx, entry.tenant_id.as_deref()) {
+    if !can_access(ctx, &entry.tenant_id) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
@@ -79,7 +79,7 @@ pub fn resolve_agent_id_with_tenant(
     // Try UUID first
     if let Ok(id) = id_or_name.parse::<AgentId>() {
         let entry = get_agent_or_404(registry, &id)?;
-        if !can_access(ctx, entry.tenant_id.as_deref()) {
+        if !can_access(ctx, &entry.tenant_id) {
             return Err((
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
@@ -91,14 +91,15 @@ pub fn resolve_agent_id_with_tenant(
     let entry = if ctx.is_admin() {
         registry.find_by_name(id_or_name)
     } else {
-        ctx.tenant_id.as_ref().and_then(|tid| {
-            registry.find_by_name_and_tenant(id_or_name, Some(tid.as_str()))
-        })
+        let tid = ctx.tenant_id.as_deref().ok_or_else(|| {
+            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Authentication required"})))
+        })?;
+        registry.find_by_name_and_tenant(id_or_name, tid)
     }.ok_or_else(|| (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({"error": format!("Agent not found: {id_or_name}")})),
     ))?;
-    if !can_access(ctx, entry.tenant_id.as_deref()) {
+    if !can_access(ctx, &entry.tenant_id) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
@@ -139,14 +140,15 @@ pub fn get_clone_workspace_with_tenant(
     let entry = if ctx.is_admin() {
         registry.find_by_name(name)
     } else {
-        ctx.tenant_id.as_ref().and_then(|tid| {
-            registry.find_by_name_and_tenant(name, Some(tid.as_str()))
-        })
+        let tid = ctx.tenant_id.as_deref().ok_or_else(|| {
+            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Authentication required"})))
+        })?;
+        registry.find_by_name_and_tenant(name, tid)
     }.ok_or_else(|| (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
     ))?;
-    if !can_access(ctx, entry.tenant_id.as_deref()) {
+    if !can_access(ctx, &entry.tenant_id) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
@@ -171,14 +173,13 @@ pub fn get_tenant_ctx(extensions: &axum::http::Extensions) -> opencarrier_types:
 
 /// Helper: check if the requester can access a resource owned by `resource_tenant_id`.
 /// Admin can access everything. Tenants can only access their own resources.
-pub fn can_access(ctx: &opencarrier_types::tenant::TenantContext, resource_tenant_id: Option<&str>) -> bool {
+pub fn can_access(ctx: &opencarrier_types::tenant::TenantContext, resource_tenant_id: &str) -> bool {
     if ctx.is_admin() {
         return true;
     }
-    match (&ctx.tenant_id, resource_tenant_id) {
-        (Some(tid), Some(rid)) => tid == rid,
-        (Some(_), None) => false, // tenant can't access global resources
-        (None, _) => false,        // deny — missing tenant context is not admin
+    match &ctx.tenant_id {
+        Some(tid) => tid == resource_tenant_id,
+        None => false, // deny — missing tenant context is not admin
     }
 }
 
