@@ -2,14 +2,14 @@
 <h3 align="center">分身操作系统 — Agent Operating System</h3>
 
 <p align="center">
-  Open-source Agent OS built in Rust. 9 crates. 1500+ tests.<br/>
+  Open-source Agent OS built in Rust. 10 crates. 1493 tests.<br/>
   <strong>分身 + 大脑 + 工具 + MCP + 记忆 — 五层架构，一个二进制</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/tests-1500%2B-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-1493-brightgreen?style=flat-square" alt="Tests" />
 </p>
 
 ---
@@ -138,6 +138,7 @@ opencarrier-cli            CLI (init/start/agent/chat/config/mcp)
 opencarrier-lifecycle      分身生命周期: 进化, 编译, 健康, 评估, 版本
 opencarrier-clone          分身管理: Hub 下载, .agx 加载, workspace 安装
 opencarrier-skills         60 bundled skills
+opencarrier-plugin-sdk     Plugin SDK for external tool integrations
 ```
 
 ---
@@ -184,7 +185,7 @@ open http://localhost:4200
 
 ```bash
 cargo build --workspace --lib          # 编译
-cargo test --workspace                 # 1500+ tests
+cargo test --workspace                 # 1493 tests
 cargo clippy --workspace --all-targets -- -D warnings  # 0 warnings
 ```
 
