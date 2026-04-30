@@ -339,13 +339,11 @@ function app() {
       var adminOnlyPages = ['logs','comms','mcp','bots','brain','security','team'];
       var pageRedirects = {
         'chat': 'agents',
-        'templates': 'agents',
         'cron': 'tasks',
         'scheduler': 'tasks',
         'schedules': 'tasks',
         'memory': 'sessions',
         'audit': 'logs',
-        'settings': 'brain',
         'config': 'brain',
         'tenants': 'team'
       };
