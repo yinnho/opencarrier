@@ -163,7 +163,7 @@ OpenCarrier 把"平台能力"和"分身智能"彻底分离：
 | **核心概念** | 分身 = 数字实体 | Agent + Gateway | AIAgent Loop |
 | **自进化** | 系统级自动运行 | 无 | GEPA 自学习 |
 | **P2P 互联** | OFP 原生协议 | 无 | 无 |
-| **安全** | 16 层系统级 | Docker + 权限级联 | 权限分离 |
+| **安全** | 16 层系统级 | 权限级联 | 权限分离 |
 | **记忆** | SQLite + 语义 + 图谱 | Markdown 文件 | SQLite + FTS5 |
 
 **一句话**：OpenClaw 是"让 LLM 能调工具的本地聊天框架"，Hermes 是"会自己写技能的自学习代理"，OpenCarrier 是"运行数字实体的操作系统"。

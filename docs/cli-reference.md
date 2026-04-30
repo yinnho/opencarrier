@@ -26,12 +26,6 @@ cargo build --release -p opencarrier-cli
 # Binary: target/release/opencarrier (or opencarrier.exe on Windows)
 ```
 
-### Docker
-
-```bash
-docker run -it opencarrier/opencarrier:latest
-```
-
 ### Shell installer
 
 ```bash

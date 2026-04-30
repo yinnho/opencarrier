@@ -60,28 +60,6 @@ cd opencarrier
 cargo install --path crates/opencarrier-cli
 ```
 
-### Option 5: Docker
-
-```bash
-docker pull ghcr.io/RightNow-AI/opencarrier:latest
-
-docker run -d \
-  --name opencarrier \
-  -p 4200:4200 \
-  -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  -v opencarrier-data:/data \
-  ghcr.io/RightNow-AI/opencarrier:latest
-```
-
-Or use Docker Compose:
-
-```bash
-git clone https://github.com/RightNow-AI/opencarrier.git
-cd opencarrier
-# Set your API keys in environment or .env file
-docker compose up -d
-```
-
 ### Verify Installation
 
 ```bash

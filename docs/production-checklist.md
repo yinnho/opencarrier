@@ -133,24 +133,6 @@ curl -sSf https://raw.githubusercontent.com/RightNow-AI/opencarrier/main/scripts
 
 ---
 
-## 6. Verify Dockerfile Builds
-
-**Status:** VERIFY — the Dockerfile must produce a working image.
-
-```bash
-docker build -t opencarrier:local .
-docker run --rm opencarrier:local --version
-docker run --rm -p 4200:4200 -v opencarrier-data:/data opencarrier:local start
-```
-
-Confirm:
-- Binary runs and prints version
-- `start` command boots the kernel and API server
-- Port 4200 is accessible
-- `/data` volume persists between container restarts
-
----
-
 ## 7. Verify Install Scripts Locally
 
 **Status:** VERIFY before release.
@@ -174,11 +156,6 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 pwsh -NoProfile -Command "Get-Content scripts/install.ps1 | Out-Null"
 ```
 
-### Docker smoke test
-```bash
-docker build -f scripts/docker/install-smoke.Dockerfile .
-```
-
 ---
 
 ## 8. Write CHANGELOG.md for v0.1.0
@@ -192,7 +169,7 @@ The release workflow includes a link to `CHANGELOG.md` in every GitHub release b
 - Security systems (9 SOTA + 7 critical fixes)
 - Desktop app with auto-updater
 - Migration path from OpenClaw
-- Docker and CLI install options
+- CLI install options
 
 ---
 
@@ -218,8 +195,7 @@ This triggers the release workflow which:
 1. Builds desktop installers for 4 targets (Linux, macOS x86, macOS ARM, Windows)
 2. Generates signed `latest.json` for the auto-updater
 3. Builds CLI binaries for 5 targets
-4. Builds and pushes multi-arch Docker image
-5. Creates a GitHub Release with all artifacts
+4. Creates a GitHub Release with all artifacts
 
 ---
 
@@ -243,15 +219,6 @@ Visit: `https://github.com/RightNow-AI/opencarrier/releases/latest/download/late
 - [ ] Contains `signature` fields (not empty strings)
 - [ ] Contains download URLs for all platforms
 - [ ] Version matches the tag
-
-### Docker Image
-```bash
-docker pull ghcr.io/RightNow-AI/opencarrier:latest
-docker pull ghcr.io/RightNow-AI/opencarrier:0.1.0
-
-# Verify both architectures
-docker run --rm ghcr.io/RightNow-AI/opencarrier:latest --version
-```
 
 ### Desktop App Auto-Update (test with v0.1.1)
 1. Install v0.1.0 from the release
@@ -284,8 +251,7 @@ Step 1 (keygen) ──┬──> Step 2 (pubkey in config)
                          │
 Step 4 (icons) ──────────┤
 Step 5 (domain) ─────────┤
-Step 6 (Dockerfile) ─────┤
-Step 7 (install scripts) ┤
+Step 6 (install scripts) ┤
 Step 8 (CHANGELOG) ──────┘
                          │
                          v

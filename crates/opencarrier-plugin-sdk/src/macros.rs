@@ -1,7 +1,9 @@
 //! The `declare_plugin!` macro — auto-generates all C ABI exports.
 //!
 //! Plugin developers call `declare_plugin!(MyPluginType)` at the bottom of
-//! their `lib.rs` to generate the 12 `oc_*` exported functions.
+//! their `lib.rs` to generate the `oc_*` exported functions.
+//!
+//! All data crossing the FFI boundary uses JSON C strings for ABI stability.
 
 /// Declare a plugin type, generating all required `#[no_mangle] extern "C"` exports.
 ///
@@ -24,15 +26,11 @@ macro_rules! declare_plugin {
 
         struct _OcChannelEntry {
             adapter: Box<dyn $crate::ChannelAdapter>,
-            channel_type_c: CString,
-            name_c: CString,
         }
 
         struct _OcToolEntry {
             provider: Box<dyn $crate::ToolProvider>,
-            name_c: CString,
-            description_c: CString,
-            parameters_json_c: CString,
+            name: String,
         }
 
         struct _OcState {
@@ -41,6 +39,8 @@ macro_rules! declare_plugin {
             channels: Vec<_OcChannelEntry>,
             tools: Vec<_OcToolEntry>,
             context: $crate::PluginContext,
+            channels_json: CString,
+            tools_json: CString,
         }
 
         static mut _OC_STATE: *mut _OcState = ptr::null_mut();
@@ -74,7 +74,7 @@ macro_rules! declare_plugin {
         // ------------------------------------------------------------------
         #[no_mangle]
         pub extern "C" fn oc_plugin_abi_version() -> u32 {
-            opencarrier_types::plugin::PLUGIN_ABI_VERSION
+            $crate::PLUGIN_ABI_VERSION
         }
 
         // ------------------------------------------------------------------
@@ -84,7 +84,7 @@ macro_rules! declare_plugin {
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub extern "C" fn oc_plugin_init(
             config_json: *const c_char,
-            message_cb: opencarrier_types::plugin::FfiMessageCallback,
+            message_cb: $crate::FfiJsonCallback,
             user_data: *mut c_void,
         ) -> *mut c_void {
             if config_json.is_null() {
@@ -97,7 +97,7 @@ macro_rules! declare_plugin {
                     .into_owned()
             };
 
-            let config: opencarrier_types::plugin::PluginConfig =
+            let config: $crate::PluginConfig =
                 match serde_json::from_str(&config_str) {
                     Ok(c) => c,
                     Err(_) => return ptr::null_mut(),
@@ -113,37 +113,47 @@ macro_rules! declare_plugin {
             // Collect channels
             let channel_adapters = <$plugin_type as $crate::Plugin>::channels(&plugin);
             let mut channels = Vec::with_capacity(channel_adapters.len());
+            let mut channel_descs = Vec::with_capacity(channel_adapters.len());
             for adapter in channel_adapters {
-                let channel_type_c = CString::new(adapter.channel_type()).unwrap_or_default();
-                let name_c = CString::new(adapter.name()).unwrap_or_default();
-                channels.push(_OcChannelEntry {
-                    adapter,
-                    channel_type_c,
-                    name_c,
+                channel_descs.push($crate::ChannelDescriptor {
+                    channel_type: adapter.channel_type().to_string(),
+                    name: adapter.name().to_string(),
                 });
+                channels.push(_OcChannelEntry { adapter });
             }
+
+            let channels_json = CString::new(
+                serde_json::to_string(&channel_descs).unwrap_or_else(|_| "[]".to_string())
+            ).unwrap_or_default();
 
             // Collect tools
             let tool_providers = <$plugin_type as $crate::Plugin>::tools(&plugin);
             let mut tools = Vec::with_capacity(tool_providers.len());
+            let mut tool_defs = Vec::with_capacity(tool_providers.len());
             for provider in tool_providers {
                 let def = provider.definition();
-                let name_c = CString::new(def.name).unwrap_or_default();
-                let description_c = CString::new(def.description).unwrap_or_default();
-                let parameters_json_c = CString::new(def.parameters_json).unwrap_or_default();
+                tool_defs.push($crate::PluginToolDef {
+                    name: def.name.clone(),
+                    description: def.description.clone(),
+                    parameters_json: def.parameters_json.clone(),
+                });
                 tools.push(_OcToolEntry {
                     provider,
-                    name_c,
-                    description_c,
-                    parameters_json_c,
+                    name: def.name,
                 });
             }
+
+            let tools_json = CString::new(
+                serde_json::to_string(&tool_defs).unwrap_or_else(|_| "[]".to_string())
+            ).unwrap_or_default();
 
             let state = Box::new(_OcState {
                 plugin,
                 channels,
                 tools,
                 context: ctx,
+                channels_json,
+                tools_json,
             });
             let state_ptr = Box::into_raw(state);
 
@@ -164,125 +174,42 @@ macro_rules! declare_plugin {
             unsafe {
                 let state = Box::from_raw(handle as *mut _OcState);
                 <$plugin_type as $crate::Plugin>::stop(&state.plugin);
-                // state dropped here
                 _OC_STATE = ptr::null_mut();
             }
         }
 
         // ------------------------------------------------------------------
-        // 6. oc_plugin_channels
+        // 6. oc_plugin_channels  (JSON)
         // ------------------------------------------------------------------
         #[no_mangle]
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
-        pub extern "C" fn oc_plugin_channels(
-            handle: *mut c_void,
-            out_channels: *mut *mut opencarrier_types::plugin::FfiChannelInfo,
-        ) -> u32 {
+        pub extern "C" fn oc_plugin_channels(handle: *mut c_void) -> *const c_char {
             let state = unsafe {
                 if handle.is_null() {
-                    return 0;
+                    return ptr::null();
                 }
                 &*(handle as *const _OcState)
             };
-
-            let count = state.channels.len();
-            if count == 0 || out_channels.is_null() {
-                return 0;
-            }
-
-            let mut infos: Vec<opencarrier_types::plugin::FfiChannelInfo> =
-                Vec::with_capacity(count);
-            for (i, entry) in state.channels.iter().enumerate() {
-                let ch_handle = (i + 1) as *mut c_void;
-                infos.push(opencarrier_types::plugin::FfiChannelInfo {
-                    channel_type: entry.channel_type_c.as_ptr(),
-                    name: entry.name_c.as_ptr(),
-                    handle: ch_handle,
-                });
-            }
-
-            unsafe {
-                *out_channels = infos.as_mut_ptr() as *mut _;
-                std::mem::forget(infos);
-            }
-
-            count as u32
+            state.channels_json.as_ptr()
         }
 
         // ------------------------------------------------------------------
-        // 7. oc_plugin_free_channels
+        // 7. oc_plugin_tools  (JSON)
         // ------------------------------------------------------------------
         #[no_mangle]
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
-        pub extern "C" fn oc_plugin_free_channels(
-            ptr: *mut opencarrier_types::plugin::FfiChannelInfo,
-            count: u32,
-        ) {
-            if ptr.is_null() || count == 0 {
-                return;
-            }
-            unsafe {
-                let _ = Vec::from_raw_parts(ptr, count as usize, count as usize);
-            }
-        }
-
-        // ------------------------------------------------------------------
-        // 8. oc_plugin_tools
-        // ------------------------------------------------------------------
-        #[no_mangle]
-        #[allow(clippy::not_unsafe_ptr_arg_deref)]
-        pub extern "C" fn oc_plugin_tools(
-            handle: *mut c_void,
-            out_tools: *mut *mut opencarrier_types::plugin::FfiToolDef,
-        ) -> u32 {
+        pub extern "C" fn oc_plugin_tools(handle: *mut c_void) -> *const c_char {
             let state = unsafe {
                 if handle.is_null() {
-                    return 0;
+                    return ptr::null();
                 }
                 &*(handle as *const _OcState)
             };
-
-            let count = state.tools.len();
-            if count == 0 || out_tools.is_null() {
-                return 0;
-            }
-
-            let mut defs: Vec<opencarrier_types::plugin::FfiToolDef> = Vec::with_capacity(count);
-            for entry in &state.tools {
-                defs.push(opencarrier_types::plugin::FfiToolDef {
-                    name: entry.name_c.as_ptr(),
-                    description: entry.description_c.as_ptr(),
-                    parameters_json: entry.parameters_json_c.as_ptr(),
-                });
-            }
-
-            unsafe {
-                *out_tools = defs.as_mut_ptr() as *mut _;
-                std::mem::forget(defs);
-            }
-
-            count as u32
+            state.tools_json.as_ptr()
         }
 
         // ------------------------------------------------------------------
-        // 9. oc_plugin_free_tools
-        // ------------------------------------------------------------------
-        #[no_mangle]
-        #[allow(clippy::not_unsafe_ptr_arg_deref)]
-        pub extern "C" fn oc_plugin_free_tools(
-            ptr: *mut opencarrier_types::plugin::FfiToolDef,
-            count: u32,
-        ) {
-            if ptr.is_null() || count == 0 {
-                return;
-            }
-            unsafe {
-                let _ = Vec::from_raw_parts(ptr, count as usize, count as usize);
-            }
-        }
-
-        // ------------------------------------------------------------------
-        // 10. oc_channel_start
+        // 8. oc_channel_start
         // ------------------------------------------------------------------
         #[no_mangle]
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -307,15 +234,13 @@ macro_rules! declare_plugin {
         }
 
         // ------------------------------------------------------------------
-        // 11. oc_channel_send
+        // 9. oc_channel_send  (JSON input)
         // ------------------------------------------------------------------
         #[no_mangle]
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub extern "C" fn oc_channel_send(
             channel_handle: *mut c_void,
-            tenant_id: *const c_char,
-            user_id: *const c_char,
-            text: *const c_char,
+            message_json: *const c_char,
         ) -> i32 {
             let state = unsafe {
                 if _OC_STATE.is_null() {
@@ -329,18 +254,27 @@ macro_rules! declare_plugin {
                 return -1;
             }
 
-            let tenant = unsafe { CStr::from_ptr(tenant_id).to_string_lossy() };
-            let user = unsafe { CStr::from_ptr(user_id).to_string_lossy() };
-            let text_str = unsafe { CStr::from_ptr(text).to_string_lossy() };
+            let msg_str = unsafe {
+                CStr::from_ptr(message_json).to_string_lossy()
+            };
 
-            match state.channels[idx - 1].adapter.send(&tenant, &user, &text_str) {
+            let msg: serde_json::Value = match serde_json::from_str(&msg_str) {
+                Ok(v) => v,
+                Err(_) => return -1,
+            };
+
+            let tenant_id = msg["tenant_id"].as_str().unwrap_or("");
+            let user_id = msg["user_id"].as_str().unwrap_or("");
+            let text = msg["text"].as_str().unwrap_or("");
+
+            match state.channels[idx - 1].adapter.send(tenant_id, user_id, text) {
                 Ok(()) => 0,
                 Err(_) => -1,
             }
         }
 
         // ------------------------------------------------------------------
-        // 12. oc_plugin_tool_execute
+        // 10. oc_plugin_tool_execute
         // ------------------------------------------------------------------
         #[no_mangle]
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -370,14 +304,12 @@ macro_rules! declare_plugin {
                 serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)
             };
 
-            let context: opencarrier_types::plugin::PluginToolContext = unsafe {
+            let context: $crate::PluginToolContext = unsafe {
                 let s = CStr::from_ptr(context_json).to_string_lossy();
                 serde_json::from_str(&s).unwrap_or_default()
             };
 
-            let entry = state.tools.iter().find(|e| {
-                e.name_c.to_str().unwrap_or("") == tool_name_str
-            });
+            let entry = state.tools.iter().find(|e| e.name == tool_name_str);
 
             let Some(entry) = entry else {
                 let err = format!("Unknown tool: {}", tool_name_str);

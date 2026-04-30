@@ -3,6 +3,10 @@
 **/*.rs.bk
 *.pdb
 
+# Plugin standalone build artifacts
+plugins/**/target/
+plugins/**/Cargo.lock
+
 # Environment & secrets
 .env
 .env.*

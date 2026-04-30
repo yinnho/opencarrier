@@ -53,11 +53,6 @@
 //! serde_json = "1"
 //! ```
 
-// Re-export types from opencarrier-types that plugin developers need
-pub use opencarrier_types::plugin::{
-    PluginConfig, PluginContent, PluginMessage, PluginMeta, PluginToolContext,
-};
-
 mod channel;
 mod context;
 mod error;
@@ -65,9 +60,16 @@ mod error;
 mod macros;
 mod plugin;
 mod tool;
+mod types;
 
 pub use channel::ChannelAdapter;
 pub use context::{MessageSender, PluginContext};
 pub use error::PluginError;
 pub use plugin::Plugin;
 pub use tool::{ToolDef, ToolProvider};
+
+// Re-export plugin types from local types module
+pub use types::{
+    ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginContent, PluginMessage, PluginMeta,
+    PluginToolContext, PluginToolDef, PLUGIN_ABI_VERSION,
+};

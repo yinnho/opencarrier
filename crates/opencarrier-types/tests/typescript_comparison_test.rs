@@ -1,7 +1,7 @@
-//! TypeScript (yingheclient) vs Rust (opencarrier) Protocol Comparison Tests
+//! TypeScript (conversation protocol) vs Rust (opencarrier) Protocol Comparison Tests
 //!
 //! These tests verify that the Rust implementation matches the TypeScript types
-//! defined in yingheclient/src/conversation/types.ts
+//! defined in conversation protocol/src/conversation/types.ts
 
 use serde_json::json;
 
@@ -51,7 +51,7 @@ fn test_chat_request_fields_match() {
     });
 
     // Parse as Rust ChatRequest
-    let parsed: opencarrier_types::yinghe::ChatRequest =
+    let parsed: opencarrier_types::conversation::ChatRequest =
         serde_json::from_value(request).expect("ChatRequest should parse");
 
     // Verify all fields match
@@ -74,7 +74,7 @@ fn test_chat_request_fields_match() {
 #[test]
 fn test_conversation_type_values() {
     // TypeScript: 'carrier' | 'plugin' | 'avatar' | 'role'
-    use opencarrier_types::yinghe::ConversationType;
+    use opencarrier_types::conversation::ConversationType;
 
     // Verify serialization matches TypeScript string values
     assert_eq!(
@@ -112,7 +112,7 @@ fn test_conversation_type_values() {
 #[test]
 fn test_chat_type_values() {
     // TypeScript: 'direct' | 'group'
-    use opencarrier_types::yinghe::ChatType;
+    use opencarrier_types::conversation::ChatType;
 
     assert_eq!(
         serde_json::to_string(&ChatType::Direct).unwrap(),
@@ -163,7 +163,7 @@ fn test_chat_response_fields_match() {
         }
     });
 
-    let parsed: opencarrier_types::yinghe::ChatResponse =
+    let parsed: opencarrier_types::conversation::ChatResponse =
         serde_json::from_value(response).expect("ChatResponse should parse");
 
     assert_eq!(parsed.msg_type, "chat_response");
@@ -176,7 +176,7 @@ fn test_chat_response_fields_match() {
 /// Test ChatResponse serialization produces camelCase (TypeScript compatible)
 #[test]
 fn test_chat_response_camel_case() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatResponse, ChatType, ConversationType};
+    use opencarrier_types::conversation::{ChatRequest, ChatResponse, ChatType, ConversationType};
 
     let request = ChatRequest {
         msg_type: "chat".to_string(),
@@ -253,7 +253,7 @@ fn test_error_response_fields_match() {
         "message": "Something went wrong"
     });
 
-    let parsed: opencarrier_types::yinghe::ErrorResponse =
+    let parsed: opencarrier_types::conversation::ErrorResponse =
         serde_json::from_value(error).expect("ErrorResponse should parse");
 
     assert_eq!(parsed.msg_type, "error");
@@ -277,7 +277,7 @@ fn test_session_key_format_matches() {
     // - "avatar:direct:main:c004"
     // - "avatar:group:work:g005"
 
-    use opencarrier_types::yinghe::{ChatType, ConversationType, SessionKey};
+    use opencarrier_types::conversation::{ChatType, ConversationType, SessionKey};
 
     // Test carrier:direct:main:c001
     let key1 = SessionKey::new(ConversationType::Carrier, ChatType::Direct, "main", "c001");
@@ -308,7 +308,7 @@ fn test_session_key_format_matches() {
 /// Test SessionKey parsing matches TypeScript
 #[test]
 fn test_session_key_parsing() {
-    use opencarrier_types::yinghe::{ChatType, ConversationType, SessionKey};
+    use opencarrier_types::conversation::{ChatType, ConversationType, SessionKey};
 
     // Parse various session keys
     let key1 = SessionKey::parse("carrier:direct:main:c001").unwrap();
@@ -367,21 +367,21 @@ fn test_is_chat_request_equivalent() {
     });
 
     // Valid 'chat' type should parse
-    assert!(serde_json::from_value::<opencarrier_types::yinghe::ChatRequest>(valid_chat).is_ok());
+    assert!(serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(valid_chat).is_ok());
 
     // Valid 'message' type should parse
     assert!(
-        serde_json::from_value::<opencarrier_types::yinghe::ChatRequest>(valid_message).is_ok()
+        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(valid_message).is_ok()
     );
 
     // Invalid type should fail
     assert!(
-        serde_json::from_value::<opencarrier_types::yinghe::ChatRequest>(invalid_type).is_err()
+        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(invalid_type).is_err()
     );
 
     // Missing required fields should fail
     assert!(
-        serde_json::from_value::<opencarrier_types::yinghe::ChatRequest>(missing_fields).is_err()
+        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(missing_fields).is_err()
     );
 }
 
@@ -392,7 +392,7 @@ fn test_is_chat_request_equivalent() {
 /// Test that response routing matches request (TypeScript validateResponseRouting)
 #[test]
 fn test_response_routing_validation() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatResponse, ChatType, ConversationType};
+    use opencarrier_types::conversation::{ChatRequest, ChatResponse, ChatType, ConversationType};
 
     let request = ChatRequest {
         msg_type: "chat".to_string(),
@@ -450,7 +450,7 @@ fn test_attachment_fields_match() {
         "size": 1024
     });
 
-    let parsed: opencarrier_types::yinghe::Attachment =
+    let parsed: opencarrier_types::conversation::Attachment =
         serde_json::from_value(attachment).expect("Attachment should parse");
 
     assert_eq!(parsed.filename, "test.pdf");
@@ -494,7 +494,7 @@ fn test_response_metadata_fields_match() {
         "qualityScore": 0.85
     });
 
-    let parsed: opencarrier_types::yinghe::ResponseMetadata =
+    let parsed: opencarrier_types::conversation::ResponseMetadata =
         serde_json::from_value(metadata).expect("ResponseMetadata should parse");
 
     assert_eq!(parsed.rounds, Some(2));

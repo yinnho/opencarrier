@@ -141,8 +141,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool name compatibility mappings (21 OpenClaw tool names)
 
 #### Infrastructure
-- Multi-stage Dockerfile (debian:bookworm-slim runtime)
-- docker-compose.yml with volume persistence
 - GitHub Actions CI (check, test, clippy, format)
 - GitHub Actions release (multi-platform, GHCR push, SHA256 checksums)
 - Cross-platform install script (curl/irm one-liner)

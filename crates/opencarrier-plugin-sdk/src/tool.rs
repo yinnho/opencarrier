@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::error::PluginError;
-use opencarrier_types::plugin::PluginToolContext;
+use crate::types::PluginToolContext;
 
 /// A tool definition provided by a plugin.
 pub struct ToolDef {

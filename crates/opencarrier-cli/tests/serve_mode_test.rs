@@ -1,7 +1,7 @@
 //! Integration tests for serve mode (agentd communication).
 //!
 //! These tests verify the stdin/stdout JSON-RPC server works correctly
-//! with both JSON-RPC 2.0 and yingheclient protocols.
+//! with both JSON-RPC 2.0 and conversation protocols.
 
 use serde_json::{json, Value};
 
@@ -85,40 +85,40 @@ fn test_jsonrpc_error_codes() {
 }
 
 // ---------------------------------------------------------------------------
-// yingheclient Protocol Tests
+// conversation Protocol Tests
 // ---------------------------------------------------------------------------
 
-/// Test yingheclient ChatRequest detection
+/// Test conversation ChatRequest detection
 #[test]
-fn test_yingheclient_detection() {
-    // yingheclient format should be detected
-    let yinghe_msg = json!({
+fn test_conversation_detection() {
+    // conversation format should be detected
+    let chat_msg = json!({
         "type": "chat",
         "conversationId": "conv-001",
         "conversationType": "carrier",
         "chatType": "direct",
         "content": "Hello"
     });
-    let json_str = serde_json::to_string(&yinghe_msg).unwrap();
+    let json_str = serde_json::to_string(&chat_msg).unwrap();
 
     // Detection should check for conversationType and type field
     assert!(json_str.contains("conversationType"));
     assert!(json_str.contains("\"type\":\"chat\""));
 }
 
-/// Test yingheclient vs JSON-RPC protocol differentiation
+/// Test conversation vs JSON-RPC protocol differentiation
 #[test]
 fn test_protocol_differentiation() {
-    // yingheclient format
-    let yinghe = json!({
+    // conversation format
+    let conv_msg = json!({
         "type": "chat",
         "conversationType": "carrier",
         "chatType": "direct",
         "content": "Hello"
     });
-    let yinghe_str = serde_json::to_string(&yinghe).unwrap();
-    assert!(yinghe_str.contains("conversationType"));
-    assert!(!yinghe_str.contains("jsonrpc"));
+    let conv_str = serde_json::to_string(&conv_msg).unwrap();
+    assert!(conv_str.contains("conversationType"));
+    assert!(!conv_str.contains("jsonrpc"));
 
     // JSON-RPC format
     let jsonrpc = json!({
@@ -400,7 +400,7 @@ fn test_implicit_mention() {
 // Message Format Validation Tests
 // ---------------------------------------------------------------------------
 
-/// Test camelCase field names in yingheclient format
+/// Test camelCase field names in conversation format
 #[test]
 fn test_camel_case_fields() {
     let request = json!({
