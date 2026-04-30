@@ -12,17 +12,17 @@ set -e
 echo "=== OpenCarrier Performance Tests ==="
 echo ""
 
-# Check if yinghe binary exists
-if ! command -v yinghe &> /dev/null && [ ! -f target/release/yinghe ]; then
+# Check if opencarrier binary exists
+if ! command -v opencarrier &> /dev/null && [ ! -f target/release/opencarrier ]; then
     echo "Building release binary..."
     cargo build --release -p opencarrier-cli
 fi
 
-YINGHE=${YINGHE:-target/release/yinghe}
+OPENCARRIER=${OPENCARRIER:-target/release/opencarrier}
 
 # 1. Binary Size Test
 echo "--- Binary Size ---"
-BINARY_SIZE=$(stat -f%z "$YINGHE" 2>/dev/null || stat --printf="%s" "$YINGHE" 2>/dev/null)
+BINARY_SIZE=$(stat -f%z "$OPENCARRIER" 2>/dev/null || stat --printf="%s" "$OPENCARRIER" 2>/dev/null)
 BINARY_SIZE_MB=$((BINARY_SIZE / 1024 / 1024))
 echo "Binary size: ${BINARY_SIZE_MB}MB"
 if [ $BINARY_SIZE_MB -lt 20 ]; then
@@ -37,7 +37,7 @@ echo "--- Startup Time ---"
 STARTUP_TIMES=()
 for i in {1..5}; do
     START=$(date +%s%N)
-    timeout 2 "$YINGHE" --version > /dev/null 2>&1 || true
+    timeout 2 "$OPENCARRIER" --version > /dev/null 2>&1 || true
     END=$(date +%s%N)
     ELAPSED_MS=$(( (END - START) / 1000000 ))
     STARTUP_TIMES+=($ELAPSED_MS)
@@ -61,21 +61,21 @@ echo ""
 
 # 3. Memory Usage Test (basic check with ps)
 echo "--- Memory Usage ---"
-# Start yinghe in background with serve mode
+# Start opencarrier in background with serve mode
 # Note: This requires a valid config, so we skip if it fails
-"$YINGHE" serve &
-YINGHE_PID=$!
+"$OPENCARRIER" serve &
+OC_PID=$!
 sleep 2
 
-if kill -0 $YINGHE_PID 2>/dev/null; then
+if kill -0 $OC_PID 2>/dev/null; then
     # Get memory usage in KB
-    MEM_KB=$(ps -o rss= -p $YINGHE_PID 2>/dev/null || echo "0")
+    MEM_KB=$(ps -o rss= -p $OC_PID 2>/dev/null || echo "0")
     MEM_MB=$((MEM_KB / 1024))
     echo "Memory usage: ${MEM_MB}MB"
 
     # Kill the process
-    kill $YINGHE_PID 2>/dev/null || true
-    wait $YINGHE_PID 2>/dev/null || true
+    kill $OC_PID 2>/dev/null || true
+    wait $OC_PID 2>/dev/null || true
 
     if [ $MEM_MB -lt 50 ]; then
         echo "✅ Memory usage OK (< 50MB)"
@@ -83,7 +83,7 @@ if kill -0 $YINGHE_PID 2>/dev/null; then
         echo "⚠️  Memory usage high (>= 50MB)"
     fi
 else
-    echo "⚠️  Could not start yinghe serve for memory test"
+    echo "⚠️  Could not start opencarrier serve for memory test"
 fi
 echo ""
 

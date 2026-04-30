@@ -9,7 +9,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 opencarrier-plugin-sdk = { path = "../../crates/opencarrier-plugin-sdk" }
-opencarrier-types = { path = "../../crates/opencarrier-types" }
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", features = ["json"] }
@@ -20,3 +19,5 @@ base64 = "0.22"
 rand = "0.8"
 urlencoding = "2"
 tracing = "0.1"
+
+[workspace]

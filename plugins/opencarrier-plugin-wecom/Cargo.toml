@@ -9,7 +9,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 opencarrier-plugin-sdk = { path = "../../crates/opencarrier-plugin-sdk" }
-opencarrier-types = { path = "../../crates/opencarrier-types" }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 futures-util = "0.3"
@@ -31,3 +30,5 @@ axum = "0.8"
 urlencoding = "2"
 toml = "0.8"
 fs4 = "0.12"
+
+[workspace]

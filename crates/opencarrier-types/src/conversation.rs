@@ -1,8 +1,7 @@
-//! yingheclient-compatible message types for OpenCarrier.
+//! Conversation protocol types for OpenCarrier.
 //!
-//! This module provides types that are compatible with yingheclient's
-//! conversation protocol, enabling seamless integration with the
-//! existing yinghe ecosystem.
+//! Defines the wire-format types for the chat/conversation protocol,
+//! including session keys, chat types, and request/response messages.
 //!
 //! Key concepts:
 //! - ConversationType: Permission level (carrier, plugin, avatar, role)

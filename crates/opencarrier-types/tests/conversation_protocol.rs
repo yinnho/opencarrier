@@ -1,6 +1,6 @@
-//! Integration tests for yingheclient protocol compatibility.
+//! Integration tests for conversation protocol compatibility.
 //!
-//! These tests verify that the serve mode correctly handles yingheclient
+//! These tests verify that the serve mode correctly handles
 //! ChatRequest messages and returns properly formatted ChatResponse messages.
 
 use serde_json::json;
@@ -18,7 +18,7 @@ fn test_chat_request_detection() {
 
     let json_str = serde_json::to_string(&direct_message).unwrap();
 
-    // Check for yingheclient format indicators
+    // Check for conversation format indicators
     assert!(json_str.contains("conversationType"));
     assert!(json_str.contains("chat"));
 }
@@ -34,17 +34,17 @@ fn test_chat_request_deserialize() {
         "content": "Hello, agent!"
     });
 
-    let request: opencarrier_types::yinghe::ChatRequest = serde_json::from_value(json).unwrap();
+    let request: opencarrier_types::conversation::ChatRequest = serde_json::from_value(json).unwrap();
 
     assert_eq!(request.msg_type, "chat");
     assert_eq!(request.conversation_id, "conv-002");
     assert_eq!(
         request.conversation_type,
-        opencarrier_types::yinghe::ConversationType::Carrier
+        opencarrier_types::conversation::ConversationType::Carrier
     );
     assert_eq!(
         request.chat_type,
-        opencarrier_types::yinghe::ChatType::Direct
+        opencarrier_types::conversation::ChatType::Direct
     );
     assert_eq!(request.content, Some("Hello, agent!".to_string()));
 }
@@ -61,11 +61,11 @@ fn test_chat_request_plugin_mode() {
         "content": "What's the weather?"
     });
 
-    let request: opencarrier_types::yinghe::ChatRequest = serde_json::from_value(json).unwrap();
+    let request: opencarrier_types::conversation::ChatRequest = serde_json::from_value(json).unwrap();
 
     assert_eq!(
         request.conversation_type,
-        opencarrier_types::yinghe::ConversationType::Plugin
+        opencarrier_types::conversation::ConversationType::Plugin
     );
     assert_eq!(request.plugin_id, Some("weather-plugin".to_string()));
 }
@@ -85,7 +85,7 @@ fn test_chat_request_group_chat() {
         "mentioned": true
     });
 
-    let request: opencarrier_types::yinghe::ChatRequest = serde_json::from_value(json).unwrap();
+    let request: opencarrier_types::conversation::ChatRequest = serde_json::from_value(json).unwrap();
 
     assert!(request.is_group());
     assert!(request.mentioned);
@@ -96,7 +96,7 @@ fn test_chat_request_group_chat() {
 /// Test ChatResponse serialization
 #[test]
 fn test_chat_response_serialize() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatType, ConversationType};
+    use opencarrier_types::conversation::{ChatRequest, ChatType, ConversationType};
 
     let request = ChatRequest {
         msg_type: "chat".to_string(),
@@ -118,7 +118,7 @@ fn test_chat_response_serialize() {
         timestamp: None,
     };
 
-    let response = opencarrier_types::yinghe::ChatResponse::for_request(
+    let response = opencarrier_types::conversation::ChatResponse::for_request(
         &request,
         "Hello! How can I help you?".to_string(),
     );
@@ -136,7 +136,7 @@ fn test_chat_response_serialize() {
 /// Test ChatResponse with metadata
 #[test]
 fn test_chat_response_with_metadata() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatType, ConversationType, ResponseMetadata};
+    use opencarrier_types::conversation::{ChatRequest, ChatType, ConversationType, ResponseMetadata};
 
     let request = ChatRequest {
         msg_type: "chat".to_string(),
@@ -166,7 +166,7 @@ fn test_chat_response_with_metadata() {
     };
 
     let response =
-        opencarrier_types::yinghe::ChatResponse::for_request(&request, "Done".to_string())
+        opencarrier_types::conversation::ChatResponse::for_request(&request, "Done".to_string())
             .with_metadata(metadata);
 
     let json = serde_json::to_value(&response).unwrap();
@@ -178,7 +178,7 @@ fn test_chat_response_with_metadata() {
 /// Test ErrorResponse serialization
 #[test]
 fn test_error_response_serialize() {
-    let error = opencarrier_types::yinghe::ErrorResponse::new("Something went wrong");
+    let error = opencarrier_types::conversation::ErrorResponse::new("Something went wrong");
 
     let json = serde_json::to_value(&error).unwrap();
 
@@ -189,7 +189,7 @@ fn test_error_response_serialize() {
 /// Test ErrorResponse for request
 #[test]
 fn test_error_response_for_request() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatType, ConversationType};
+    use opencarrier_types::conversation::{ChatRequest, ChatType, ConversationType};
 
     let request = ChatRequest {
         msg_type: "chat".to_string(),
@@ -212,7 +212,7 @@ fn test_error_response_for_request() {
     };
 
     let error =
-        opencarrier_types::yinghe::ErrorResponse::for_request(&request, "Test error".to_string());
+        opencarrier_types::conversation::ErrorResponse::for_request(&request, "Test error".to_string());
 
     let json = serde_json::to_value(&error).unwrap();
 
@@ -226,7 +226,7 @@ fn test_error_response_for_request() {
 /// Test SessionKey format
 #[test]
 fn test_session_key_format() {
-    use opencarrier_types::yinghe::{ChatType, ConversationType, SessionKey};
+    use opencarrier_types::conversation::{ChatType, ConversationType, SessionKey};
 
     let key = SessionKey::new(
         ConversationType::Plugin,
@@ -243,20 +243,20 @@ fn test_session_key_format() {
     assert_eq!(parsed, key);
 }
 
-/// Test that message type detection distinguishes between JSON-RPC and yingheclient
+/// Test that message type detection distinguishes between JSON-RPC and conversation
 #[test]
 fn test_protocol_detection() {
-    // yingheclient format
-    let yinghe_msg = json!({
+    // conversation format
+    let chat_msg = json!({
         "type": "chat",
         "conversationId": "conv-001",
         "conversationType": "carrier",
         "chatType": "direct",
         "content": "Hello"
     });
-    let yinghe_str = serde_json::to_string(&yinghe_msg).unwrap();
-    assert!(yinghe_str.contains("conversationType"));
-    assert!(yinghe_str.contains("\"type\":\"chat\""));
+    let chat_str = serde_json::to_string(&chat_msg).unwrap();
+    assert!(chat_str.contains("conversationType"));
+    assert!(chat_str.contains("\"type\":\"chat\""));
 
     // JSON-RPC format
     let jsonrpc_msg = json!({
@@ -276,7 +276,7 @@ fn test_protocol_detection() {
 /// Test group chat without mention should be identified
 #[test]
 fn test_group_chat_mention_detection() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatType, ConversationType};
+    use opencarrier_types::conversation::{ChatRequest, ChatType, ConversationType};
 
     // With mention - should respond
     let with_mention = ChatRequest {
@@ -331,7 +331,7 @@ fn test_group_chat_mention_detection() {
 /// Test implicit mention detection
 #[test]
 fn test_implicit_mention() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatType, ConversationType};
+    use opencarrier_types::conversation::{ChatRequest, ChatType, ConversationType};
 
     // Reply to bot's message - implicit mention
     let implicit = ChatRequest {
@@ -364,7 +364,7 @@ fn test_implicit_mention() {
 /// Test all conversation types
 #[test]
 fn test_all_conversation_types() {
-    use opencarrier_types::yinghe::ConversationType;
+    use opencarrier_types::conversation::ConversationType;
 
     // Test serialization
     assert_eq!(
@@ -395,7 +395,7 @@ fn test_all_conversation_types() {
 /// Test all chat types
 #[test]
 fn test_all_chat_types() {
-    use opencarrier_types::yinghe::ChatType;
+    use opencarrier_types::conversation::ChatType;
 
     // Test serialization
     assert_eq!(
@@ -418,7 +418,7 @@ fn test_all_chat_types() {
 /// Test ChatRequest text_content method
 #[test]
 fn test_text_content() {
-    use opencarrier_types::yinghe::{ChatRequest, ChatType, ConversationType};
+    use opencarrier_types::conversation::{ChatRequest, ChatType, ConversationType};
 
     let request = ChatRequest {
         msg_type: "chat".to_string(),

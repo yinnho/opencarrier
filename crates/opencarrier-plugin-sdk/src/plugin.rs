@@ -4,7 +4,7 @@ use crate::channel::ChannelAdapter;
 use crate::context::PluginContext;
 use crate::error::PluginError;
 use crate::tool::ToolProvider;
-use opencarrier_types::plugin::PluginConfig;
+use crate::types::PluginConfig;
 
 /// The main plugin trait. Implement this for your plugin type.
 ///

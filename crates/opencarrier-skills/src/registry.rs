@@ -5,26 +5,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-/// Resolve skills directory with yingheclient compatibility.
+/// Resolve skills directory.
 ///
 /// Priority:
-/// 1. Environment variable `YINGHE_SKILLS_DIR` (yingheclient compat)
-/// 2. Environment variable `OPENCARRIER_SKILLS_DIR` (OpenCarrier native)
-/// 3. `skills` directory next to the executable (yingheclient compat)
-/// 4. Default: `~/.opencarrier/skills` or `~/.yinghe/skills`
+/// 1. Environment variable `OPENCARRIER_SKILLS_DIR`
+/// 2. `skills` directory next to the executable
+/// 3. Default: `~/.opencarrier/skills`
 pub fn resolve_skills_dir() -> PathBuf {
-    // 1. yingheclient environment variable
-    if let Ok(dir) = std::env::var("YINGHE_SKILLS_DIR") {
-        let trimmed = dir.trim();
-        if !trimmed.is_empty() {
-            let path = PathBuf::from(trimmed);
-            if path.exists() {
-                return path;
-            }
-        }
-    }
-
-    // 2. OpenCarrier environment variable
+    // 1. Environment variable
     if let Ok(dir) = std::env::var("OPENCARRIER_SKILLS_DIR") {
         let trimmed = dir.trim();
         if !trimmed.is_empty() {
@@ -35,7 +23,7 @@ pub fn resolve_skills_dir() -> PathBuf {
         }
     }
 
-    // 3. Executable sibling directory
+    // 2. Executable sibling directory
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let sibling = exe_dir.join("skills");
@@ -45,21 +33,9 @@ pub fn resolve_skills_dir() -> PathBuf {
         }
     }
 
-    // 4. Default directories
+    // 3. Default directory
     if let Some(home) = dirs::home_dir() {
-        // Prefer opencarrier dir, but fall back to yinghe for compatibility
-        let opencarrier_dir = home.join(".opencarrier").join("skills");
-        if opencarrier_dir.exists() {
-            return opencarrier_dir;
-        }
-
-        let yinghe_dir = home.join(".yinghe").join("skills");
-        if yinghe_dir.exists() {
-            return yinghe_dir;
-        }
-
-        // Return opencarrier dir even if it doesn't exist (will be created)
-        return opencarrier_dir;
+        return home.join(".opencarrier").join("skills");
     }
 
     // Fallback to current directory
@@ -427,40 +403,21 @@ input_schema = {{ type = "object" }}
     }
 
     #[test]
-    fn test_resolve_skills_dir_env_priority() {
-        // Test environment variable priority in a single test to avoid race conditions
-
-        // Clear all env vars first
-        std::env::remove_var("YINGHE_SKILLS_DIR");
+    fn test_resolve_skills_dir_env() {
+        // Clear env var first
         std::env::remove_var("OPENCARRIER_SKILLS_DIR");
 
-        // Test YINGHE_SKILLS_DIR has highest priority
-        let temp_dir1 = TempDir::new().unwrap();
-        let yinghe_path = temp_dir1.path().join("yinghe_skills");
-        std::fs::create_dir_all(&yinghe_path).unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let skills_path = temp_dir.path().join("my_skills");
+        std::fs::create_dir_all(&skills_path).unwrap();
 
-        let temp_dir2 = TempDir::new().unwrap();
-        let oc_path = temp_dir2.path().join("oc_skills");
-        std::fs::create_dir_all(&oc_path).unwrap();
-
-        // Set both env vars - YINGHE should win
-        std::env::set_var("YINGHE_SKILLS_DIR", &yinghe_path);
-        std::env::set_var("OPENCARRIER_SKILLS_DIR", &oc_path);
-        let resolved = resolve_skills_dir();
-        std::env::remove_var("YINGHE_SKILLS_DIR");
-
-        assert_eq!(
-            resolved, yinghe_path,
-            "YINGHE_SKILLS_DIR should have priority"
-        );
-
-        // Now test OPENCARRIER_SKILLS_DIR when YINGHE is not set
+        std::env::set_var("OPENCARRIER_SKILLS_DIR", &skills_path);
         let resolved = resolve_skills_dir();
         std::env::remove_var("OPENCARRIER_SKILLS_DIR");
 
         assert_eq!(
-            resolved, oc_path,
-            "OPENCARRIER_SKILLS_DIR should be used as fallback"
+            resolved, skills_path,
+            "OPENCARRIER_SKILLS_DIR should be used"
         );
     }
 }

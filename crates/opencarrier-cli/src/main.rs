@@ -78,12 +78,12 @@ decay_rate = 0.05
 
 const AFTER_HELP: &str = "\
 \x1b[1mQuick Start:\x1b[0m
-  yinghe                    直接启动
+  opencarrier                    直接启动
 
 \x1b[1;36mExamples:\x1b[0m
-  yinghe agent new coder      创建新的 coder agent
-  yinghe models list          查看可用模型
-  yinghe doctor               运行诊断检查
+  opencarrier agent new coder      创建新的 coder agent
+  opencarrier models list          查看可用模型
+  opencarrier doctor               运行诊断检查
 
 \x1b[1;36mMore:\x1b[0m
   Dashboard:  http://127.0.0.1:4200/ (when running)";

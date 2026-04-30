@@ -11,14 +11,6 @@ members = [
     "crates/opencarrier-clone",
     "crates/opencarrier-lifecycle",
     "crates/opencarrier-plugin-sdk",
-    "plugins/opencarrier-plugin-wecom",
-    "plugins/opencarrier-plugin-weixin",
-    "plugins/opencarrier-plugin-feishu",
-    "plugins/opencarrier-plugin-twitter",
-    "plugins/opencarrier-plugin-xiaohongshu",
-    "plugins/opencarrier-plugin-reddit",
-    "plugins/opencarrier-plugin-bilibili",
-    "plugins/opencarrier-plugin-zhihu",
     "xtask",
     "tools/wechat-oa-mcp",
 ]
@@ -100,12 +92,6 @@ dirs = "6"
 # Dynamic library loading (plugin system)
 libloading = "0.8"
 
-# YAML parsing
-serde_yaml = "0.9"
-
-# JSON5 parsing
-json5 = "0.4"
-
 # Directory walking
 walkdir = "2"
 
@@ -129,8 +115,6 @@ governor = "0.8"
 ratatui = "0.29"
 colored = "3"
 
-# Encryption
-aes-gcm = "0.10"
 argon2 = "0.5"
 
 # HTML entity decoding
@@ -144,15 +128,6 @@ socket2 = "0.5"
 
 # Zip archive extraction
 zip = { version = "2", default-features = false, features = ["deflate"] }
-
-# Email (SMTP + IMAP)
-lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
-imap = "2"
-native-tls = "0.2"
-mailparse = "0.16"
-
-# OpenSSL (vendored = statically compiled, no runtime libssl dependency on Linux)
-openssl = { version = "0.10", features = ["vendored"] }
 
 # Testing
 tokio-test = "0.4"

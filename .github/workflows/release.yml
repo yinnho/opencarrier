@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -119,11 +118,6 @@ jobs:
             curl -sSf https://opencarrier.sh | sh
             ```
 
-            **Docker**:
-            ```bash
-            docker pull ghcr.io/rightnow-ai/opencarrier:latest
-            ```
-
             **Coming from OpenClaw?**
             ```bash
             opencarrier migrate --from openclaw
@@ -177,63 +171,33 @@ jobs:
           key: cli-${{ matrix.target }}
       - name: Build CLI (cross)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cross build --release --target ${{ matrix.target }} --bin yinghe
+        run: cross build --release --target ${{ matrix.target }} --bin opencarrier
       - name: Build CLI
         if: matrix.target != 'aarch64-unknown-linux-gnu'
-        run: cargo build --release --target ${{ matrix.target }} --bin yinghe
+        run: cargo build --release --target ${{ matrix.target }} --bin opencarrier
       - name: Ad-hoc codesign CLI binary (macOS)
         if: runner.os == 'macOS'
         run: |
-          xattr -cr target/${{ matrix.target }}/release/yinghe || true
-          codesign --force --sign - target/${{ matrix.target }}/release/yinghe
+          xattr -cr target/${{ matrix.target }}/release/opencarrier || true
+          codesign --force --sign - target/${{ matrix.target }}/release/opencarrier
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../yinghe-${{ matrix.target }}.tar.gz yinghe
+          tar czf ../../../opencarrier-${{ matrix.target }}.tar.gz opencarrier
           cd ../../..
-          sha256sum yinghe-${{ matrix.target }}.tar.gz > yinghe-${{ matrix.target }}.tar.gz.sha256
+          sha256sum opencarrier-${{ matrix.target }}.tar.gz > opencarrier-${{ matrix.target }}.tar.gz.sha256
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/yinghe.exe" -DestinationPath "yinghe-${{ matrix.target }}.zip"
-          $hash = (Get-FileHash "yinghe-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  yinghe-${{ matrix.target }}.zip" | Out-File -Encoding ASCII "yinghe-${{ matrix.target }}.zip.sha256"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/opencarrier.exe" -DestinationPath "opencarrier-${{ matrix.target }}.zip"
+          $hash = (Get-FileHash "opencarrier-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  opencarrier-${{ matrix.target }}.zip" | Out-File -Encoding ASCII "opencarrier-${{ matrix.target }}.zip.sha256"
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: yinghe-${{ matrix.target }}.*
+          files: opencarrier-${{ matrix.target }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Docker (linux/amd64 + linux/arm64) ────────────────────────────────────
-  docker:
-    name: Docker Image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up QEMU (for arm64 emulation)
-        uses: docker/setup-qemu-action@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Extract version
-        id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-      - name: Build and push (multi-arch)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/rightnow-ai/opencarrier:latest
-            ghcr.io/rightnow-ai/opencarrier:${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

@@ -2,8 +2,9 @@
 //!
 //! Scans the plugins directory, loads shared libraries, binds C ABI symbols,
 //! and initializes plugin instances.
+//!
+//! All data crossing the FFI boundary uses JSON C strings for ABI stability.
 
-use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
@@ -12,8 +13,8 @@ use uuid::Uuid;
 
 use libloading::Library;
 use opencarrier_types::plugin::{
-    BotConfig, FfiChannelInfo, FfiMessage, FfiMessageCallback, FfiToolDef, PluginConfig,
-    PluginToolDef, PLUGIN_ABI_VERSION,
+    BotConfig, ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginToolDef,
+    PLUGIN_ABI_VERSION,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -30,27 +31,19 @@ type FnPluginVersion = unsafe extern "C" fn() -> *const c_char;
 type FnPluginAbiVersion = unsafe extern "C" fn() -> u32;
 type FnPluginInit = unsafe extern "C" fn(
     config_json: *const c_char,
-    message_cb: FfiMessageCallback,
+    message_cb: FfiJsonCallback,
     user_data: *mut std::os::raw::c_void,
 ) -> *mut std::os::raw::c_void;
 type FnPluginStop = unsafe extern "C" fn(handle: *mut std::os::raw::c_void);
-type FnPluginChannels = unsafe extern "C" fn(
-    handle: *mut std::os::raw::c_void,
-    out_channels: *mut *mut FfiChannelInfo,
-) -> u32;
-type FnPluginFreeChannels = unsafe extern "C" fn(ptr: *mut FfiChannelInfo, count: u32);
-type FnPluginTools = unsafe extern "C" fn(
-    handle: *mut std::os::raw::c_void,
-    out_tools: *mut *mut FfiToolDef,
-) -> u32;
-type FnPluginFreeTools = unsafe extern "C" fn(ptr: *mut FfiToolDef, count: u32);
+type FnPluginChannels =
+    unsafe extern "C" fn(handle: *mut std::os::raw::c_void) -> *const c_char;
+type FnPluginTools =
+    unsafe extern "C" fn(handle: *mut std::os::raw::c_void) -> *const c_char;
 type FnChannelStart =
     unsafe extern "C" fn(channel_handle: *mut std::os::raw::c_void) -> i32;
 type FnChannelSend = unsafe extern "C" fn(
     channel_handle: *mut std::os::raw::c_void,
-    tenant_id: *const c_char,
-    user_id: *const c_char,
-    text: *const c_char,
+    message_json: *const c_char,
 ) -> i32;
 type FnToolExecute = unsafe extern "C" fn(
     plugin_handle: *mut std::os::raw::c_void,
@@ -134,17 +127,15 @@ impl LoadedPlugin {
         text: &str,
     ) -> Result<(), String> {
         if let Some(fn_send) = self.fn_channel_send {
-            let c_tenant = CString::new(tenant_id).map_err(|e| e.to_string())?;
-            let c_user = CString::new(user_id).map_err(|e| e.to_string())?;
-            let c_text = CString::new(text).map_err(|e| e.to_string())?;
-            let ret = unsafe {
-                fn_send(
-                    channel.handle,
-                    c_tenant.as_ptr(),
-                    c_user.as_ptr(),
-                    c_text.as_ptr(),
-                )
-            };
+            let msg = serde_json::json!({
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "text": text,
+            });
+            let c_msg =
+                CString::new(serde_json::to_string(&msg).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            let ret = unsafe { fn_send(channel.handle, c_msg.as_ptr()) };
             if ret != 0 {
                 return Err(format!(
                     "Channel {} send returned error code {}",
@@ -182,7 +173,6 @@ impl LoadedPlugin {
             };
 
             if ret < 0 {
-                // Negative return = error, try to read error message from buf
                 let error_msg = unsafe {
                     CStr::from_ptr(buf.as_ptr() as *const c_char)
                         .to_string_lossy()
@@ -369,14 +359,8 @@ impl PluginLoader {
         let fn_channels: Option<FnPluginChannels> = unsafe {
             library.get(b"oc_plugin_channels\0").ok().map(|s| *s)
         };
-        let fn_free_channels: Option<FnPluginFreeChannels> = unsafe {
-            library.get(b"oc_plugin_free_channels\0").ok().map(|s| *s)
-        };
         let fn_tools: Option<FnPluginTools> = unsafe {
             library.get(b"oc_plugin_tools\0").ok().map(|s| *s)
-        };
-        let fn_free_tools: Option<FnPluginFreeTools> = unsafe {
-            library.get(b"oc_plugin_free_tools\0").ok().map(|s| *s)
         };
         let fn_channel_start: Option<FnChannelStart> = unsafe {
             library.get(b"oc_channel_start\0").ok().map(|s| *s)
@@ -421,32 +405,18 @@ impl PluginLoader {
             return Err("oc_plugin_init returned null handle".to_string());
         }
 
-        // 9. Load channels
+        // 9. Load channels (JSON)
         let channels = if let Some(fn_ch) = fn_channels {
-            let mut ptr: *mut FfiChannelInfo = std::ptr::null_mut();
-            let count = unsafe { fn_ch(handle, &mut ptr) };
-            let loaded = Self::read_channels(ptr, count);
-            if let Some(fn_free) = fn_free_channels {
-                if !ptr.is_null() && count > 0 {
-                    unsafe { fn_free(ptr, count) };
-                }
-            }
-            loaded
+            let json_ptr = unsafe { fn_ch(handle) };
+            Self::read_channels_json(json_ptr)
         } else {
             Vec::new()
         };
 
-        // 10. Load tools
+        // 10. Load tools (JSON)
         let tools = if let Some(fn_t) = fn_tools {
-            let mut ptr: *mut FfiToolDef = std::ptr::null_mut();
-            let count = unsafe { fn_t(handle, &mut ptr) };
-            let loaded = Self::read_tools(ptr, count);
-            if let Some(fn_free) = fn_free_tools {
-                if !ptr.is_null() && count > 0 {
-                    unsafe { fn_free(ptr, count) };
-                }
-            }
-            loaded
+            let json_ptr = unsafe { fn_t(handle) };
+            Self::read_tools_json(json_ptr)
         } else {
             Vec::new()
         };
@@ -606,57 +576,45 @@ impl PluginLoader {
             }
         }
 
-        // Also check for libopencarrier_plugin_*.so pattern in subdirs
         None
     }
 
-    /// Convert FFI channel info array to Rust types.
-    fn read_channels(ptr: *mut FfiChannelInfo, count: u32) -> Vec<LoadedChannel> {
-        if ptr.is_null() || count == 0 {
+    /// Parse JSON channel descriptors returned by the plugin.
+    fn read_channels_json(json_ptr: *const c_char) -> Vec<LoadedChannel> {
+        if json_ptr.is_null() {
             return Vec::new();
         }
-        let mut channels = Vec::with_capacity(count as usize);
-        let slice = unsafe { std::slice::from_raw_parts(ptr, count as usize) };
-        for info in slice {
-            let channel_type = unsafe { CStr::from_ptr(info.channel_type) }
-                .to_string_lossy()
-                .into_owned();
-            let name = unsafe { CStr::from_ptr(info.name) }
-                .to_string_lossy()
-                .into_owned();
-            channels.push(LoadedChannel {
-                channel_type,
-                name,
-                handle: info.handle,
-            });
-        }
-        channels
+        let json_str = unsafe { CStr::from_ptr(json_ptr).to_string_lossy() };
+        let descs: Vec<ChannelDescriptor> = match serde_json::from_str(&json_str) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(error = %e, "Failed to parse channels JSON");
+                return Vec::new();
+            }
+        };
+        descs.into_iter()
+            .enumerate()
+            .map(|(i, desc)| LoadedChannel {
+                channel_type: desc.channel_type,
+                name: desc.name,
+                handle: (i + 1) as *mut std::os::raw::c_void,
+            })
+            .collect()
     }
 
-    /// Convert FFI tool definition array to Rust types.
-    fn read_tools(ptr: *mut FfiToolDef, count: u32) -> Vec<PluginToolDef> {
-        if ptr.is_null() || count == 0 {
+    /// Parse JSON tool definitions returned by the plugin.
+    fn read_tools_json(json_ptr: *const c_char) -> Vec<PluginToolDef> {
+        if json_ptr.is_null() {
             return Vec::new();
         }
-        let mut tools = Vec::with_capacity(count as usize);
-        let slice = unsafe { std::slice::from_raw_parts(ptr, count as usize) };
-        for def in slice {
-            let name = unsafe { CStr::from_ptr(def.name) }
-                .to_string_lossy()
-                .into_owned();
-            let description = unsafe { CStr::from_ptr(def.description) }
-                .to_string_lossy()
-                .into_owned();
-            let parameters_json = unsafe { CStr::from_ptr(def.parameters_json) }
-                .to_string_lossy()
-                .into_owned();
-            tools.push(PluginToolDef {
-                name,
-                description,
-                parameters_json,
-            });
+        let json_str = unsafe { CStr::from_ptr(json_ptr).to_string_lossy() };
+        match serde_json::from_str(&json_str) {
+            Ok(tools) => tools,
+            Err(e) => {
+                warn!(error = %e, "Failed to parse tools JSON");
+                Vec::new()
+            }
         }
-        tools
     }
 }
 
@@ -667,123 +625,25 @@ impl PluginLoader {
 /// Global callback that plugins call to deliver inbound messages.
 ///
 /// The `user_data` pointer is a `Box<mpsc::Sender<PluginMessage>>` that we
-/// leaked in `load_plugin`. This function converts the FFI message to a Rust
+/// leaked in `load_plugin`. This function parses the JSON C string into a
 /// `PluginMessage` and sends it through the channel.
 unsafe extern "C" fn message_callback(
     user_data: *mut std::os::raw::c_void,
-    msg: *const FfiMessage,
+    json: *const c_char,
 ) {
-    if user_data.is_null() || msg.is_null() {
+    if user_data.is_null() || json.is_null() {
         return;
     }
 
     let tx = &*(user_data as *const mpsc::Sender<opencarrier_types::plugin::PluginMessage>);
 
-    let ffi_msg = &*msg;
-
-    let content = match ffi_msg.content.type_tag {
-        opencarrier_types::plugin::FfiContentType::Text => {
-            let text = CStr::from_ptr(ffi_msg.content.text)
-                .to_string_lossy()
-                .into_owned();
-            opencarrier_types::plugin::PluginContent::Text(text)
+    let json_str = CStr::from_ptr(json).to_string_lossy();
+    let message: opencarrier_types::plugin::PluginMessage = match serde_json::from_str(&json_str) {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(error = %e, "Failed to parse plugin message JSON");
+            return;
         }
-        opencarrier_types::plugin::FfiContentType::Image => {
-            opencarrier_types::plugin::PluginContent::Image {
-                url: CStr::from_ptr(ffi_msg.content.image_url)
-                    .to_string_lossy()
-                    .into_owned(),
-                caption: if ffi_msg.content.image_caption.is_null() {
-                    None
-                } else {
-                    Some(
-                        CStr::from_ptr(ffi_msg.content.image_caption)
-                            .to_string_lossy()
-                            .into_owned(),
-                    )
-                },
-            }
-        }
-        opencarrier_types::plugin::FfiContentType::File => {
-            opencarrier_types::plugin::PluginContent::File {
-                url: CStr::from_ptr(ffi_msg.content.file_url)
-                    .to_string_lossy()
-                    .into_owned(),
-                filename: CStr::from_ptr(ffi_msg.content.file_name)
-                    .to_string_lossy()
-                    .into_owned(),
-            }
-        }
-        opencarrier_types::plugin::FfiContentType::Voice => {
-            opencarrier_types::plugin::PluginContent::Voice {
-                url: CStr::from_ptr(ffi_msg.content.voice_url)
-                    .to_string_lossy()
-                    .into_owned(),
-                duration_seconds: ffi_msg.content.voice_duration_secs,
-            }
-        }
-        opencarrier_types::plugin::FfiContentType::Location => {
-            opencarrier_types::plugin::PluginContent::Location {
-                lat: ffi_msg.content.location_lat,
-                lon: ffi_msg.content.location_lon,
-            }
-        }
-        opencarrier_types::plugin::FfiContentType::Command => {
-            let args_json = if ffi_msg.content.command_args_json.is_null() {
-                "[]"
-            } else {
-                CStr::from_ptr(ffi_msg.content.command_args_json)
-                    .to_str()
-                    .unwrap_or("[]")
-            };
-            let args: Vec<String> = serde_json::from_str(args_json).unwrap_or_default();
-            opencarrier_types::plugin::PluginContent::Command {
-                name: CStr::from_ptr(ffi_msg.content.command_name)
-                    .to_string_lossy()
-                    .into_owned(),
-                args,
-            }
-        }
-    };
-
-    let metadata = if ffi_msg.metadata_json.is_null() {
-        HashMap::new()
-    } else {
-        let json_str = CStr::from_ptr(ffi_msg.metadata_json)
-            .to_str()
-            .unwrap_or("{}");
-        serde_json::from_str(json_str).unwrap_or_default()
-    };
-
-    let message = opencarrier_types::plugin::PluginMessage {
-        channel_type: CStr::from_ptr(ffi_msg.channel_type)
-            .to_string_lossy()
-            .into_owned(),
-        platform_message_id: CStr::from_ptr(ffi_msg.platform_message_id)
-            .to_string_lossy()
-            .into_owned(),
-        sender_id: CStr::from_ptr(ffi_msg.sender_id)
-            .to_string_lossy()
-            .into_owned(),
-        sender_name: CStr::from_ptr(ffi_msg.sender_name)
-            .to_string_lossy()
-            .into_owned(),
-        tenant_id: CStr::from_ptr(ffi_msg.tenant_id)
-            .to_string_lossy()
-            .into_owned(),
-        content,
-        timestamp_ms: ffi_msg.timestamp_ms,
-        is_group: ffi_msg.is_group != 0,
-        thread_id: if ffi_msg.thread_id.is_null() {
-            None
-        } else {
-            Some(
-                CStr::from_ptr(ffi_msg.thread_id)
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-        },
-        metadata,
     };
 
     // Non-blocking send — drop the message if the channel is full
