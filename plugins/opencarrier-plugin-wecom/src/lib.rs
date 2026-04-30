@@ -5,7 +5,7 @@
 //! - **MCP Tools**: 36+ tools via WeCom MCP protocol (doc/msg/contact/todo/meeting/schedule)
 //! - **Channel Tool**: send_wecom_message (direct REST API for App/Kf message delivery)
 //!
-//! Multi-tenant: configure multiple tenants in plugin.toml `[[tenants]]`.
+//! Multi-tenant: bots discovered from `<plugin-dir>/<bot-uuid>/bot.toml`.
 //! Three modes: `app` (企业应用), `kf` (微信客服), `smartbot` (智能机器人).
 
 use std::sync::LazyLock;
@@ -39,89 +39,114 @@ impl Plugin for WeComPlugin {
     const VERSION: &'static str = "1.0.0";
 
     fn new(config: PluginConfig, _ctx: PluginContext) -> Result<Self, PluginError> {
-        // Parse tenant configurations
-        for tenant_config in &config.tenants {
-            let mode = tenant_config["mode"].as_str().unwrap_or("app");
-            let name = tenant_config["name"]
+        // Parse bot configurations (discovered from <plugin>/<uuid>/bot.toml)
+        for bot_config in &config.bots {
+            let bot_uuid = bot_config["_bot_id"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let mode = bot_config["mode"].as_str().unwrap_or("app");
+            let name = bot_config["name"]
                 .as_str()
                 .unwrap_or("")
                 .to_string();
 
-            if name.is_empty() {
-                tracing::warn!("Skipping tenant with empty name");
+            if name.is_empty() || bot_uuid.is_empty() {
+                tracing::warn!("Skipping bot with empty name or bot_id");
                 continue;
             }
 
-            // Read secret from env var
-            let secret_env = tenant_config["secret_env"]
+            // Read secret: try env var first, fall back to inline config value
+            let secret_env = bot_config["secret_env"]
                 .as_str()
                 .unwrap_or("WECOM_SECRET");
-            let secret = std::env::var(secret_env).unwrap_or_default();
+            let secret = match std::env::var(secret_env) {
+                Ok(s) if !s.is_empty() => s,
+                _ => {
+                    let inline = bot_config["secret"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    if !inline.is_empty() {
+                        tracing::warn!(
+                            bot = %name,
+                            env_var = %secret_env,
+                            "Using inline secret from config — consider setting env var instead"
+                        );
+                    }
+                    inline
+                }
+            };
 
             // Read MCP bot credentials (optional, for App/Kf modes)
-            let mcp_bot_id = tenant_config["mcp_bot_id"]
+            let mcp_bot_id = bot_config["mcp_bot_id"]
                 .as_str()
                 .map(|s| s.to_string());
-            let mcp_bot_secret = tenant_config["mcp_bot_secret_env"]
+            let mcp_bot_secret = bot_config["mcp_bot_secret_env"]
                 .as_str()
                 .and_then(|env_name| std::env::var(env_name).ok())
                 .or_else(|| {
-                    tenant_config["mcp_bot_secret"]
+                    bot_config["mcp_bot_secret"]
                         .as_str()
                         .map(|s| s.to_string())
                 });
 
             match mode {
                 "smartbot" => {
-                    let bot_id = tenant_config["bot_id"]
+                    let wecom_bot_id = bot_config["bot_id"]
                         .as_str()
                         .unwrap_or("")
                         .to_string();
 
-                    if bot_id.is_empty() {
-                        tracing::warn!(tenant = %name, "Skipping smartbot tenant with empty bot_id");
+                    if wecom_bot_id.is_empty() {
+                        tracing::warn!(bot = %name, "Skipping smartbot with empty bot_id");
                         continue;
                     }
 
-                    let corp_id_for_bot = tenant_config["corp_id"]
+                    let corp_id_for_bot = bot_config["corp_id"]
                         .as_str()
                         .unwrap_or("")
                         .to_string();
 
                     let entry = token::TenantEntry::new_smartbot(
-                        name.clone(),
+                        bot_uuid.clone(),
                         corp_id_for_bot,
-                        bot_id,
+                        wecom_bot_id,
                         secret,
                     );
-                    tracing::info!(tenant = %name, mode = "smartbot", "Registered WeCom smartbot tenant");
+                    tracing::info!(
+                        bot = %name,
+                        bot_uuid = %bot_uuid,
+                        mode = "smartbot",
+                        "Registered WeCom smartbot"
+                    );
                     TOKEN_MANAGER.add_tenant(entry);
                 }
                 "kf" => {
-                    let corp_id = tenant_config["corp_id"]
+                    let corp_id = bot_config["corp_id"]
                         .as_str()
                         .unwrap_or("")
                         .to_string();
-                    let open_kfid = tenant_config["open_kfid"]
+                    let open_kfid = bot_config["open_kfid"]
                         .as_str()
                         .unwrap_or("")
                         .to_string();
 
                     if corp_id.is_empty() || open_kfid.is_empty() {
-                        tracing::warn!(tenant = %name, "Skipping kf tenant: missing corp_id or open_kfid");
+                        tracing::warn!(bot = %name, "Skipping kf bot: missing corp_id or open_kfid");
                         continue;
                     }
 
-                    let webhook_port = tenant_config["webhook_port"].as_u64().unwrap_or(8454) as u16;
-                    let encoding_aes_key = tenant_config["encoding_aes_key"]
+                    let webhook_port = bot_config["webhook_port"].as_u64().unwrap_or(8454) as u16;
+                    let encoding_aes_key = bot_config["encoding_aes_key"]
                         .as_str()
                         .map(|s| s.to_string());
-                    let callback_token = tenant_config["callback_token"]
+                    let callback_token = bot_config["callback_token"]
                         .as_str()
                         .map(|s| s.to_string());
 
                     let entry = token::TenantEntry::new_kf(
-                        name.clone(),
+                        bot_uuid.clone(),
                         corp_id,
                         open_kfid,
                         secret,
@@ -133,39 +158,40 @@ impl Plugin for WeComPlugin {
                     );
 
                     tracing::info!(
-                        tenant = %name,
+                        bot = %name,
+                        bot_uuid = %bot_uuid,
                         mode = "kf",
                         port = webhook_port,
-                        "Registered WeCom kf tenant"
+                        "Registered WeCom kf bot"
                     );
                     TOKEN_MANAGER.add_tenant(entry);
                 }
                 _ => {
                     // "app" mode (default)
-                    let corp_id = tenant_config["corp_id"]
+                    let corp_id = bot_config["corp_id"]
                         .as_str()
                         .unwrap_or("")
                         .to_string();
-                    let agent_id = tenant_config["agent_id"]
+                    let agent_id = bot_config["agent_id"]
                         .as_str()
                         .unwrap_or("")
                         .to_string();
 
                     if corp_id.is_empty() {
-                        tracing::warn!(tenant = %name, "Skipping app tenant with empty corp_id");
+                        tracing::warn!(bot = %name, "Skipping app bot with empty corp_id");
                         continue;
                     }
 
-                    let webhook_port = tenant_config["webhook_port"].as_u64().unwrap_or(8454) as u16;
-                    let encoding_aes_key = tenant_config["encoding_aes_key"]
+                    let webhook_port = bot_config["webhook_port"].as_u64().unwrap_or(8454) as u16;
+                    let encoding_aes_key = bot_config["encoding_aes_key"]
                         .as_str()
                         .map(|s| s.to_string());
-                    let callback_token = tenant_config["callback_token"]
+                    let callback_token = bot_config["callback_token"]
                         .as_str()
                         .map(|s| s.to_string());
 
                     let entry = token::TenantEntry::new_app(
-                        name.clone(),
+                        bot_uuid.clone(),
                         corp_id,
                         agent_id,
                         secret,
@@ -177,10 +203,11 @@ impl Plugin for WeComPlugin {
                     );
 
                     tracing::info!(
-                        tenant = %name,
+                        bot = %name,
+                        bot_uuid = %bot_uuid,
                         mode = "app",
                         port = webhook_port,
-                        "Registered WeCom app tenant"
+                        "Registered WeCom app bot"
                     );
                     TOKEN_MANAGER.add_tenant(entry);
                 }
@@ -225,7 +252,14 @@ impl Plugin for WeComPlugin {
     }
 
     fn tools(&self) -> Vec<Box<dyn ToolProvider>> {
-        let mut tools: Vec<Box<dyn ToolProvider>> = vec![Box::new(tools::SendMessageTool)];
+        let mut tools: Vec<Box<dyn ToolProvider>> = vec![
+            Box::new(tools::SendMessageTool),
+            Box::new(tools::BotGenerateTool),
+            Box::new(tools::BotPollTool),
+            Box::new(tools::QrCodeTool),
+            Box::new(tools::BotRegisterTool),
+            Box::new(tools::BotBindTool),
+        ];
         tools.extend(mcp::build_mcp_tools());
         tracing::info!(tool_count = tools.len(), "Registered WeCom plugin tools");
         tools

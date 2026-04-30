@@ -79,16 +79,24 @@ impl ChannelAdapter for WeComChannel {
         let port = self.webhook_port;
         let is_kf = self.is_kf;
 
-        // Spawn webhook server on the host's tokio runtime
-        tokio::spawn(async move {
-            run_webhook_server(tenant_name, corp_id, encoding_aes_key, callback_token, port, is_kf, tx).await;
-        });
+        // Spawn in its own thread with dedicated runtime
+        // (cdylib plugins cannot use the host's tokio runtime).
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime for WeCom webhook");
+            rt.block_on(async move {
+                // Spawn message bridge
+                tokio::spawn(async move {
+                    while let Some(msg) = rx.recv().await {
+                        sender.send(msg);
+                    }
+                });
 
-        // Spawn bridge: read from mpsc and forward to sender
-        tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
-                sender.send(msg);
-            }
+                // Run webhook server (blocks until server shuts down)
+                run_webhook_server(tenant_name, corp_id, encoding_aes_key, callback_token, port, is_kf, tx).await;
+            });
         });
 
         info!(

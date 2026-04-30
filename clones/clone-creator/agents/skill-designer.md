@@ -54,6 +54,12 @@ usage_count: 0
   - `shell_exec` — 执行命令
   - `knowledge_lint` — 检查知识库健康
   - `clone_evaluate` — 评估分身质量
+  - `clone_install` / `clone_export` / `clone_publish` — 分身管理
+  - `agent_send` — 发送消息给子代理
+- **插件工具**（如果分身声明了插件依赖）：
+  - 企业微信插件：`send_wecom_message`、`get_userlist`、`get_doc_content`、`create_doc`、`edit_doc_content`、`get_msg_chat_list`、`get_message`、`send_message`、`get_todo_list`、`create_todo`、`create_meeting`、`list_user_meetings`、`get_schedule_list_by_range`、`create_schedule` 等
+  - 飞书插件：类似的企业协作工具集
+  - 插件工具名可以直接在 `allowed_tools` 中使用
 - 如果 skill 需要调用外部 API，在 `skills/<name>/scripts/*.toml` 中定义
 
 ## 目录格式（复杂技能）

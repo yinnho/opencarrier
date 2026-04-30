@@ -48,9 +48,12 @@
   "author": "作者名",
   "tags": ["tag1", "tag2"],
   "exported_at": "1712736000",
-  "knowledge_version": 2
+  "knowledge_version": 2,
+  "plugins": ["wecom"]
 }
 ```
+
+**`plugins`**（可选）：字符串数组，声明该分身依赖的插件。值对应 `~/.opencarrier/plugins/` 下的目录名（不含 `opencarrier-plugin-` 前缀）。安装时系统会检查依赖的插件是否已加载。如果分身需要使用插件提供的工具，必须声明对应的插件依赖。
 
 ### profile.md — YAML frontmatter + Markdown
 

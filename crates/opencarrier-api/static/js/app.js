@@ -152,7 +152,7 @@ document.addEventListener('alpine:init', function() {
     wsConnected: false,
     connectionState: 'connected',
     lastError: '',
-    version: '0.1.0',
+    version: '',
     agentCount: 0,
     pendingAgent: null,
     focusMode: localStorage.getItem('opencarrier-focus') === 'true',
@@ -186,7 +186,7 @@ document.addEventListener('alpine:init', function() {
         this.connected = true;
         this.booting = false;
         this.lastError = '';
-        this.version = s.version || '0.1.0';
+        this.version = s.version || '';
         this.agentCount = s.agent_count || 0;
       } catch(e) {
         this.connected = false;
@@ -322,17 +322,11 @@ document.addEventListener('alpine:init', function() {
 function app() {
   return {
     page: 'agents',
-    themeMode: localStorage.getItem('opencarrier-theme-mode') || 'system',
-    theme: (() => {
-      var mode = localStorage.getItem('opencarrier-theme-mode') || 'system';
-      if (mode === 'system') return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      return mode;
-    })(),
     sidebarCollapsed: localStorage.getItem('opencarrier-sidebar') === 'collapsed',
     mobileMenuOpen: false,
     connected: false,
     wsConnected: false,
-    version: '0.1.0',
+    version: '',
     agentCount: 0,
 
     get agents() { return Alpine.store('app').agents; },
@@ -340,24 +334,20 @@ function app() {
     init() {
       var self = this;
 
-      // Listen for OS theme changes (only matters when mode is 'system')
-      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
-        if (self.themeMode === 'system') {
-          self.theme = e.matches ? 'dark' : 'light';
-        }
-      });
-
       // Hash routing
-      var validPages = ['overview','agents','sessions','comms','scheduler','mcp','logs','settings','tenants'];
-      var adminOnlyPages = ['logs','comms','mcp','settings','tenants'];
+      var validPages = ['overview','agents','bots','sessions','comms','tasks','mcp','logs','brain','security','team'];
+      var adminOnlyPages = ['logs','comms','mcp','bots','brain','security','team'];
       var pageRedirects = {
         'chat': 'agents',
         'templates': 'agents',
-        'cron': 'scheduler',
-        'schedules': 'scheduler',
+        'cron': 'tasks',
+        'scheduler': 'tasks',
+        'schedules': 'tasks',
         'memory': 'sessions',
         'audit': 'logs',
-        'security': 'settings'
+        'settings': 'brain',
+        'config': 'brain',
+        'tenants': 'team'
       };
       function isPageAllowed(page) {
         // No role info yet — allow all until auth is resolved
@@ -377,7 +367,7 @@ function app() {
             self.page = 'agents';
             window.location.hash = 'agents';
             if (typeof OpenCarrierToast !== 'undefined') {
-              OpenCarrierToast.info('This page requires admin access');
+              OpenCarrierToast.info('此页面需要管理员权限');
             }
           }
         }
@@ -387,16 +377,6 @@ function app() {
 
       // Keyboard shortcuts
       document.addEventListener('keydown', function(e) {
-        // Ctrl+K — focus agent switch / go to agents
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-          e.preventDefault();
-          self.navigate('agents');
-        }
-        // Ctrl+N — new agent
-        if ((e.ctrlKey || e.metaKey) && e.key === 'n' && !e.shiftKey) {
-          e.preventDefault();
-          self.navigate('agents');
-        }
         // Ctrl+Shift+F — toggle focus mode
         if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
           e.preventDefault();
@@ -421,34 +401,18 @@ function app() {
     },
 
     navigate(p) {
-      var adminOnlyPages = ['logs','comms','mcp','settings','tenants'];
+      var adminOnlyPages = ['logs','comms','mcp','bots','brain','security','team'];
       if (adminOnlyPages.indexOf(p) >= 0 && !Alpine.store('app').isAdmin()) {
         this.page = 'agents';
         window.location.hash = 'agents';
         if (typeof OpenCarrierToast !== 'undefined') {
-          OpenCarrierToast.info('This page requires admin access');
+          OpenCarrierToast.info('此页面需要管理员权限');
         }
       } else {
         this.page = p;
         window.location.hash = p;
       }
       this.mobileMenuOpen = false;
-    },
-
-    setTheme(mode) {
-      this.themeMode = mode;
-      localStorage.setItem('opencarrier-theme-mode', mode);
-      if (mode === 'system') {
-        this.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      } else {
-        this.theme = mode;
-      }
-    },
-
-    toggleTheme() {
-      var modes = ['light', 'system', 'dark'];
-      var next = modes[(modes.indexOf(this.themeMode) + 1) % modes.length];
-      this.setTheme(next);
     },
 
     toggleSidebar() {

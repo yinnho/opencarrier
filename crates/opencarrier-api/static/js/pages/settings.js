@@ -26,16 +26,23 @@ function settingsPage() {
     secLoading: false,
     verifyingChain: false,
     chainResult: null,
+    // Tenants tab
+    tenantsList: [],
+    tenantsLoaded: false,
+    showTenantModal: false,
+    newTenantName: '',
+    newTenantPass: '',
+    tenantSaving: false,
     coreFeatures: [
-      { name: 'Path Traversal Prevention', key: 'path_traversal', description: 'Blocks directory escape attacks in all file operations.' },
-      { name: 'SSRF Protection', key: 'ssrf_protection', description: 'Blocks outbound requests to private IPs and cloud metadata endpoints.' },
-      { name: 'Capability-Based Access Control', key: 'capability_system', description: 'Deny-by-default permission system.' },
-      { name: 'Subprocess Environment Isolation', key: 'subprocess_isolation', description: 'Child processes inherit only safe environment variables.' },
-      { name: 'Security Headers', key: 'security_headers', description: 'Every HTTP response includes CSP, X-Frame-Options, etc.' }
+      { name: '路径遍历防护', key: 'path_traversal', description: '阻止所有文件操作中的目录逃逸攻击。' },
+      { name: 'SSRF 防护', key: 'ssrf_protection', description: '阻止对私有 IP 和云元数据端点的出站请求。' },
+      { name: '基于能力的访问控制', key: 'capability_system', description: '默认拒绝的权限系统。' },
+      { name: '子进程环境隔离', key: 'subprocess_isolation', description: '子进程仅继承安全的环境变量。' },
+      { name: '安全响应头', key: 'security_headers', description: '每个 HTTP 响应包含 CSP、X-Frame-Options 等安全头。' }
     ],
     async loadSettings() {
       this.loading = true; this.loadError = '';
-      try { await Promise.all([this.loadSysInfo(), this.loadUsage(), this.loadTools(), this.loadConfig(), this.loadBrainConfig(), this.loadProviderKeys()]); } catch(e) { this.loadError = e.message || 'Could not load settings.'; }
+      try { await Promise.all([this.loadSysInfo(), this.loadUsage(), this.loadTools(), this.loadConfig(), this.loadBrainConfig(), this.loadProviderKeys()]); } catch(e) { this.loadError = e.message || '无法加载设置。'; }
       this.loading = false;
     },
     async loadData() { return this.loadSettings(); },
@@ -44,15 +51,15 @@ function settingsPage() {
     async loadTools() { try { var data = await OpenCarrierAPI.get('/api/tools'); this.tools = data.tools || []; } catch(e) { this.tools = []; } },
     async loadConfig() { try { this.config = await OpenCarrierAPI.get('/api/config'); } catch(e) { this.config = {}; } },
     async loadConfigSchema() { try { var r = await Promise.all([OpenCarrierAPI.get('/api/config/schema').catch(function(){return{}}), OpenCarrierAPI.get('/api/config')]); this.configSchema = r[0].sections || null; this.configValues = r[1] || {}; } catch(e) {} },
-    async loadBrainConfig() { try { var data = await OpenCarrierAPI.get('/api/brain/config'); this.brainConfig = data; this.brainConfigRaw = JSON.stringify(data, null, 2); this.brainConfigError = ''; } catch(e) { this.brainConfig = null; this.brainConfigRaw = ''; this.brainConfigError = e.message || 'Failed to load brain config'; } },
-    async saveBrainConfig() { this.brainConfigSaving = true; this.brainConfigError = ''; try { var json = JSON.parse(this.brainConfigRaw); await OpenCarrierAPI.put('/api/brain/config', json); this.brainConfig = json; OpenCarrierToast.success('Brain config saved'); } catch(e) { this.brainConfigError = e.message || 'Failed to save brain config'; OpenCarrierToast.error(this.brainConfigError); } this.brainConfigSaving = false; },
+    async loadBrainConfig() { try { var data = await OpenCarrierAPI.get('/api/brain/config'); this.brainConfig = data; this.brainConfigRaw = JSON.stringify(data, null, 2); this.brainConfigError = ''; } catch(e) { this.brainConfig = null; this.brainConfigRaw = ''; this.brainConfigError = e.message || '加载大脑配置失败'; } },
+    async saveBrainConfig() { this.brainConfigSaving = true; this.brainConfigError = ''; try { var json = JSON.parse(this.brainConfigRaw); await OpenCarrierAPI.put('/api/brain/config', json); this.brainConfig = json; OpenCarrierToast.success('大脑配置已保存'); } catch(e) { this.brainConfigError = e.message || '保存大脑配置失败'; OpenCarrierToast.error(this.brainConfigError); } this.brainConfigSaving = false; },
     async loadProviderKeys() { try { var data = await OpenCarrierAPI.get('/api/providers/keys'); this.providerKeys = data.providers || []; this.providerKeyInputs = {}; } catch(e) { this.providerKeys = []; } },
-    async saveProviderKey(name) { var p = this.providerKeys.find(function(x){return x.name===name}); if (p && p.auth_type === 'jwt') { return this.saveProviderKeyJwt(name); } var key = (this.providerKeyInputs[name] || '').trim(); if (!key) { OpenCarrierToast.error('API key cannot be empty'); return; } this.providerKeySaving[name] = true; try { await OpenCarrierAPI.post('/api/providers/' + name + '/key', { key: key }); await this.loadProviderKeys(); OpenCarrierToast.success('API key saved for ' + name); } catch(e) { OpenCarrierToast.error('Failed to save key: ' + (e.message || e)); } this.providerKeySaving[name] = false; },
-    async saveProviderKeyJwt(name) { var p = this.providerKeys.find(function(x){return x.name===name}); if (!p) return; var params = {}; var hasValue = false; (p.params || []).forEach(function(param) { var val = (this.providerKeyInputs[name + '_' + param.name] || '').trim(); if (val) { params[param.name] = val; hasValue = true; } }.bind(this)); if (!hasValue) { OpenCarrierToast.error('Please fill in at least one credential'); return; } this.providerKeySaving[name] = true; try { await OpenCarrierAPI.post('/api/providers/' + name + '/key', { params: params }); await this.loadProviderKeys(); OpenCarrierToast.success('Credentials saved for ' + name); } catch(e) { OpenCarrierToast.error('Failed to save credentials: ' + (e.message || e)); } this.providerKeySaving[name] = false; },
-    async deleteProviderKey(name) { if (!confirm('Remove credentials for ' + name + '?')) return; try { await OpenCarrierAPI.del('/api/providers/' + name + '/key'); await this.loadProviderKeys(); OpenCarrierToast.success('Credentials removed for ' + name); } catch(e) { OpenCarrierToast.error('Failed to remove credentials: ' + (e.message || e)); } },
+    async saveProviderKey(name) { var p = this.providerKeys.find(function(x){return x.name===name}); if (p && p.auth_type === 'jwt') { return this.saveProviderKeyJwt(name); } var key = (this.providerKeyInputs[name] || '').trim(); if (!key) { OpenCarrierToast.error('API 密钥不能为空'); return; } this.providerKeySaving[name] = true; try { await OpenCarrierAPI.post('/api/providers/' + name + '/key', { key: key }); await this.loadProviderKeys(); OpenCarrierToast.success('已保存 ' + name + ' 的 API 密钥'); } catch(e) { OpenCarrierToast.error('保存密钥失败: ' + (e.message || e)); } this.providerKeySaving[name] = false; },
+    async saveProviderKeyJwt(name) { var p = this.providerKeys.find(function(x){return x.name===name}); if (!p) return; var params = {}; var hasValue = false; (p.params || []).forEach(function(param) { var val = (this.providerKeyInputs[name + '_' + param.name] || '').trim(); if (val) { params[param.name] = val; hasValue = true; } }.bind(this)); if (!hasValue) { OpenCarrierToast.error('请至少填写一项凭证'); return; } this.providerKeySaving[name] = true; try { await OpenCarrierAPI.post('/api/providers/' + name + '/key', { params: params }); await this.loadProviderKeys(); OpenCarrierToast.success('已保存 ' + name + ' 的凭证'); } catch(e) { OpenCarrierToast.error('保存凭证失败: ' + (e.message || e)); } this.providerKeySaving[name] = false; },
+    async deleteProviderKey(name) { if (!confirm('确定删除 ' + name + ' 的凭证吗？')) return; try { await OpenCarrierAPI.del('/api/providers/' + name + '/key'); await this.loadProviderKeys(); OpenCarrierToast.success('已删除 ' + name + ' 的凭证'); } catch(e) { OpenCarrierToast.error('删除凭证失败: ' + (e.message || e)); } },
     isConfigDirty(s, f) { return this.configDirty[s + '.' + f] === true; },
     markConfigDirty(s, f) { this.configDirty[s + '.' + f] = true; },
-    async saveConfigField(section, field, value) { var key = section + '.' + field; var meta = this.configSchema && this.configSchema[section]; var path = (meta && meta.root_level) ? field : key; this.configSaving[key] = true; try { await OpenCarrierAPI.post('/api/config/set', { path: path, value: value }); this.configDirty[key] = false; OpenCarrierToast.success('Saved ' + field); } catch(e) { OpenCarrierToast.error('Failed to save: ' + e.message); } this.configSaving[key] = false; },
+    async saveConfigField(section, field, value) { var key = section + '.' + field; var meta = this.configSchema && this.configSchema[section]; var path = (meta && meta.root_level) ? field : key; this.configSaving[key] = true; try { await OpenCarrierAPI.post('/api/config/set', { path: path, value: value }); this.configDirty[key] = false; OpenCarrierToast.success('已保存 ' + field); } catch(e) { OpenCarrierToast.error('保存失败: ' + e.message); } this.configSaving[key] = false; },
     get filteredTools() { var q = this.toolSearch.toLowerCase().trim(); if (!q) return this.tools; return this.tools.filter(function(t) { return t.name.toLowerCase().indexOf(q) !== -1 || (t.description || '').toLowerCase().indexOf(q) !== -1; }); },
     formatUptime(secs) { if (!secs) return '-'; var h = Math.floor(secs / 3600); var m = Math.floor((secs % 3600) / 60); var s = secs % 60; if (h > 0) return h + 'h ' + m + 'm'; if (m > 0) return m + 'm ' + s + 's'; return s + 's'; },
     async loadSecurity() { this.secLoading = true; try { this.securityData = await OpenCarrierAPI.get('/api/security'); } catch(e) { this.securityData = null; } this.secLoading = false; },
@@ -143,6 +150,34 @@ function settingsPage() {
       } catch(e) {
         OpenCarrierToast.error('Failed to remove binding: ' + (e.message || e));
       }
+    },
+    // Tenants
+    async loadTenantsTab() {
+      try {
+        var data = await OpenCarrierAPI.get('/api/tenants');
+        this.tenantsList = Array.isArray(data) ? data : (data.tenants || []);
+        this.tenantsLoaded = true;
+      } catch(e) { this.tenantsList = []; this.tenantsLoaded = true; }
+    },
+    async createTenantInSettings() {
+      this.tenantSaving = true;
+      try {
+        await OpenCarrierAPI.post('/api/tenants', { name: this.newTenantName.trim(), password: this.newTenantPass });
+        OpenCarrierToast.success('租户已创建');
+        this.showTenantModal = false;
+        this.newTenantName = '';
+        this.newTenantPass = '';
+        await this.loadTenantsTab();
+      } catch(e) { OpenCarrierToast.error('创建租户失败: ' + (e.message || e)); }
+      this.tenantSaving = false;
+    },
+    async deleteTenantInSettings(id, name) {
+      if (!confirm('确定要删除租户 "' + name + '" 吗？此操作不可撤销。')) return;
+      try {
+        await OpenCarrierAPI.del('/api/tenants/' + id);
+        OpenCarrierToast.success('租户已删除');
+        await this.loadTenantsTab();
+      } catch(e) { OpenCarrierToast.error('删除租户失败: ' + (e.message || e)); }
     }
   };
 }

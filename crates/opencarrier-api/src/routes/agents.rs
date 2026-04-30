@@ -212,8 +212,8 @@ pub async fn list_agents(
                 "mode": e.mode,
                 "created_at": e.created_at.to_rfc3339(),
                 "last_active": e.last_active.to_rfc3339(),
-                "modality": modality,
-                "model": model,
+                "model_provider": modality,
+                "model_name": model,
                 "ready": ready,
                 "profile": e.manifest.profile,
                 "tenant_id": e.tenant_id,
@@ -380,23 +380,6 @@ pub async fn get_agent(
 // ---------------------------------------------------------------------------
 
 /// PUT /api/agents/:id — Update an agent (currently: re-set manifest fields).
-pub async fn update_agent(
-    State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
-    Path(id): Path<String>,
-    Json(_req): Json<AgentUpdateRequest>,
-) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let _ = parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx);
-
-    (
-        StatusCode::GONE,
-        Json(serde_json::json!({
-            "error": "In-place manifest update is not supported. Use DELETE + POST (kill and respawn) to apply changes.",
-            "agent_id": id,
-        })),
-    )
-}
 /// PATCH /api/agents/{id} — Partial update of agent fields (name, description, model, system_prompt).
 pub async fn patch_agent(
     State(state): State<Arc<AppState>>,
@@ -885,7 +868,7 @@ pub async fn clone_agent(
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
     axum::Router::new().route("/api/agents", routing::post(spawn_agent).get(list_agents))
-        .route("/api/agents/{id}", routing::delete(kill_agent).patch(patch_agent).get(get_agent).put(update_agent))
+        .route("/api/agents/{id}", routing::delete(kill_agent).patch(patch_agent).get(get_agent))
         .route("/api/agents/{id}/clone", routing::post(clone_agent))
         .route("/api/agents/{id}/config", routing::patch(patch_agent_config))
         .route("/api/agents/{id}/identity", routing::patch(update_agent_identity))

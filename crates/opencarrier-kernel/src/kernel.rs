@@ -80,6 +80,13 @@ pub struct KernelPlugins {
     /// Plugin tool dispatcher — routes plugin tool calls to loaded shared libraries.
     pub plugin_tool_dispatcher:
         std::sync::Mutex<Option<Arc<opencarrier_runtime::plugin::tool_dispatch::PluginToolDispatcher>>>,
+    /// Source tenant_id (bot UUID) for the current message being processed per agent.
+    /// Set by bridge before agent loop, read by execute_plugin_tool.
+    /// Safe because per-agent mutex ensures single concurrent message per agent.
+    pub source_tenant_id: dashmap::DashMap<AgentId, String>,
+    /// Default plugin tenant per agent — set during boot from bot bindings.
+    /// Used as fallback when no channel context is available (e.g. REST API calls).
+    pub default_plugin_tenant: dashmap::DashMap<AgentId, String>,
 }
 
 /// Agent scheduling, supervision, and runtime execution subsystem.
@@ -1225,6 +1232,8 @@ impl OpenCarrierKernel {
                 effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
                 skill_registry: std::sync::RwLock::new(skill_registry),
                 plugin_tool_dispatcher: std::sync::Mutex::new(None),
+                source_tenant_id: dashmap::DashMap::new(),
+                default_plugin_tenant: dashmap::DashMap::new(),
             },
             runtime: KernelRuntime {
                 scheduler: AgentScheduler::new(),
@@ -3826,14 +3835,34 @@ impl OpenCarrierKernel {
         // Step 3.5: Add plugin tools (from dlopen-loaded shared libraries).
         if let Ok(guard) = self.plugins.plugin_tool_dispatcher.lock() {
             if let Some(ref dispatcher) = *guard {
-                for t in dispatcher.definitions() {
+                let plugin_defs = dispatcher.definitions();
+                tracing::info!(
+                    agent = %agent_id,
+                    plugin_tools_total = plugin_defs.len(),
+                    declared_tools_count = declared_tools.len(),
+                    tools_unrestricted,
+                    "Plugin tool filtering"
+                );
+                let mut matched = 0;
+                let mut unmatched = Vec::new();
+                for t in &plugin_defs {
                     if !tools_unrestricted
                         && !declared_tools.iter().any(|d| d == &t.name)
                     {
+                        unmatched.push(t.name.clone());
                         continue;
                     }
-                    all_tools.push(t);
+                    matched += 1;
+                    all_tools.push(t.clone());
                 }
+                tracing::info!(
+                    agent = %agent_id,
+                    matched,
+                    unmatched_count = unmatched.len(),
+                    "Plugin tool filter result"
+                );
+                tracing::info!(agent = %agent_id, ?unmatched, "All unmatched plugin tools");
+                tracing::info!(agent = %agent_id, ?declared_tools, "Declared tools in manifest");
             }
         }
 
@@ -4413,6 +4442,7 @@ impl KernelHandle for OpenCarrierKernel {
         sender_id: Option<&str>,
         sender_name: Option<&str>,
         caller_agent_id: Option<&str>,
+        source_tenant_id: Option<&str>,
     ) -> Result<String, String> {
         // Resolve target agent — UUID first, then name lookup
         let (id, target_entry): (AgentId, AgentEntry) = match agent_id.parse() {
@@ -4422,12 +4452,14 @@ impl KernelHandle for OpenCarrierKernel {
                 (id, entry)
             }
             Err(_) => {
-                // Name lookup — requires caller context for tenant scoping
+                // Name lookup — prefer caller tenant for scoping, fallback to global
                 let caller_tid = caller_agent_id
-                    .and_then(|cid| self.get_agent_tenant_id(cid))
-                    .ok_or_else(|| "Agent name lookup requires a caller context. Use agent UUID instead.".to_string())?;
-                let entry = self.registry.find_by_name_and_tenant(agent_id, Some(&caller_tid))
-                    .ok_or_else(|| format!("Agent '{agent_id}' not found in your tenant"))?;
+                    .and_then(|cid| self.get_agent_tenant_id(cid));
+                let entry = if let Some(ref tid) = caller_tid {
+                    self.registry.find_by_name_and_tenant(agent_id, Some(tid))
+                } else {
+                    self.registry.find_by_name_and_tenant(agent_id, None)
+                }.ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
                 (entry.id, entry)
             }
         };
@@ -4448,10 +4480,20 @@ impl KernelHandle for OpenCarrierKernel {
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn KernelHandle>);
+
+        // Store source_tenant_id for plugin tool execution context
+        if let Some(tid) = source_tenant_id {
+            self.plugins.source_tenant_id.insert(id, tid.to_string());
+        }
+
         let result = self
             .send_message_with_handle(id, message, handle, sender_id.map(|s| s.to_string()), sender_name.map(|s| s.to_string()))
             .await
             .map_err(|e| format!("Send failed: {e}"))?;
+
+        // Clean up source_tenant_id after agent loop completes
+        self.plugins.source_tenant_id.remove(&id);
+
         Ok(result.response)
     }
 
@@ -5118,11 +5160,19 @@ impl KernelHandle for OpenCarrierKernel {
     ) -> Result<String, String> {
         let guard = self.plugins.plugin_tool_dispatcher.lock().unwrap();
         if let Some(ref dispatcher) = *guard {
-            let tenant_id = uuid::Uuid::parse_str(agent_id)
-                .ok()
-                .map(opencarrier_types::agent::AgentId)
-                .and_then(|id| self.registry.get(id))
-                .and_then(|e| e.tenant_id.clone())
+            // Prefer source_tenant_id from channel context (bot UUID),
+            // fallback to default plugin tenant from bot bindings.
+            // Note: agent's own tenant_id (workspace-level) is NOT used here —
+            // it serves workspace isolation, not plugin credential routing.
+            let agent_uuid = uuid::Uuid::parse_str(agent_id).ok().map(opencarrier_types::agent::AgentId);
+            let tenant_id = agent_uuid
+                .as_ref()
+                .and_then(|id| self.plugins.source_tenant_id.get(id).map(|v| v.value().clone()))
+                .or_else(|| {
+                    agent_uuid
+                        .as_ref()
+                        .and_then(|id| self.plugins.default_plugin_tenant.get(id).map(|v| v.value().clone()))
+                })
                 .unwrap_or_default();
             let context = opencarrier_types::plugin::PluginToolContext {
                 tenant_id,
@@ -5133,6 +5183,12 @@ impl KernelHandle for OpenCarrierKernel {
             dispatcher.execute(tool_name, args, &context)
         } else {
             Err(format!("Unknown tool: {tool_name}"))
+        }
+    }
+
+    fn set_default_plugin_tenant(&self, agent_id: &str, tenant_id: &str) {
+        if let Ok(id) = agent_id.parse() {
+            self.plugins.default_plugin_tenant.insert(id, tenant_id.to_string());
         }
     }
 }

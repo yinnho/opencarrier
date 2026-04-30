@@ -63,12 +63,6 @@ pub struct MessageResponse {
     pub iterations: u32,
 }
 
-/// Request to update an agent's manifest.
-#[derive(Debug, Deserialize)]
-pub struct AgentUpdateRequest {
-    pub manifest_toml: String,
-}
-
 /// Request to change an agent's operational mode.
 #[derive(Debug, Deserialize)]
 pub struct SetModeRequest {

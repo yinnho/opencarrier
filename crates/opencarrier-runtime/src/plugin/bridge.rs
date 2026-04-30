@@ -23,8 +23,9 @@ pub struct PluginBridgeManager {
     plugins: Vec<Arc<LoadedPlugin>>,
     /// Default agent ID for routing when no specific binding exists.
     default_agent_id: Option<String>,
-    /// Channel type → agent ID bindings.
-    channel_bindings: HashMap<String, String>,
+    /// (channel_type, tenant_id) → agent_id bindings.
+    /// tenant_id is the bot UUID from bot.toml directory name.
+    channel_bindings: HashMap<(String, String), String>,
 }
 
 impl PluginBridgeManager {
@@ -48,9 +49,21 @@ impl PluginBridgeManager {
         self.default_agent_id = Some(agent_id);
     }
 
-    /// Bind a channel type to a specific agent.
-    pub fn bind_channel(&mut self, channel_type: String, agent_id: String) {
-        self.channel_bindings.insert(channel_type, agent_id);
+    /// Bind a specific (channel_type, tenant_id) to an agent.
+    pub fn bind_channel(
+        &mut self,
+        channel_type: String,
+        tenant_id: String,
+        agent_id: String,
+    ) {
+        info!(
+            channel = %channel_type,
+            tenant = %tenant_id,
+            agent = %agent_id,
+            "Bound channel+tenant to agent"
+        );
+        self.channel_bindings
+            .insert((channel_type, tenant_id), agent_id);
     }
 
     /// Run the message processing loop (consumes self).
@@ -74,10 +87,10 @@ impl PluginBridgeManager {
             None => self.describe_non_text_content(&msg),
         };
 
-        // Route to agent
+        // Route by (channel_type, tenant_id), fallback to default
         let agent_id = self
             .channel_bindings
-            .get(&msg.channel_type)
+            .get(&(msg.channel_type.clone(), msg.tenant_id.clone()))
             .cloned()
             .or_else(|| self.default_agent_id.clone());
 
@@ -86,7 +99,8 @@ impl PluginBridgeManager {
             None => {
                 warn!(
                     channel = %msg.channel_type,
-                    "No agent binding for channel, dropping message"
+                    tenant = %msg.tenant_id,
+                    "No agent binding for channel+tenant, dropping message"
                 );
                 return;
             }
@@ -94,13 +108,20 @@ impl PluginBridgeManager {
 
         info!(
             channel = %msg.channel_type,
+            tenant = %msg.tenant_id,
             agent = %agent_id,
             sender = %msg.sender_name,
-            tenant = %msg.tenant_id,
             "Routing plugin message to agent"
         );
 
-        match self.kernel.send_to_agent(&agent_id, &text, Some(&msg.sender_id), Some(&msg.sender_name), None).await {
+        match self.kernel.send_to_agent(
+            &agent_id,
+            &text,
+            Some(&msg.sender_id),
+            Some(&msg.sender_name),
+            None,
+            Some(&msg.tenant_id),
+        ).await {
             Ok(response) => {
                 self.send_response(&msg, &response);
             }

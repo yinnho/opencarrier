@@ -22,7 +22,7 @@ pub async fn call_tool(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis(),
-        hex::encode(&rand::random::<[u8; 4]>())
+        hex::encode(rand::random::<[u8; 4]>())
     );
 
     let request_body = serde_json::json!({

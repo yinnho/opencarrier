@@ -1,9 +1,13 @@
 {
-  "version": "3",
+  "version": "4",
   "name": "clone-creator",
-  "description": "分身生成器 — 帮助用户设计、创建和安装新的 AI 分身（含子代理协作）",
+  "description": "\u5206\u8eab\u751f\u6210\u5668 \u2014 \u5e2e\u52a9\u7528\u6237\u8bbe\u8ba1\u3001\u521b\u5efa\u548c\u5b89\u88c5\u65b0\u7684 AI \u5206\u8eab\uff08\u542b\u5b50\u4ee3\u7406\u534f\u4f5c + \u63d2\u4ef6\u5de5\u5177\u652f\u6301\uff09",
   "author": "opencarrier",
-  "tags": ["meta", "creator", "generator"],
-  "exported_at": "1712736000",
-  "knowledge_version": 2
+  "tags": [
+    "meta",
+    "creator",
+    "generator"
+  ],
+  "exported_at": "1777377026",
+  "knowledge_version": 3
 }

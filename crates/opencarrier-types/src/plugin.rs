@@ -48,9 +48,14 @@ pub struct PluginConfig {
     /// Schema for tenant configuration fields.
     #[serde(default)]
     pub config_schema: serde_json::Value,
-    /// Tenant configurations (each tenant has its own credentials).
+    /// Legacy tenant configurations (from plugin.toml [[tenants]]).
+    /// Empty after migration to per-bot bot.toml files.
     #[serde(default)]
     pub tenants: Vec<serde_json::Value>,
+    /// Discovered bot configurations (from <plugin-dir>/<uuid>/bot.toml).
+    /// Each value includes all bot config fields plus `_bot_id` (the bot UUID).
+    #[serde(default)]
+    pub bots: Vec<serde_json::Value>,
     /// Arbitrary plugin-specific configuration.
     #[serde(default)]
     pub extra: serde_json::Value,
@@ -172,6 +177,29 @@ pub struct PluginToolContext {
     /// Channel type the message came from.
     #[serde(default)]
     pub channel_type: String,
+}
+
+// ---------------------------------------------------------------------------
+// Per-bot configuration (stored in <plugin-dir>/<bot-uuid>/bot.toml)
+// ---------------------------------------------------------------------------
+
+/// Per-bot configuration stored in `bot.toml`.
+///
+/// Each bot gets its own directory under the plugin directory:
+/// `<plugin-dir>/<bot-uuid>/bot.toml`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BotConfig {
+    /// Human-readable bot name.
+    pub name: String,
+    /// Bot mode: "smartbot", "app", or "kf".
+    #[serde(default)]
+    pub mode: String,
+    /// Bound agent ID (UUID string). None = unbound.
+    #[serde(default)]
+    pub bind_agent: Option<String>,
+    /// Platform-specific fields stored as a flat TOML table.
+    #[serde(flatten)]
+    pub extra: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------

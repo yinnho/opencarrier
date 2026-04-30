@@ -2,6 +2,7 @@
 
 ## 知识
 - [agx-format](knowledge/agx-format.md) — .agx 分身包完整格式规范（13 部分）
+- [plugin-tools](knowledge/plugin-tools.md) — 插件工具系统：如何在分身中使用插件提供的工具
 
 ## 技能
 - **clone-generate** — 生成分身包的完整技能

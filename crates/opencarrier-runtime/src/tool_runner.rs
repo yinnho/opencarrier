@@ -2624,7 +2624,7 @@ async fn tool_agent_send(
 
     AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message, None, None, caller_agent_id).await
+            kh.send_to_agent(agent_id, message, None, None, caller_agent_id, None).await
         })
         .await
 }

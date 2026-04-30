@@ -20,6 +20,7 @@ allowed_tools: ["file_write", "file_read", "file_list", "clone_install", "clone_
 - **人格特征**：什么性格、什么沟通风格
 - **知识领域**：需要了解什么领域的知识
 - **技能列表**：需要哪些能力（每个技能有触发条件）
+- **插件依赖**：是否需要连接外部平台（如 wecom、feishu）
 - **进化策略**：保守/积极/关闭（默认保守）
 
 ### 2. 文件生成
@@ -114,6 +115,20 @@ feedback_to_hub: false
     "EVOLUTION.md": "<进化策略>",
     "knowledge/faq.md": "<FAQ 知识内容>",
     "skills/answer.md": "<技能定义内容>"
+  }
+}
+```
+
+如果分身依赖插件，`files` 中必须包含 `template.json`（带 `plugins` 字段）：
+
+```json
+{
+  "name": "<clone-name>",
+  "files": {
+    "template.json": "{\"version\":\"1\",\"name\":\"<clone-name>\",\"description\":\"...\",\"author\":\"...\",\"tags\":[\"...\"],\"exported_at\":\"...\",\"knowledge_version\":2,\"plugins\":[\"wecom\"]}",
+    "SOUL.md": "...",
+    "system_prompt.md": "...",
+    "...": "..."
   }
 }
 ```
