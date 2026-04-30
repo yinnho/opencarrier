@@ -1,48 +1,23 @@
-// OpenCarrier Agents Page — Multi-step spawn wizard, detail view with tabs, file editor, personality presets
+// OpenCarrier Agents Page — agent list, Hub install, chat inline
 'use strict';
-
-/** Escape a string for use inside TOML triple-quoted strings ("""\n...\n""").
- *  Backslashes are escaped, and runs of 3+ consecutive double-quotes are
- *  broken up so the TOML parser never sees an unintended closing delimiter.
- */
-function tomlMultilineEscape(s) {
-  return s.replace(/\\/g, '\\\\').replace(/"""/g, '""\\"');
-}
-
-/** Escape a string for use inside a TOML basic (single-line) string ("...").
- *  Backslashes, double-quotes, and common control chars are escaped.
- */
-function tomlBasicEscape(s) {
-  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
-}
 
 function agentsPage() {
   return {
     tab: 'agents',
     activeChatAgent: null,
     // -- Agents state --
-    showSpawnModal: false,
     // -- Hub install modal --
     showHubModal: false,
     hubTemplates: [],
     hubLoading: false,
     hubError: '',
     hubInstalling: '',
-    spawning: false,
     filterState: 'all',
     loading: true,
     loadError: '',
-    spawnForm: {
-      name: '',
-      provider: 'groq',
-      model: 'llama-3.3-70b-versatile',
-      systemPrompt: 'You are a helpful assistant.'
-    },
     tenants: [],
     selectedTenantId: '',
     tenantsLoaded: false,
-
-    spawnStep: 1,
 
     get agents() { return Alpine.store('app').agents; },
 
@@ -81,7 +56,7 @@ function agentsPage() {
       }
       this.loading = false;
 
-      // If a pending agent was set (e.g. from wizard or redirect), open chat inline
+      // If a pending agent was set (e.g. from Hub install or redirect), open chat inline
       var store = Alpine.store('app');
       if (store.pendingAgent) {
         this.activeChatAgent = store.pendingAgent;
@@ -211,78 +186,6 @@ function agentsPage() {
         OpenCarrierToast.error('安装失败: ' + e.message);
       }
       this.hubInstalling = '';
-    },
-
-    // ── Multi-step wizard navigation ──
-    async openSpawnWizard() {
-      this.showSpawnModal = true;
-      this.spawnStep = 1;
-      this.spawnForm.name = '';
-      this.spawnForm.provider = 'groq';
-      this.spawnForm.model = 'llama-3.3-70b-versatile';
-      this.spawnForm.systemPrompt = 'You are a helpful assistant.';
-      await this.loadTenantsForSpawn();
-      try {
-        var res = await fetch('/api/status');
-        if (res.ok) {
-          var status = await res.json();
-          if (status.default_provider) this.spawnForm.provider = status.default_provider;
-          if (status.default_model) this.spawnForm.model = status.default_model;
-        }
-      } catch(e) {}
-    },
-
-    nextStep() {
-      if (this.spawnStep === 1 && !this.spawnForm.name.trim()) {
-        OpenCarrierToast.warn('请输入分身名称');
-        return;
-      }
-      if (this.spawnStep < 2) this.spawnStep++;
-    },
-
-    prevStep() {
-      if (this.spawnStep > 1) this.spawnStep--;
-    },
-
-    generateToml() {
-      var f = this.spawnForm;
-      var lines = [
-        'name = "' + tomlBasicEscape(f.name) + '"',
-        'module = "builtin:chat"',
-        '',
-        '[model]',
-        'provider = "' + f.provider + '"',
-        'model = "' + f.model + '"',
-        'system_prompt = """',
-        tomlMultilineEscape(f.systemPrompt),
-        '"""'
-      ];
-      return lines.join('\n');
-    },
-
-    async spawnAgent() {
-      this.spawning = true;
-      var toml = this.generateToml();
-      try {
-        var body = { manifest_toml: toml };
-        if (Alpine.store('app').isAdmin() && this.selectedTenantId) {
-          body.tenant_id = this.selectedTenantId;
-        }
-        var res = await OpenCarrierAPI.post('/api/agents', body);
-        if (res.agent_id) {
-          this.showSpawnModal = false;
-          this.spawnForm.name = '';
-          this.spawnStep = 1;
-          OpenCarrierToast.success('分身 "' + (res.name || '新分身') + '" 已创建');
-          await Alpine.store('app').refreshAgents();
-          this.chatWithAgent({ id: res.agent_id, name: res.name, model_provider: '?', model_name: '?' });
-        } else {
-          OpenCarrierToast.error('创建失败: ' + (res.error || '未知错误'));
-        }
-      } catch(e) {
-        OpenCarrierToast.error('创建分身失败: ' + e.message);
-      }
-      this.spawning = false;
     },
 
   };
