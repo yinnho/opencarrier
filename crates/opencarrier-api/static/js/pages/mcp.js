@@ -51,7 +51,7 @@ function mcpPage() {
     },
 
     transportLabel(server) {
-      if (!server || !server.transport) return 'unknown';
+      if (!server || !server.transport) return '未知';
       return server.transport.type === 'stdio' ? 'Stdio' : 'SSE';
     },
 
@@ -93,18 +93,18 @@ function mcpPage() {
 
     categoryLabel(cat) {
       var map = {
-        'file': 'File System',
-        'web': 'Web',
+        'file': '文件系统',
+        'web': '网络',
         'shell': 'Shell',
-        'agent': 'Agent',
-        'memory': 'Memory',
-        'cron': 'Scheduler',
-        'browser': 'Browser',
-        'container': 'Container',
-        'task': 'Task',
-        'hand': 'Hand',
+        'agent': '代理',
+        'memory': '记忆',
+        'cron': '调度器',
+        'browser': '浏览器',
+        'container': '容器',
+        'task': '任务',
+        'hand': '控制',
         'mcp': 'MCP',
-        'other': 'Other'
+        'other': '其他'
       };
       return map[cat] || cat;
     }

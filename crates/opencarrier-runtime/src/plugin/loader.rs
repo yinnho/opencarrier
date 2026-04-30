@@ -8,10 +8,12 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
+use uuid::Uuid;
+
 use libloading::Library;
 use opencarrier_types::plugin::{
-    FfiChannelInfo, FfiMessage, FfiMessageCallback, FfiToolDef, PluginConfig, PluginToolDef,
-    PLUGIN_ABI_VERSION,
+    BotConfig, FfiChannelInfo, FfiMessage, FfiMessageCallback, FfiToolDef, PluginConfig,
+    PluginToolDef, PLUGIN_ABI_VERSION,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -300,8 +302,27 @@ impl PluginLoader {
                 e
             )
         })?;
-        let config: PluginConfig =
+        let mut config: PluginConfig =
             toml::from_str(&config_content).map_err(|e| format!("Invalid plugin.toml: {}", e))?;
+
+        // 1b. Migrate legacy [[tenants]] to per-bot bot.toml files
+        if let Err(e) = Self::migrate_tenants_to_bots(plugin_dir) {
+            warn!(error = %e, "Tenant migration failed, continuing with legacy config");
+        }
+
+        // 1c. Discover bot configs from <plugin-dir>/<uuid>/bot.toml
+        let discovered_bots = Self::discover_bots(plugin_dir);
+        config.bots = discovered_bots
+            .into_iter()
+            .map(|(bot_id, bot_config)| {
+                let mut obj = serde_json::to_value(&bot_config)
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                if let Some(map) = obj.as_object_mut() {
+                    map.insert("_bot_id".to_string(), serde_json::Value::String(bot_id));
+                }
+                obj
+            })
+            .collect();
 
         // 2. Check ABI version
         if config.meta.abi_version != 0 && config.meta.abi_version != PLUGIN_ABI_VERSION {
@@ -443,6 +464,123 @@ impl PluginLoader {
             fn_channel_send,
             fn_tool_execute,
         })
+    }
+
+    /// Discover bot configs from `<plugin-dir>/<uuid>/bot.toml` subdirectories.
+    pub fn discover_bots(plugin_dir: &Path) -> Vec<(String, BotConfig)> {
+        let mut bots = Vec::new();
+        let entries = match std::fs::read_dir(plugin_dir) {
+            Ok(e) => e,
+            Err(_) => return bots,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let bot_toml = path.join("bot.toml");
+            if !bot_toml.exists() {
+                continue;
+            }
+            let bot_id = match path.file_name().and_then(|n| n.to_str()) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+            match std::fs::read_to_string(&bot_toml)
+                .map_err(|e| e.to_string())
+                .and_then(|s| toml::from_str::<BotConfig>(&s).map_err(|e| e.to_string()))
+            {
+                Ok(config) => {
+                    info!(bot_id = %bot_id, name = %config.name, "Discovered bot");
+                    bots.push((bot_id, config));
+                }
+                Err(e) => {
+                    warn!(path = %bot_toml.display(), error = %e, "Failed to parse bot.toml");
+                }
+            }
+        }
+        bots
+    }
+
+    /// Migrate legacy `[[tenants]]` in plugin.toml to per-bot `bot.toml` files.
+    ///
+    /// For each tenant entry, generates a deterministic UUID v5 based on
+    /// (plugin_name, tenant_name), creates `<uuid>/bot.toml`, then strips
+    /// `[[tenants]]` from plugin.toml. Idempotent — skips if bot.toml already exists.
+    pub fn migrate_tenants_to_bots(plugin_dir: &Path) -> Result<(), String> {
+        let config_path = plugin_dir.join("plugin.toml");
+        let content = match std::fs::read_to_string(&config_path) {
+            Ok(c) => c,
+            Err(_) => return Ok(()),
+        };
+
+        let mut config: toml::Value = match toml::from_str(&content) {
+            Ok(c) => c,
+            Err(e) => return Err(format!("Failed to parse plugin.toml: {e}")),
+        };
+
+        let tenants = match config.get("tenants") {
+            Some(toml::Value::Array(arr)) => arr.clone(),
+            _ => return Ok(()),
+        };
+
+        if tenants.is_empty() {
+            return Ok(());
+        }
+
+        let plugin_name = plugin_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        let ns = Uuid::new_v5(&Uuid::NAMESPACE_DNS, format!("opencarrier:{plugin_name}").as_bytes());
+
+        let mut migrated = 0;
+        for tenant in &tenants {
+            let tenant_name = tenant
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unnamed");
+
+            let bot_uuid = Uuid::new_v5(&ns, tenant_name.as_bytes());
+            let bot_dir = plugin_dir.join(bot_uuid.to_string());
+
+            if bot_dir.join("bot.toml").exists() {
+                info!(bot_id = %bot_uuid, "bot.toml already exists, skipping migration");
+                continue;
+            }
+
+            std::fs::create_dir_all(&bot_dir)
+                .map_err(|e| format!("Failed to create bot dir: {e}"))?;
+
+            let bot_content = toml::to_string_pretty(tenant)
+                .map_err(|e| format!("Failed to serialize bot config: {e}"))?;
+            std::fs::write(bot_dir.join("bot.toml"), &bot_content)
+                .map_err(|e| format!("Failed to write bot.toml: {e}"))?;
+
+            info!(
+                bot_id = %bot_uuid,
+                name = %tenant_name,
+                "Migrated tenant to bot.toml"
+            );
+            migrated += 1;
+        }
+
+        if migrated > 0 {
+            let backup_path = config_path.with_extension("toml.bak");
+            let _ = std::fs::copy(&config_path, &backup_path);
+
+            if let Some(table) = config.as_table_mut() {
+                table.remove("tenants");
+            }
+            let new_content = toml::to_string_pretty(&config)
+                .map_err(|e| format!("Failed to serialize plugin.toml: {e}"))?;
+            std::fs::write(&config_path, new_content)
+                .map_err(|e| format!("Failed to update plugin.toml: {e}"))?;
+
+            info!(migrated, "Migrated tenants to bot.toml files");
+        }
+
+        Ok(())
     }
 
     /// Find the shared library file in a plugin directory.

@@ -1,11 +1,11 @@
 //! WeChat iLink Bot, WeCom, and Feishu channel endpoints.
 
 use crate::routes::state::AppState;
+use crate::routes::plugin_toml::*;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use fs4::fs_std::FileExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 /// GET `/api/weixin/qrcode` — fetch a fresh QR code for WeChat scanning.
@@ -333,7 +333,7 @@ pub async fn channels_status(
         }
     }
 
-    // ── WeCom & Feishu — scan all plugin dirs for plugin.toml ───────
+    // ── WeCom & Feishu — scan all plugin dirs for bot.toml ───────
     let plugins_dir = home.join("plugins");
     let mut wecom_tenants: Vec<serde_json::Value> = Vec::new();
     let mut feishu_tenants: Vec<serde_json::Value> = Vec::new();
@@ -366,18 +366,29 @@ pub async fn channels_status(
 
             if !has_wecom && !has_feishu { continue; }
 
-            if let Some(arr) = doc.get("tenants").and_then(|v| v.as_array()) {
-                for tenant in arr {
-                    let name = tenant.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let bind_agent = tenant.get("bind_agent").and_then(|v| v.as_str()).unwrap_or("");
-                    let mode = tenant.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot");
-                    let corp_id = tenant.get("corp_id").and_then(|v| v.as_str()).unwrap_or("");
-                    let bot_id = tenant.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
-                    let secret_env = tenant.get("secret_env").and_then(|v| v.as_str()).unwrap_or("");
+            // Scan <uuid>/bot.toml files
+            if let Ok(sub_entries) = std::fs::read_dir(&plugin_dir) {
+                for sub_entry in sub_entries.flatten() {
+                    let bot_dir = sub_entry.path();
+                    if !bot_dir.is_dir() { continue; }
+                    let bot_toml = bot_dir.join("bot.toml");
+                    if !bot_toml.exists() { continue; }
+
+                    let Ok(bt) = std::fs::read_to_string(&bot_toml) else { continue };
+                    let Ok(bt_doc) = bt.parse::<toml::Value>() else { continue };
+
+                    let name = bt_doc.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let bind_agent = bt_doc.get("bind_agent").and_then(|v| v.as_str()).unwrap_or("");
+                    let mode = bt_doc.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot");
+                    let bot_uuid = bot_dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
 
                     if has_wecom {
+                        let corp_id = bt_doc.get("corp_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let bot_id = bt_doc.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let secret_env = bt_doc.get("secret_env").and_then(|v| v.as_str()).unwrap_or("");
                         wecom_tenants.push(serde_json::json!({
                             "name": name,
+                            "bot_uuid": bot_uuid,
                             "mode": mode,
                             "corp_id": corp_id,
                             "bot_id": bot_id,
@@ -386,11 +397,12 @@ pub async fn channels_status(
                         }));
                     }
                     if has_feishu {
-                        let app_id = tenant.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
-                        let app_secret_env = tenant.get("app_secret_env").and_then(|v| v.as_str()).unwrap_or("");
-                        let brand = tenant.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu");
+                        let app_id = bt_doc.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let app_secret_env = bt_doc.get("app_secret_env").and_then(|v| v.as_str()).unwrap_or("");
+                        let brand = bt_doc.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu");
                         feishu_tenants.push(serde_json::json!({
                             "name": name,
+                            "bot_uuid": bot_uuid,
                             "app_id": app_id,
                             "app_secret_env": app_secret_env,
                             "brand": brand,
@@ -409,19 +421,7 @@ pub async fn channels_status(
     }))
 }
 
-/// Sanitize tenant name for plugin.toml entries.
-fn channel_sanitize_name(name: &str) -> Option<String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() || trimmed.len() > 64 {
-        return None;
-    }
-    if trimmed.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-/// POST `/api/channels/wecom/tenants` — add a WeCom tenant to plugin.toml.
+/// POST `/api/channels/wecom/tenants` — add a WeCom bot (creates bot.toml).
 ///
 /// Body: `{ "name": "...", "mode": "smartbot"|"app"|"kf", "corp_id": "...", "bot_id": "...", "secret": "...", "webhook_port": 8454, "encoding_aes_key": "..." }`
 pub async fn wecom_add_tenant(
@@ -482,8 +482,9 @@ pub async fn wecom_add_tenant(
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid encoding_aes_key" })));
     }
 
-    // Build config as toml::Value
+    // Build bot.toml fields
     let mut cfg = toml::value::Table::new();
+    cfg.insert("name".into(), toml::Value::String(name.to_string()));
     cfg.insert("mode".into(), toml::Value::String(mode.to_string()));
     cfg.insert("corp_id".into(), toml::Value::String(corp_id.to_string()));
     if !bot_id.is_empty() {
@@ -495,12 +496,11 @@ pub async fn wecom_add_tenant(
         cfg.insert("encoding_aes_key".into(), toml::Value::String(encoding_aes_key.to_string()));
     }
 
-    let toml_path = state.kernel.config.home_dir
+    let plugin_dir = state.kernel.config.home_dir
         .join("plugins")
-        .join("opencarrier-plugin-wecom")
-        .join("plugin.toml");
+        .join("opencarrier-plugin-wecom");
 
-    if let Err(e) = plugin_toml_add_tenant(&toml_path, &name, toml::Value::Table(cfg)) {
+    if let Err(e) = create_bot_toml(&plugin_dir, &name, cfg) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),
@@ -510,7 +510,7 @@ pub async fn wecom_add_tenant(
     tracing::info!(tenant = %name, mode, "WeCom tenant added via dashboard");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true, "name": name })))
 }
-/// POST `/api/channels/feishu/tenants` — add a Feishu tenant to plugin.toml.
+/// POST `/api/channels/feishu/tenants` — add a Feishu bot (creates bot.toml).
 ///
 /// Body: `{ "name": "...", "app_id": "...", "app_secret": "...", "brand": "feishu"|"lark" }`
 pub async fn feishu_add_tenant(
@@ -557,16 +557,16 @@ pub async fn feishu_add_tenant(
     }
 
     let mut cfg = toml::value::Table::new();
+    cfg.insert("name".into(), toml::Value::String(name.to_string()));
     cfg.insert("app_id".into(), toml::Value::String(app_id.to_string()));
     cfg.insert("app_secret".into(), toml::Value::String(app_secret.to_string()));
     cfg.insert("brand".into(), toml::Value::String(brand.to_string()));
 
-    let toml_path = state.kernel.config.home_dir
+    let plugin_dir = state.kernel.config.home_dir
         .join("plugins")
-        .join("opencarrier-plugin-feishu")
-        .join("plugin.toml");
+        .join("opencarrier-plugin-feishu");
 
-    if let Err(e) = plugin_toml_add_tenant(&toml_path, &name, toml::Value::Table(cfg)) {
+    if let Err(e) = create_bot_toml(&plugin_dir, &name, cfg) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),
@@ -615,106 +615,41 @@ fn weixin_validate_baseurl(url: &str) -> bool {
         || url.starts_with("https://ilinkai.weixin.qq.com/")
 }
 
-/// Atomic file write: write to `<path>.tmp` then rename over target.
-fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {
-    let tmp_path = {
-        let mut s = path.as_os_str().to_owned();
-        s.push(".tmp");
-        std::path::PathBuf::from(s)
-    };
-    std::fs::write(&tmp_path, content)?;
-    std::fs::rename(&tmp_path, path)
-}
-
-/// Maximum length for config string fields (corp_id, secret, etc.).
-const CHANNEL_FIELD_MAX_LEN: usize = 512;
-
-/// Validate a config string field: non-empty after trim, max length, no control chars.
-fn channel_validate_field(value: &str, field_name: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(format!("{field_name} is required"));
-    }
-    if trimmed.len() > CHANNEL_FIELD_MAX_LEN {
-        return Err(format!("{field_name} exceeds max length ({CHANNEL_FIELD_MAX_LEN} chars)"));
-    }
-    if trimmed.chars().any(|c| c.is_control() && c != ' ') {
-        return Err(format!("{field_name} contains invalid characters"));
-    }
-    Ok(trimmed.to_string())
-}
-
-/// Read-modify-write a plugin.toml, appending a new [[tenants]] entry.
-fn plugin_toml_add_tenant(
-    toml_path: &std::path::Path,
+/// Create a new bot.toml file in <plugin_dir>/<uuid>/bot.toml.
+fn create_bot_toml(
+    plugin_dir: &std::path::Path,
     tenant_name: &str,
-    config: toml::Value,
+    fields: toml::value::Table,
 ) -> Result<(), String> {
-    let lock_path = {
-        let mut s = toml_path.as_os_str().to_owned();
-        s.push(".lock");
-        std::path::PathBuf::from(s)
-    };
-
-    if let Some(parent) = toml_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|_| "Failed to create plugin directory".to_string())?;
+    // Check duplicate name
+    if let Ok(entries) = std::fs::read_dir(plugin_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            let bot_toml = path.join("bot.toml");
+            if !bot_toml.exists() { continue; }
+            if let Ok(content) = std::fs::read_to_string(&bot_toml) {
+                if let Ok(doc) = content.parse::<toml::Value>() {
+                    if doc.get("name").and_then(|v| v.as_str()) == Some(tenant_name) {
+                        return Err(format!("Bot '{tenant_name}' already exists"));
+                    }
+                }
+            }
+        }
     }
 
-    let lock_file = std::fs::File::create(&lock_path)
-        .map_err(|_| "Failed to create lock file".to_string())?;
-    lock_file.lock_exclusive()
-        .map_err(|_| "Failed to acquire config lock".to_string())?;
+    let bot_uuid = uuid::Uuid::new_v4().to_string();
+    let bot_dir = plugin_dir.join(&bot_uuid);
+    std::fs::create_dir_all(&bot_dir)
+        .map_err(|e| format!("Failed to create bot dir: {e}"))?;
 
-    let result = plugin_toml_add_tenant_locked(toml_path, tenant_name, config);
+    let content = toml::to_string_pretty(&toml::Value::Table(fields))
+        .map_err(|e| format!("Serialize error: {e}"))?;
 
-    drop(lock_file);
-    let _ = std::fs::remove_file(&lock_path);
+    atomic_write(&bot_dir.join("bot.toml"), &content)
+        .map_err(|e| format!("Write error: {e}"))?;
 
-    result
-}
-
-/// Inner implementation (caller must hold the lock).
-fn plugin_toml_add_tenant_locked(
-    toml_path: &std::path::Path,
-    tenant_name: &str,
-    config: toml::Value,
-) -> Result<(), String> {
-    let mut doc = if toml_path.exists() {
-        let content = std::fs::read_to_string(toml_path)
-            .map_err(|_| "Failed to read plugin config".to_string())?;
-        content
-            .parse::<toml::Value>()
-            .map_err(|_| "Failed to parse plugin config".to_string())?
-    } else {
-        toml::Value::Table(Default::default())
-    };
-
-    let table = doc.as_table_mut().ok_or("Invalid plugin config structure".to_string())?;
-    if !table.contains_key("tenants") {
-        table.insert("tenants".into(), toml::Value::Array(Vec::new()));
-    }
-    let tenants = table
-        .get_mut("tenants")
-        .and_then(|v| v.as_array_mut())
-        .ok_or("Invalid tenants section".to_string())?;
-
-    if tenants.iter().any(|t| {
-        t.get("name").and_then(|v| v.as_str()) == Some(tenant_name)
-    }) {
-        return Err(format!("Tenant '{tenant_name}' already exists"));
-    }
-
-    let mut entry = toml::value::Table::new();
-    entry.insert("name".into(), toml::Value::String(tenant_name.to_string()));
-    entry.insert("config".into(), config);
-    tenants.push(toml::Value::Table(entry));
-
-    let content = toml::to_string_pretty(&doc)
-        .map_err(|_| "Failed to serialize plugin config".to_string())?;
-    atomic_write(toml_path, &content)
-        .map_err(|_| "Failed to write plugin config".to_string())?;
-
+    tracing::info!(tenant = %tenant_name, bot_uuid = %bot_uuid, "Created bot.toml");
     Ok(())
 }
 

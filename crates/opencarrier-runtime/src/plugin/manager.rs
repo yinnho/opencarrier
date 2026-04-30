@@ -72,9 +72,9 @@ impl PluginManager {
 
     /// Start all channel adapters and the bridge.
     ///
-    /// Reads `bind_agent` from tenant configs in plugin.toml to route
-    /// channel messages to specific agents.
-    pub async fn start(&mut self, plugins_dir: &Path) {
+    /// Discovers bot configs from `<plugin>/<uuid>/bot.toml` files and binds
+    /// channels to agents based on `bind_agent` (agent UUID) in each bot config.
+    pub async fn start(&mut self, _plugins_dir: &Path) {
         // Start channel adapters
         for plugin in &self.loaded_plugins {
             for channel in &plugin.channels {
@@ -95,45 +95,51 @@ impl PluginManager {
             }
         }
 
-        // Build channel bindings from tenant configs
+        // Build channel bindings from bot.toml files
         let mut bridge = PluginBridgeManager::new(self.kernel.clone());
         for plugin in &self.loaded_plugins {
             bridge.add_plugin(plugin.clone());
-        }
 
-        // Read plugin.toml files for bind_agent configuration
-        if let Ok(entries) = std::fs::read_dir(plugins_dir) {
-            let agents = self.kernel.list_agents(None);
-            for entry in entries.flatten() {
-                if entry.path().is_dir() {
-                    let toml_path = entry.path().join("plugin.toml");
-                    if toml_path.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&toml_path) {
-                            if let Ok(config) = toml::from_str::<opencarrier_types::plugin::PluginConfig>(&content) {
-                                // Determine channel_type from mode
-                                let channels: Vec<&str> = config.channels.iter().map(|c| c.channel_type.as_str()).collect();
-                                for tenant in &config.tenants {
-                                    if let Some(agent_name) = tenant.get("bind_agent").and_then(|v| v.as_str()) {
-                                        // Find agent ID by name
-                                        if let Some(agent) = agents.iter().find(|a| a.name == agent_name) {
-                                            // Bind each channel from this plugin to the agent
-                                            for ch in &channels {
-                                                bridge.bind_channel(ch.to_string(), agent.id.clone());
-                                                info!(
-                                                    channel = %ch,
-                                                    agent = %agent_name,
-                                                    agent_id = %agent.id,
-                                                    "Bound channel to agent"
-                                                );
-                                            }
-                                        } else {
-                                            error!(agent = %agent_name, "bind_agent not found, skipping binding");
-                                        }
-                                    }
-                                }
-                            }
-                        }
+            // Discover bots from <plugin-dir>/<uuid>/bot.toml
+            let plugin_dir = &plugin.path;
+            let bots = super::loader::PluginLoader::discover_bots(plugin_dir);
+            let channels: Vec<String> = plugin.channels.iter().map(|c| c.channel_type.clone()).collect();
+
+            for (bot_uuid, bot_config) in &bots {
+                if let Some(ref agent_uuid) = bot_config.bind_agent {
+                    // bind_agent must be a UUID — agent names are not unique across tenants
+                    if uuid::Uuid::parse_str(agent_uuid).is_err() {
+                        error!(
+                            bot = %bot_config.name,
+                            bind_agent = %agent_uuid,
+                            "bind_agent is not a valid UUID, skipping binding"
+                        );
+                        continue;
                     }
+
+                    for ch in &channels {
+                        bridge.bind_channel(
+                            ch.clone(),
+                            bot_uuid.clone(),
+                            agent_uuid.clone(),
+                        );
+                        info!(
+                            channel = %ch,
+                            bot = %bot_config.name,
+                            bot_id = %bot_uuid,
+                            agent_id = %agent_uuid,
+                            "Bound bot to agent"
+                        );
+                    }
+
+                    // Set default plugin tenant for the agent (used when no channel context)
+                    self.kernel.set_default_plugin_tenant(agent_uuid, bot_uuid);
+                } else {
+                    info!(
+                        bot = %bot_config.name,
+                        bot_id = %bot_uuid,
+                        "Bot has no bind_agent, skipping"
+                    );
                 }
             }
         }

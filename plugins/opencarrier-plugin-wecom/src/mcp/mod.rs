@@ -57,30 +57,28 @@ impl ToolProvider for McpToolProvider {
             .mcp_credentials()
             .ok_or_else(|| PluginError::tool("This tenant has no MCP bot credentials configured. Add mcp_bot_id and mcp_bot_secret to tenant config."))?;
 
-        let handle = tokio::runtime::Handle::current();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PluginError::tool(format!("Runtime error: {e}")))?;
+
         let url = {
             let http = tenant.http.clone();
             let tenant_name = ctx.tenant_id.clone();
             let category = self.category.clone();
             let bot_id = bot_id.to_string();
             let bot_secret = bot_secret.to_string();
-            tokio::task::block_in_place(|| {
-                config::get_category_url(&tenant_name, &category, &bot_id, &bot_secret, &http)
-            })
+            config::get_category_url(&tenant_name, &category, &bot_id, &bot_secret, &http)
         };
 
-        let url = url.map_err(|e| PluginError::tool(e))?;
+        let url = url.map_err(PluginError::tool)?;
 
-        let result = {
+        let result = rt.block_on(async {
             let http = tenant.http.clone();
             let tool_name = self.name.clone();
             let args = args.clone();
-            tokio::task::block_in_place(|| {
-                handle.block_on(async {
-                    client::call_tool(&http, &url, &tool_name, &args, None).await
-                })
-            })
-        };
+            client::call_tool(&http, &url, &tool_name, &args, None).await
+        });
 
         match result {
             Ok(text) => Ok(truncate_result(text)),
@@ -94,31 +92,25 @@ impl ToolProvider for McpToolProvider {
                     let category = self.category.clone();
                     let bot_id = bot_id.to_string();
                     let bot_secret = bot_secret.to_string();
-                    tokio::task::block_in_place(|| {
-                        config::get_category_url(
-                            &tenant_name,
-                            &category,
-                            &bot_id,
-                            &bot_secret,
-                            &http,
-                        )
-                    })
+                    config::get_category_url(
+                        &tenant_name,
+                        &category,
+                        &bot_id,
+                        &bot_secret,
+                        &http,
+                    )
                 };
 
-                let url = url.map_err(|e| PluginError::tool(e))?;
+                let url = url.map_err(PluginError::tool)?;
 
-                let retry = {
+                let retry = rt.block_on(async {
                     let http = tenant.http.clone();
                     let tool_name = self.name.clone();
                     let args = args.clone();
-                    tokio::task::block_in_place(|| {
-                        handle.block_on(async {
-                            client::call_tool(&http, &url, &tool_name, &args, None).await
-                        })
-                    })
-                };
+                    client::call_tool(&http, &url, &tool_name, &args, None).await
+                });
 
-                retry.map(truncate_result).map_err(|e| PluginError::tool(e))
+                retry.map(truncate_result).map_err(PluginError::tool)
             }
             Err(e) => Err(PluginError::tool(e)),
         }

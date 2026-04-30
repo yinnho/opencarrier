@@ -116,7 +116,7 @@ function logsPage() {
         if (this.loading) this.loading = false;
       } catch(e) {
         if (this.loading) {
-          this.loadError = e.message || 'Could not load logs.';
+          this.loadError = e.message || '无法加载日志。';
           this.loading = false;
         }
       }
@@ -166,10 +166,10 @@ function logsPage() {
     },
 
     get connectionLabel() {
-      if (this.streamPaused) return 'Paused';
-      if (this.streamConnected) return 'Live';
-      if (this._pollTimer) return 'Polling';
-      return 'Disconnected';
+      if (this.streamPaused) return '已暂停';
+      if (this.streamConnected) return '实时';
+      if (this._pollTimer) return '轮询中';
+      return '已断开';
     },
 
     get connectionClass() {
@@ -208,7 +208,7 @@ function logsPage() {
         this.tipHash = data.tip_hash || '';
       } catch(e) {
         this.auditEntries = [];
-        this.auditLoadError = e.message || 'Could not load audit log.';
+        this.auditLoadError = e.message || '无法加载审计日志。';
       }
       this.auditLoading = false;
     },
@@ -221,13 +221,13 @@ function logsPage() {
     },
 
     friendlyAction: function(action) {
-      if (!action) return 'Unknown';
+      if (!action) return '未知';
       var map = {
-        'AgentSpawn': 'Agent Created', 'AgentKill': 'Agent Stopped', 'AgentTerminated': 'Agent Stopped',
-        'ToolInvoke': 'Tool Used', 'ToolResult': 'Tool Completed', 'AgentMessage': 'Message',
-        'NetworkAccess': 'Network Access', 'ShellExec': 'Shell Command', 'FileAccess': 'File Access',
-        'MemoryAccess': 'Memory Access', 'AuthAttempt': 'Login Attempt', 'AuthSuccess': 'Login Success',
-        'AuthFailure': 'Login Failed', 'CapabilityDenied': 'Permission Denied', 'RateLimited': 'Rate Limited'
+        'AgentSpawn': '创建代理', 'AgentKill': '停止代理', 'AgentTerminated': '停止代理',
+        'ToolInvoke': '调用工具', 'ToolResult': '工具完成', 'AgentMessage': '消息',
+        'NetworkAccess': '网络访问', 'ShellExec': 'Shell 命令', 'FileAccess': '文件访问',
+        'MemoryAccess': '内存访问', 'AuthAttempt': '登录尝试', 'AuthSuccess': '登录成功',
+        'AuthFailure': '登录失败', 'CapabilityDenied': '权限被拒绝', 'RateLimited': '请求频率受限'
       };
       return map[action] || action.replace(/([A-Z])/g, ' $1').trim();
     },
@@ -237,13 +237,13 @@ function logsPage() {
         var data = await OpenCarrierAPI.get('/api/audit/verify');
         this.chainValid = data.valid === true;
         if (this.chainValid) {
-          OpenCarrierToast.success('Audit chain verified — ' + (data.entries || 0) + ' entries valid');
+          OpenCarrierToast.success('审计链验证通过 — ' + (data.entries || 0) + ' 条记录有效');
         } else {
-          OpenCarrierToast.error('Audit chain broken!');
+          OpenCarrierToast.error('审计链已损坏！');
         }
       } catch(e) {
         this.chainValid = false;
-        OpenCarrierToast.error('Chain verification failed: ' + e.message);
+        OpenCarrierToast.error('链验证失败：' + e.message);
       }
     },
 

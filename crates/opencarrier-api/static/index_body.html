@@ -1,4 +1,4 @@
-<body x-data="app" :data-theme="theme">
+<body x-data="app">
 
 <!-- Auth Prompt (API Key or Username/Password) -->
 <div x-show="$store.app.showAuthPrompt" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)" x-data="{ apiKeyInput: '', loginUser: '', loginPass: '' }">
@@ -6,21 +6,21 @@
     <!-- Session login mode -->
     <template x-if="$store.app.authMode === 'session'">
       <div>
-        <h3 style="margin:0 0 0.5rem;font-size:1.1rem">Sign In</h3>
-        <p style="color:var(--text-dim,#888);font-size:0.85rem;margin:0 0 1rem">Enter your dashboard credentials.</p>
-        <input type="text" x-model="loginUser" placeholder="Username" autocomplete="username" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.5rem">
-        <input type="password" x-model="loginPass" placeholder="Password" autocomplete="current-password" @keydown.enter="$store.app.sessionLogin(loginUser, loginPass)" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
-        <button @click="$store.app.sessionLogin(loginUser, loginPass)" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent,#7c3aed);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">Sign In</button>
+        <h3 style="margin:0 0 0.5rem;font-size:1.1rem">登录</h3>
+        <p style="color:var(--text-dim,#888);font-size:0.85rem;margin:0 0 1rem">请输入管理面板的账号密码。</p>
+        <input type="text" x-model="loginUser" placeholder="用户名" autocomplete="username" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.5rem">
+        <input type="password" x-model="loginPass" placeholder="密码" autocomplete="current-password" @keydown.enter="$store.app.sessionLogin(loginUser, loginPass)" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
+        <button @click="$store.app.sessionLogin(loginUser, loginPass)" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent,#7c3aed);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">登录</button>
       </div>
     </template>
     <!-- API key mode -->
     <template x-if="$store.app.authMode === 'apikey'">
       <div>
-        <h3 style="margin:0 0 0.5rem;font-size:1.1rem">API Key Required</h3>
-        <p style="color:var(--text-dim,#888);font-size:0.85rem;margin:0 0 0.5rem">This instance requires an API key. Enter the key from your <code>config.toml</code>.</p>
-        <p style="color:var(--text-dim,#666);font-size:0.75rem;margin:0 0 1rem">Add <code style="color:var(--accent-light,#a78bfa);background:var(--bg,#111);padding:1px 4px;border-radius:2px">api_key = "your-key"</code> at the <strong>top</strong> of <code>~/.opencarrier/config.toml</code> (not under any [section]).</p>
-        <input type="password" x-model="apiKeyInput" placeholder="Enter API key..." @keydown.enter="$store.app.submitApiKey(apiKeyInput)" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
-        <button @click="$store.app.submitApiKey(apiKeyInput)" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent,#7c3aed);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">Unlock Dashboard</button>
+        <h3 style="margin:0 0 0.5rem;font-size:1.1rem">需要 API 密钥</h3>
+        <p style="color:var(--text-dim,#888);font-size:0.85rem;margin:0 0 0.5rem">此实例需要 API 密钥，请输入 <code>config.toml</code> 中的密钥。</p>
+        <p style="color:var(--text-dim,#666);font-size:0.75rem;margin:0 0 1rem">在 <code>~/.opencarrier/config.toml</code> 顶部添加 <code style="color:var(--accent-light,#a78bfa);background:var(--bg,#111);padding:1px 4px;border-radius:2px">api_key = "your-key"</code>（不要放在任何 [section] 下）。</p>
+        <input type="password" x-model="apiKeyInput" placeholder="输入 API 密钥..." @keydown.enter="$store.app.submitApiKey(apiKeyInput)" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
+        <button @click="$store.app.submitApiKey(apiKeyInput)" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent,#7c3aed);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">解锁</button>
       </div>
     </template>
   </div>
@@ -39,130 +39,62 @@
           </div>
         </div>
       </div>
-      <div class="theme-switcher">
-        <button class="theme-opt" :class="{ active: themeMode === 'light' }" @click="setTheme('light')" title="Light">&#9788;</button>
-        <button class="theme-opt" :class="{ active: themeMode === 'system' }" @click="setTheme('system')" title="System">&#9675;</button>
-        <button class="theme-opt" :class="{ active: themeMode === 'dark' }" @click="setTheme('dark')" title="Dark">&#9790;</button>
-      </div>
     </div>
 
     <div class="sidebar-status" :class="{ offline: !connected && !$store.app.booting }">
       <span class="status-dot"></span>
-      <span class="sidebar-label" x-show="connected" x-text="agentCount + ' agent(s) running'"></span>
-      <span class="sidebar-label" x-show="$store.app.booting && !connected" class="conn-reconnecting">Connecting...</span>
-      <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState === 'reconnecting'" class="conn-reconnecting">Reconnecting...</span>
-      <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState !== 'reconnecting'" x-text="'disconnected' + ($store.app.lastError ? ' — ' + $store.app.lastError : '')">disconnected</span>
+      <span class="sidebar-label" x-show="connected" x-text="agentCount + ' 个分身在线'"></span>
+      <span class="sidebar-label" x-show="$store.app.booting && !connected">连接中...</span>
+      <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState === 'reconnecting'">重连中...</span>
+      <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState !== 'reconnecting'" x-text="'已断开' + ($store.app.lastError ? ' — ' + $store.app.lastError : '')">已断开</span>
       <span class="conn-badge sidebar-label" :class="wsConnected ? 'ws' : 'http'" x-text="wsConnected ? 'WS' : 'HTTP'" x-show="connected"></span>
     </div>
 
-    <div class="sidebar-nav" role="navigation" aria-label="Main navigation">
-      <!-- Chat — primary action -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Chat">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Chat</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'agents' }" @click="navigate('agents')" :aria-current="page === 'agents' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-              <span class="nav-label">Chat</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Monitor -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Monitor">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Monitor</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'overview' }" @click="navigate('overview')" :aria-current="page === 'overview' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
-              <span class="nav-label">Overview</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'logs' }" @click="navigate('logs')" :aria-current="page === 'logs' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span>
-              <span class="nav-label">Logs</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Agents -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Agents">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Agents</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'sessions' }" @click="navigate('sessions')" :aria-current="page === 'sessions' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
-              <span class="nav-label">Sessions</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
-              <span class="nav-label">Comms</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Automation -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Automation">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Automation</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'scheduler' }" @click="navigate('scheduler')" :aria-current="page === 'scheduler' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
-              <span class="nav-label">Scheduler</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Extensions -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Extensions">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Extensions</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'mcp' }" @click="navigate('mcp')" :aria-current="page === 'mcp' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
-              <span class="nav-label">MCP & Tools</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- System -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="System">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">System</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'settings' }" @click="navigate('settings')" :aria-current="page === 'settings' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg></span>
-              <span class="nav-label">Settings</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'tenants' }" @click="navigate('tenants')" :aria-current="page === 'tenants' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
-              <span class="nav-label">Tenants</span>
-            </a>
-          </div>
-        </template>
-      </div>
+    <div class="sidebar-nav" role="navigation" aria-label="主导航">
+      <a class="nav-item" :class="{ active: page === 'agents' }" @click="navigate('agents')" :aria-current="page === 'agents' ? 'page' : false">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="nav-label">对话</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'bots' }" @click="navigate('bots')" :aria-current="page === 'bots' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+        <span class="nav-label">机器人</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'overview' }" @click="navigate('overview')" :aria-current="page === 'overview' ? 'page' : false">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
+        <span class="nav-label">概览</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'sessions' }" @click="navigate('sessions')" :aria-current="page === 'sessions' ? 'page' : false">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
+        <span class="nav-label">会话</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
+        <span class="nav-label">通讯</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'tasks' }" @click="navigate('tasks')" :aria-current="page === 'tasks' ? 'page' : false">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
+        <span class="nav-label">任务</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'mcp' }" @click="navigate('mcp')" :aria-current="page === 'mcp' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
+        <span class="nav-label">工具</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'logs' }" @click="navigate('logs')" :aria-current="page === 'logs' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span>
+        <span class="nav-label">日志</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'brain' }" @click="navigate('brain')" :aria-current="page === 'brain' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1a9 9 0 019 9c0 3.9-2.4 7.1-5.5 8.8L12 23l-3.5-4.2C5.4 17.1 3 13.9 3 10a9 9 0 019-9z"/></svg></span>
+        <span class="nav-label">大脑</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'security' }" @click="navigate('security')" :aria-current="page === 'security' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></span>
+        <span class="nav-label">安全</span>
+      </a>
+      <a class="nav-item" :class="{ active: page === 'team' }" @click="navigate('team')" :aria-current="page === 'team' ? 'page' : false" x-show="!$store.app.userRole || $store.app.isAdmin()">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg></span>
+        <span class="nav-label">团队</span>
+      </a>
     </div>
 
     <div class="sidebar-footer">
@@ -170,13 +102,12 @@
         <div style="display:flex;flex-direction:column;gap:2px">
           <span class="text-xs text-dim" x-text="$store.app.sessionUser" style="letter-spacing:0.5px"></span>
           <span class="text-xs text-dim" style="font-size:10px;opacity:0.7">
-            <template x-if="$store.app.isAdmin()"><span>Admin</span></template>
-            <template x-if="$store.app.userRole === 'tenant'"><span x-text="'Tenant' + ($store.app.tenantId ? ' (' + $store.app.tenantId + ')' : '')"></span></template>
+            <template x-if="$store.app.isAdmin()"><span>管理员</span></template>
+            <template x-if="$store.app.userRole === 'tenant'"><span x-text="'租户' + ($store.app.tenantId ? ' (' + $store.app.tenantId + ')' : '')"></span></template>
           </span>
         </div>
-        <button @click="$store.app.sessionLogout()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;opacity:0.7" title="Sign out">Logout</button>
+        <button @click="$store.app.sessionLogout()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;opacity:0.7" title="退出">退出</button>
       </div>
-      <div class="sidebar-label text-xs text-dim" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K agents | Ctrl+N new</div>
     </div>
     <div class="sidebar-toggle" @click="toggleSidebar()" x-text="sidebarCollapsed ? '\u276F' : '\u276E'"></div>
   </nav>
@@ -190,13 +121,221 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
 
+    <!-- Page: Bots -->
+    <template x-if="page === 'bots'">
+      <div x-data="botsPage" x-init="loadData()">
+        <div class="page-header">
+          <h2>机器人</h2>
+          <div class="flex items-center gap-2">
+            <button class="btn btn-primary" @click="openCreateModal()">+ 创建机器人</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <!-- Loading -->
+          <div x-show="loading" class="loading-skeleton">
+            <div class="skeleton-line" style="width:60%"></div>
+            <div class="skeleton-line" style="width:40%"></div>
+          </div>
+          <!-- Error -->
+          <div x-show="!loading && loadError" class="error-state">
+            <p x-text="loadError"></p>
+          </div>
+          <!-- Stats row (dynamic: only show platforms with bots) -->
+          <div x-show="!loading && !loadError" class="stats-row" style="margin-bottom:20px">
+            <template x-for="[platform, platformBots] in Object.entries(botsByPlatform())" :key="platform">
+              <div class="stat-card">
+                <div class="stat-label" x-text="platformLabel(platform)"></div>
+                <div class="stat-value" x-text="platformBots.length"></div>
+              </div>
+            </template>
+          </div>
+          <!-- Bot cards by platform -->
+          <div x-show="!loading && !loadError">
+            <template x-for="[platform, platformBots] in Object.entries(botsByPlatform())" :key="platform">
+              <div style="margin-bottom:24px">
+                <h3 style="margin-bottom:12px;font-size:15px;font-weight:600;opacity:0.8">
+                  <span x-html="platformIcon(platform)"></span>
+                  <span x-text="platformLabel(platform)" style="margin-left:6px;vertical-align:middle"></span>
+                  <span style="opacity:0.5;font-weight:400" x-text="'(' + platformBots.length + ')'"></span>
+                </h3>
+                <div class="bot-cards-grid">
+                  <template x-for="bot in platformBots" :key="bot.id">
+                    <div class="bot-card">
+                      <div class="bot-card-header">
+                        <div>
+                          <div class="bot-card-name" x-text="bot.tenant_name"></div>
+                          <div style="font-size:12px;opacity:0.6;margin-top:2px">
+                            <span x-text="modeLabel(bot.mode)"></span>
+                            <span x-show="bot.bot_id" style="margin-left:8px;opacity:0.5" x-text="'ID: ' + bot.bot_id.substring(0,12) + '...'"></span>
+                          </div>
+                        </div>
+                        <div class="bot-card-actions">
+                          <button class="btn btn-sm btn-ghost" @click="deleteBot(bot)" title="删除">删除</button>
+                        </div>
+                      </div>
+                      <div class="bot-card-body">
+                        <div class="bot-bind-row">
+                          <span style="font-size:13px;opacity:0.7">绑定分身:</span>
+                          <select class="input-sm" style="flex:1;min-width:120px"
+                            x-model="bot._selectedAgent"
+                            @change="bot._selectedAgent ? bindAgent(bot, bot._selectedAgent) : unbindAgent(bot)">
+                            <option value="">未绑定</option>
+                            <template x-for="a in agents" :key="a.id">
+                              <option :value="a.id" :selected="bot.bind_agent === a.id" x-text="a.name"></option>
+                            </template>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+            <!-- Empty state -->
+            <div x-show="bots.length === 0" class="empty-state" style="text-align:center;padding:60px 20px;opacity:0.6">
+              <p style="font-size:16px;margin-bottom:8px">还没有机器人</p>
+              <p style="font-size:13px">点击右上角"创建机器人"添加第一个</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Create Bot Modal -->
+        <div class="modal-overlay" x-show="showCreateModal" @click.self="showCreateModal = false; smartbotPolling = false; if(smartbotPollTimer){clearInterval(smartbotPollTimer);smartbotPollTimer=null;}">
+          <div class="modal-content" style="max-width:520px">
+            <div class="modal-header">
+              <h3 x-text="createStep === 1 ? '创建机器人' : platformLabel(createPlatform) + ' 机器人'"></h3>
+              <button class="btn btn-ghost btn-sm" @click="showCreateModal = false; smartbotPolling = false; if(smartbotPollTimer){clearInterval(smartbotPollTimer);smartbotPollTimer=null;}">&times;</button>
+            </div>
+            <div class="modal-body">
+              <!-- Step 1: Platform selection -->
+              <div x-show="createStep === 1" style="display:flex;gap:16px;flex-direction:column">
+                <p style="font-size:14px;opacity:0.7;margin-bottom:8px">选择平台</p>
+                <button class="btn btn-lg" style="justify-content:flex-start;padding:16px 20px" @click="selectPlatform('wecom')">
+                  <span x-html="platformIcon('wecom')" style="margin-right:12px"></span>
+                  企业微信
+                  <span style="margin-left:auto;font-size:12px;opacity:0.5">SmartBot / 应用 / 客服</span>
+                </button>
+                <button class="btn btn-lg" style="justify-content:flex-start;padding:16px 20px" @click="selectPlatform('feishu')">
+                  <span x-html="platformIcon('feishu')" style="margin-right:12px"></span>
+                  飞书
+                </button>
+                <button class="btn btn-lg" style="justify-content:flex-start;padding:16px 20px;opacity:0.5" disabled>
+                  <span x-html="platformIcon('dingtalk')" style="margin-right:12px"></span>
+                  钉钉
+                  <span style="margin-left:auto;font-size:12px">即将支持</span>
+                </button>
+              </div>
+
+              <!-- Step 2: WeCom form -->
+              <div x-show="createStep === 2 && createPlatform === 'wecom'">
+                <button class="btn btn-ghost btn-sm" @click="backToStep1()" style="margin-bottom:12px">&larr; 返回选择平台</button>
+                <div style="margin-bottom:16px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">机器人名称</label>
+                  <input class="input" x-model="botForm.name" placeholder="例如: my-bot" style="width:100%">
+                </div>
+                <div style="margin-bottom:16px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">模式</label>
+                  <select class="input" x-model="botForm.mode" style="width:100%">
+                    <option value="smartbot">SmartBot（推荐）</option>
+                    <option value="app">企业应用</option>
+                    <option value="kf">客服</option>
+                  </select>
+                </div>
+                <!-- SmartBot auto creation -->
+                <div x-show="botForm.mode === 'smartbot'" style="background:var(--midground);border-radius:8px;padding:16px;margin-bottom:16px">
+                  <p style="font-size:13px;font-weight:600;margin-bottom:12px">快速创建 SmartBot</p>
+                  <button class="btn btn-primary btn-sm" @click="startSmartbotFlow()" x-show="!smartbotAuthUrl && !smartbotPolling && smartbotStatus !== 'success'">生成二维码</button>
+                  <div x-show="smartbotAuthUrl && smartbotStatus !== 'success'" style="text-align:center;margin-top:8px">
+                    <p style="font-size:12px;opacity:0.7;margin-bottom:12px">用企业微信扫描二维码创建机器人</p>
+                    <div id="smartbot-qr" style="display:inline-block;background:#fff;padding:12px;border-radius:8px"></div>
+                    <p x-show="smartbotPolling" style="font-size:12px;opacity:0.6;margin-top:12px">等待扫码中...</p>
+                    <div style="margin-top:8px">
+                      <button class="btn btn-ghost btn-sm" @click="copyAuthUrl()">复制链接</button>
+                    </div>
+                  </div>
+                  <div x-show="smartbotStatus === 'success'" style="margin-top:8px">
+                    <p style="color:var(--success);font-size:13px;font-weight:600">创建成功！</p>
+                    <p style="font-size:12px;opacity:0.6;margin-top:4px">Bot ID: <span x-text="botForm.bot_id.substring(0,20) + '...'"></span></p>
+                  </div>
+                  <div x-show="smartbotStatus === 'expired'" style="margin-top:8px">
+                    <p style="color:var(--danger);font-size:13px">二维码已过期</p>
+                    <button class="btn btn-sm" @click="startSmartbotFlow()" style="margin-top:8px">重新生成</button>
+                  </div>
+                </div>
+                <div x-show="botForm.mode !== 'smartbot' || (botForm.mode === 'smartbot' && smartbotStatus !== 'success')">
+                  <div style="margin-bottom:12px">
+                    <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">企业 ID (corp_id)</label>
+                    <input class="input" x-model="botForm.corp_id" placeholder="可选" style="width:100%">
+                  </div>
+                  <div x-show="botForm.mode !== 'smartbot' || !smartbotResult" style="margin-bottom:12px">
+                    <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">Bot ID</label>
+                    <input class="input" x-model="botForm.bot_id" placeholder="机器人的 bot_id" style="width:100%">
+                  </div>
+                  <div x-show="botForm.mode !== 'smartbot' || !smartbotResult" style="margin-bottom:12px">
+                    <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">Secret</label>
+                    <input class="input" type="password" x-model="botForm.secret" placeholder="机器人的 secret" style="width:100%">
+                  </div>
+                </div>
+                <div style="margin-bottom:16px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">绑定分身（可选）</label>
+                  <select class="input" x-model="botForm.bind_agent" style="width:100%">
+                    <option value="">不绑定</option>
+                    <template x-for="a in agents" :key="a.id">
+                      <option :value="a.name" x-text="a.name"></option>
+                    </template>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Step 2: Feishu form -->
+              <div x-show="createStep === 2 && createPlatform === 'feishu'">
+                <button class="btn btn-ghost btn-sm" @click="backToStep1()" style="margin-bottom:12px">&larr; 返回选择平台</button>
+                <div style="margin-bottom:16px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">机器人名称</label>
+                  <input class="input" x-model="botForm.name" placeholder="例如: feishu-bot" style="width:100%">
+                </div>
+                <div style="margin-bottom:12px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">App ID</label>
+                  <input class="input" x-model="botForm.app_id" placeholder="飞书应用的 App ID" style="width:100%">
+                </div>
+                <div style="margin-bottom:12px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">App Secret</label>
+                  <input class="input" type="password" x-model="botForm.app_secret" placeholder="飞书应用的 App Secret" style="width:100%">
+                </div>
+                <div style="margin-bottom:12px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">品牌</label>
+                  <select class="input" x-model="botForm.brand" style="width:100%">
+                    <option value="feishu">飞书</option>
+                    <option value="lark">Lark</option>
+                  </select>
+                </div>
+                <div style="margin-bottom:16px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">绑定分身（可选）</label>
+                  <select class="input" x-model="botForm.bind_agent" style="width:100%">
+                    <option value="">不绑定</option>
+                    <template x-for="a in agents" :key="a.id">
+                      <option :value="a.name" x-text="a.name"></option>
+                    </template>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer" x-show="createStep === 2">
+              <button class="btn btn-ghost" @click="showCreateModal = false; smartbotPolling = false; if(smartbotPollTimer){clearInterval(smartbotPollTimer);smartbotPollTimer=null;}">取消</button>
+              <button class="btn btn-primary" @click="createBot()" :disabled="createSaving || !botForm.name.trim()" x-text="createSaving ? '创建中...' : '创建'"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- Page: Overview -->
     <template x-if="page === 'overview'">
       <div x-data="overviewPage" x-init="loadOverview().then(() => startAutoRefresh())" @page-leave.window="stopAutoRefresh()">
         <div class="page-header">
-          <h2>Overview</h2>
+          <h2>概览</h2>
           <div class="flex items-center gap-2">
-            <span class="health-indicator" :class="health.status === 'ok' ? 'health-ok' : 'health-down'" x-text="health.status === 'ok' ? 'Healthy' : 'Unreachable'"></span>
+            <span class="health-indicator" :class="health.status === 'ok' ? 'health-ok' : 'health-down'" x-text="health.status === 'ok' ? '正常' : '不可达'"></span>
             <button class="btn btn-ghost btn-sm" @click="silentRefresh()" title="Refresh" style="padding:4px 8px">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
             </button>
@@ -219,45 +358,9 @@
             <div class="empty-state-icon">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
             </div>
-            <h3 style="color:var(--error)">Connection Error</h3>
+            <h3 style="color:var(--error)">连接错误</h3>
             <p class="text-xs text-dim" x-text="loadError"></p>
-            <button class="btn btn-primary btn-sm" @click="loadData()" style="margin-top:8px">Retry</button>
-          </div>
-          <!-- Setup Checklist -->
-          <div class="setup-checklist" x-show="!loading && !loadError && setupProgress < 100 && !checklistDismissed" style="animation:slideUp 0.3s var(--ease-spring)">
-            <div class="card" style="border-left:4px solid var(--accent)">
-              <div class="flex justify-between items-center mb-2">
-                <div>
-                  <div class="card-header" style="margin:0">Getting Started</div>
-                  <div class="text-xs text-dim" x-text="setupDoneCount + ' of 3 steps completed'"></div>
-                </div>
-                <div class="flex gap-2">
-                  <button class="btn btn-ghost btn-sm" @click="dismissChecklist()">Dismiss</button>
-                </div>
-              </div>
-              <div class="progress-bar mb-2" style="margin-top:8px">
-                <div class="progress-bar-fill" :style="'width:' + setupProgress + '%'"></div>
-              </div>
-              <template x-for="item in setupChecklist" :key="item.key">
-                <div class="setup-checklist-item">
-                  <div class="setup-checklist-icon" :class="{ done: item.done }">
-                    <span x-show="item.done">&#10003;</span>
-                    <span x-show="!item.done">&#9675;</span>
-                  </div>
-                  <span style="flex:1" :style="item.done ? 'text-decoration:line-through;opacity:0.6' : ''" x-text="item.label"></span>
-                  <a x-show="!item.done" :href="item.action" class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px">Go</a>
-                </div>
-              </template>
-            </div>
-          </div>
-          <!-- Onboarding banner -->
-          <div class="onboarding-banner" x-show="!loading && !loadError && $store.app.showOnboarding && checklistDismissed">
-            <h3>Welcome to OpenCarrier</h3>
-            <p style="font-size:12px;color:var(--text-dim)">Get started by configuring an LLM provider and creating an agent:</p>
-            <div class="flex gap-2">
-              <button class="btn btn-ghost" @click="location.hash='settings'">Configure Manually</button>
-              <button class="btn btn-ghost" @click="$store.app.dismissOnboarding()">Dismiss</button>
-            </div>
+            <button class="btn btn-primary btn-sm" @click="loadData()" style="margin-top:8px">重试</button>
           </div>
           <div x-show="!loading && !loadError" style="animation:fadeIn 0.3s">
 
@@ -270,7 +373,7 @@
                 </div>
                 <div>
                   <div class="stat-value" :class="(status.agent_count || 0) > 0 ? 'stat-value-success' : ''" x-text="status.agent_count || 0"></div>
-                  <div class="stat-label">Agents Running</div>
+                  <div class="stat-label">在线分身</div>
                 </div>
               </div>
             </div>
@@ -281,7 +384,7 @@
                 </div>
                 <div>
                   <div class="stat-value" x-text="formatNumber(usageSummary.total_tokens)"></div>
-                  <div class="stat-label">Tokens Used</div>
+                  <div class="stat-label">Token 用量</div>
                 </div>
               </div>
             </div>
@@ -292,7 +395,7 @@
                 </div>
                 <div>
                   <div class="stat-value stat-value-accent" x-text="usageSummary.total_tools || 0"></div>
-                  <div class="stat-label">Tool Calls</div>
+                  <div class="stat-label">工具调用</div>
                 </div>
               </div>
             </div>
@@ -303,7 +406,7 @@
                 </div>
                 <div>
                   <div class="stat-value" x-text="formatUptime(status.uptime_seconds)"></div>
-                  <div class="stat-label">Uptime</div>
+                  <div class="stat-label">运行时间</div>
                 </div>
               </div>
             </div>
@@ -313,11 +416,11 @@
           <div class="stats-row animate-entry stagger-5" style="margin-bottom:16px">
             <div class="stat-card">
               <div class="stat-value" style="font-size:18px" x-text="connectedMcp.length"></div>
-              <div class="stat-label">MCP Servers</div>
+              <div class="stat-label">MCP 服务器</div>
             </div>
             <div class="stat-card">
               <div class="stat-value" style="font-size:18px" x-text="formatNumber(usageSummary.total_tools)"></div>
-              <div class="stat-label">Tool Calls</div>
+              <div class="stat-label">工具调用</div>
             </div>
           </div>
 
@@ -329,31 +432,11 @@
                 System Health
               </div>
               <div class="detail-grid" style="margin-top:8px">
-                <div class="detail-row"><span class="detail-label">Status</span><span class="badge" :class="health.status === 'ok' ? 'badge-running' : 'badge-crashed'" x-text="health.status || 'unknown'"></span></div>
-                <div class="detail-row"><span class="detail-label">Version</span><span class="detail-value font-mono" x-text="status.version || '-'"></span></div>
-                <div class="detail-row"><span class="detail-label">Provider</span><span class="detail-value" x-text="status.default_provider || '-'"></span></div>
-                <div class="detail-row"><span class="detail-label">Model</span><span class="detail-value font-mono" style="font-size:11px" x-text="status.default_model || '-'"></span></div>
+                <div class="detail-row"><span class="detail-label">状态</span><span class="badge" :class="health.status === 'ok' ? 'badge-running' : 'badge-crashed'" x-text="health.status || '未知'"></span></div>
+                <div class="detail-row"><span class="detail-label">版本</span><span class="detail-value font-mono" x-text="status.version || '-'"></span></div>
+                <div class="detail-row"><span class="detail-label">提供商</span><span class="detail-value" x-text="status.default_provider || '-'"></span></div>
+                <div class="detail-row"><span class="detail-label">模型</span><span class="detail-value font-mono" style="font-size:11px" x-text="status.default_model || '-'"></span></div>
               </div>
-            </div>
-
-            <!-- Security Systems -->
-            <div class="card">
-              <div class="card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                Security Systems
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Merkle Audit</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Taint Tracking</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">WASM Sandbox</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">GCRA Rate Limit</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Ed25519 Signing</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">SSRF Protection</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Secret Zeroize</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Loop Guard</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Session Repair</span>
-              </div>
-              <div class="text-xs text-dim" style="margin-top:8px">9 defense-in-depth systems active</div>
             </div>
 
             <!-- MCP Servers -->
@@ -367,28 +450,10 @@
                   <div class="badge" :class="s.status === 'connected' ? 'badge-success' : 'badge-dim'" style="font-size:9px;padding:2px 8px">
                     <span style="display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px" :style="s.status === 'connected' ? 'background:var(--success)' : 'background:var(--text-dim)'"></span>
                     <span x-text="s.name"></span>
-                    <span class="text-xs text-dim" x-show="s.tool_count" x-text="'(' + s.tool_count + ' tools)'"></span>
+                    <span class="text-xs text-dim" x-show="s.tool_count" x-text="'(' + s.tool_count + ' 工具)'"></span>
                   </div>
                 </template>
               </div>
-            </div>
-          </div>
-
-          <!-- Quick Actions -->
-          <div class="card mt-4" style="background:var(--bg-elevated)">
-            <div class="card-header" style="margin-bottom:8px">Quick Actions</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              <button class="btn btn-ghost btn-sm" @click="location.hash='agents'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
-                New Agent
-              </button>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
-                Browse Skills
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='settings'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg>
-                Settings
-              </button>
             </div>
           </div>
 
@@ -426,30 +491,9 @@
               <div class="empty-state-icon" style="margin:0 auto 8px">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
               </div>
-              <h3 style="color:var(--text-secondary);margin-bottom:4px">No Recent Activity</h3>
+              <h3 style="color:var(--text-secondary);margin-bottom:4px">暂无近期活动</h3>
               <p class="text-xs text-dim">Activity will appear here once agents start processing.</p>
               <button class="btn btn-primary btn-sm" @click="location.hash='agents'" style="margin-top:12px">Chat with an Agent</button>
-            </div>
-          </div>
-
-          <!-- Quick Actions -->
-          <div class="animate-entry stagger-6" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:12px;margin-top:20px">
-            <div class="quick-action-card" @click="location.hash='agents'">
-              <div class="quick-action-icon" style="background:var(--accent-subtle)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              </div>
-              <div>
-                <div class="quick-action-label">Create Agent</div>
-                <div class="quick-action-desc">Spawn a new agent</div>
-              </div>
-            </div>
-              <div class="quick-action-icon" style="background:var(--info-subtle)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
-              </div>
-              <div>
-                <div class="quick-action-label">Browse Skills</div>
-                <div class="quick-action-desc">Explore available skills</div>
-              </div>
             </div>
           </div>
 
@@ -485,16 +529,16 @@
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
                   Generating...
                 </span>
-                <span class="queue-badge" x-show="messageQueue.length > 0" x-text="'+' + messageQueue.length + ' queued'"></span>
+                <span class="queue-badge" x-show="messageQueue.length > 0" x-text="'+' + messageQueue.length + ' 排队中'"></span>
                 <!-- Session switcher -->
                 <div style="position:relative">
-                  <button class="btn btn-ghost btn-sm" @click="sessionsOpen = !sessionsOpen" title="Sessions" style="position:relative">
+                  <button class="btn btn-ghost btn-sm" @click="sessionsOpen = !sessionsOpen" title="会话" style="position:relative">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
                     <span class="session-count-badge" x-show="sessions.length > 1" x-text="sessions.length"></span>
                   </button>
                   <div class="session-dropdown" x-show="sessionsOpen" @click.outside="sessionsOpen = false" x-transition>
                     <div class="session-dropdown-header">
-                      <span class="text-xs font-bold">Sessions</span>
+                      <span class="text-xs font-bold">会话</span>
                       <button class="btn btn-ghost btn-sm" @click="createSession()" style="padding:2px 6px;font-size:11px">+ New</button>
                     </div>
                     <template x-for="s in sessions" :key="s.session_id">
@@ -509,20 +553,20 @@
                     <div class="text-xs text-dim" style="padding:8px 12px;text-align:center" x-show="!sessions.length">No sessions</div>
                   </div>
                 </div>
-                <button class="btn btn-ghost btn-sm" @click="toggleSearch()" title="Search messages (Ctrl+F)">
+                <button class="btn btn-ghost btn-sm" @click="toggleSearch()" title="搜索消息 (Ctrl+F)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                 </button>
                 <button class="btn btn-ghost btn-sm" @click="$store.app.toggleFocusMode()" title="Ctrl+Shift+F">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g x-show="!$store.app.focusMode"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></g><g x-show="$store.app.focusMode"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></g></svg>
                 </button>
-                <button class="btn btn-danger btn-sm" @click="killAgent()">Stop</button>
+                <button class="btn btn-danger btn-sm" @click="killAgent()">停止</button>
               </div>
             </div>
 
             <!-- Search bar -->
             <div class="chat-search-bar" x-show="searchOpen" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 transform -translate-y-2" x-transition:enter-end="opacity-100 transform translate-y-0">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-              <input type="text" id="chat-search-input" x-model="searchQuery" x-ref="searchInput" placeholder="Search messages..." class="chat-search-input" @keydown.escape="toggleSearch()">
+              <input type="text" id="chat-search-input" x-model="searchQuery" x-ref="searchInput" placeholder="搜索消息..." class="chat-search-input" @keydown.escape="toggleSearch()">
               <span class="text-xs text-dim" x-show="searchQuery.trim()" x-text="filteredMessages.length + ' of ' + messages.length"></span>
               <button class="btn btn-ghost btn-sm" @click="toggleSearch()" style="padding:2px 6px">&times;</button>
             </div>
@@ -533,7 +577,7 @@
               <template x-if="!currentAgent">
                 <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:32px;opacity:0.8">
                   <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px;opacity:0.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  <h3 style="margin:0 0 8px;font-size:16px;font-weight:600">Select an agent to start chatting</h3>
+                  <h3 style="margin:0 0 8px;font-size:16px;font-weight:600">选择一个分身开始对话</h3>
                   <p class="text-dim" style="font-size:13px;max-width:320px">Choose an agent from the sidebar or go to the Agents tab to create a new one.</p>
                 </div>
               </template>
@@ -592,7 +636,7 @@
                             <div x-show="tool._audioFile" style="padding:8px 12px">
                               <div class="audio-player">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-                                <span class="text-xs" x-text="'Audio: ' + tool._audioFile.split('/').pop()"></span>
+                                <span class="text-xs" x-text="'Audio: ' + (tool._audioFile || '').split('/').pop()"></span>
                                 <span class="text-xs text-dim" x-show="tool._audioDuration" x-text="'~' + Math.round((tool._audioDuration || 0) / 1000) + 's'"></span>
                               </div>
                             </div>
@@ -602,7 +646,7 @@
                                 <pre class="tool-pre" x-text="formatToolJson(tool.input)"></pre>
                               </div>
                               <div x-show="tool.result">
-                                <div class="tool-section-label">Result <span class="text-xs text-muted" x-show="tool.result && tool.result.length > 200" x-text="'(' + tool.result.length + ' chars)'"></span></div>
+                                <div class="tool-section-label">结果 <span class="text-xs text-muted" x-show="tool.result && tool.result.length > 200" x-text="'(' + tool.result.length + ' chars)'"></span></div>
                                 <pre class="tool-pre" :class="{ 'tool-pre-error': tool.is_error, 'tool-pre-short': !tool.is_error && tool.result && tool.result.length < 100, 'tool-pre-medium': !tool.is_error && tool.result && tool.result.length >= 100 && tool.result.length < 500 }" x-text="formatToolJson(tool.result)"></pre>
                               </div>
                             </div>
@@ -664,7 +708,7 @@
                   <span class="recording-dot"></span>
                   <span class="text-xs" style="color:var(--danger)" x-text="formatRecordingTime()"></span>
                 </div>
-                <textarea id="msg-input" rows="1" :placeholder="recording ? 'Recording... release to send' : 'Message OpenCarrier... (/ for commands)'"
+                <textarea id="msg-input" rows="1" :placeholder="recording ? '录音中...松开发送' : '发送消息给 OpenCarrier...（/ 查看命令）'"
                           @keydown.enter.prevent="if(!$event.isComposing && $event.keyCode !== 229 && !$event.shiftKey){if(showSlashMenu && filteredSlashCommands.length){executeSlashCommand(filteredSlashCommands[slashIdx].cmd)}else{sendMessage()}}"
                           @keydown.escape="showSlashMenu = false"
                           @keydown.arrow-up.prevent="if(showSlashMenu){slashIdx = Math.max(0, slashIdx - 1)}"
@@ -690,10 +734,10 @@
                   <!-- Model display (read-only) -->
                   <div x-show="currentAgent" style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim,#888)">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                    <span x-text="modelDisplayName || 'Model'"></span>
+                    <span x-text="modelDisplayName || '模型'"></span>
                   </div>
-                  <span class="text-xs text-dim" x-text="tokenCount > 0 ? '~' + tokenCount + ' tokens' : (attachments.length ? attachments.length + ' file(s)' : '')"></span>
-                  <span class="queue-badge" x-show="messageQueue.length > 0" x-text="messageQueue.length + ' queued'"></span>
+                  <span class="text-xs text-dim" x-text="tokenCount > 0 ? '~' + tokenCount + ' tokens' : (attachments.length ? attachments.length + ' 文件' : '')"></span>
+                  <span class="queue-badge" x-show="messageQueue.length > 0" x-text="messageQueue.length + ' 排队中'"></span>
                 </div>
                 <div class="tip-bar" x-show="currentTip && !sending">
                   <span class="text-xs" x-text="currentTip"></span>
@@ -707,7 +751,7 @@
         <!-- MODE 2: Agent picker + Templates (no agent chatting) -->
         <div x-show="!activeChatAgent" class="chat-wrapper">
         <div class="page-header">
-          <h2>Chat</h2>
+          <h2>对话</h2>
           <div class="flex gap-2">
             <button class="btn btn-ghost btn-sm" x-show="$store.app.isAdmin() || filteredAgents.length" @click="openHubModal()">+ 安装分身</button>
             <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
@@ -739,13 +783,13 @@
                   <div style="min-width:0;flex:1">
                     <div style="display:flex;align-items:center;gap:6px">
                       <span class="font-bold" style="font-size:13px" x-text="agent.name"></span>
-                      <span class="badge badge-dim" style="font-size:9px;padding:0 4px;line-height:16px" x-show="$store.app.isAdmin() && agent.tenant_id" x-text="agent.tenant_id.substring(0, 8) + '...'"></span>
+                      <span class="badge badge-dim" style="font-size:9px;padding:0 4px;line-height:16px" x-show="$store.app.isAdmin() && agent.tenant_id" x-text="(agent.tenant_id || '').substring(0, 8) + '...'"></span>
                     </div>
-                    <div class="text-xs text-dim font-mono" style="font-size:11px" x-text="agent.model_name"></div>
+                    <div class="text-xs text-dim font-mono" style="font-size:11px" x-text="agent.model_provider + ':' + agent.model_name"></div>
                   </div>
                   <span class="badge" :class="'badge-' + agent.state.toLowerCase()" x-text="agent.state" style="font-size:10px"></span>
-                  <button class="agent-chip-config-btn" @click.stop="showDetail(agent)" title="Agent settings" style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all 0.15s;flex-shrink:0" @mouseenter="$el.style.borderColor='var(--accent)';$el.style.color='var(--accent)';$el.style.background='var(--surface2)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.color='var(--text-dim)';$el.style.background='transparent'">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                  <button @click.stop="deleteAgent(agent)" title="删除分身" style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all 0.15s;flex-shrink:0" @mouseenter="$el.style.borderColor='var(--error)';$el.style.color='var(--error)';$el.style.background='var(--surface2)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.color='var(--text-dim)';$el.style.background='transparent'">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                   </button>
                 </div>
               </template>
@@ -754,197 +798,6 @@
 
           <!-- Custom spawn modal still available -->
           </div>
-
-          <!-- Agent detail modal with tabs (Info / Files / Config) -->
-          <template x-if="showDetailModal && detailAgent">
-            <div class="modal-overlay" @click.self="showDetailModal = false" @keydown.escape.window="showDetailModal = false">
-              <div class="modal" style="max-width:600px">
-                <div class="modal-header">
-                  <h3>
-                    <span x-show="detailAgent.identity && detailAgent.identity.emoji" x-text="detailAgent.identity && detailAgent.identity.emoji" style="margin-right:6px"></span>
-                    <span x-text="detailAgent.name"></span>
-                  </h3>
-                  <button class="modal-close" @click="showDetailModal = false">&times;</button>
-                </div>
-                <div class="tabs" style="margin-bottom:16px">
-                  <div class="tab" :class="{ active: detailTab === 'info' }" @click="detailTab = 'info'">Info</div>
-                  <div class="tab" :class="{ active: detailTab === 'files' }" @click="detailTab = 'files'; loadAgentFiles()">Files</div>
-                  <div class="tab" :class="{ active: detailTab === 'config' }" @click="detailTab = 'config'; loadToolFilters()">Config</div>
-                </div>
-
-                <!-- Tab: Info -->
-                <div x-show="detailTab === 'info'">
-                  <div class="detail-grid">
-                    <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value text-xs" x-text="detailAgent.id" style="word-break:break-all"></span></div>
-                    <div class="detail-row"><span class="detail-label">State</span><span class="badge" :class="'badge-' + detailAgent.state.toLowerCase()" x-text="detailAgent.state"></span></div>
-                    <div class="detail-row"><span class="detail-label">Mode</span>
-                      <select class="form-select" style="width:140px" :value="detailAgent.mode || 'full'" @change="setMode(detailAgent, $event.target.value)">
-                        <option value="observe">Observe</option><option value="assist">Assist</option><option value="full">Full</option>
-                      </select>
-                    </div>
-                    <div class="detail-row" x-show="detailAgent.profile"><span class="detail-label">Profile</span><span class="detail-value" style="text-transform:capitalize" x-text="detailAgent.profile || '-'"></span></div>
-                    <div class="detail-row"><span class="detail-label">Provider</span>
-                      <template x-if="!editingProvider">
-                        <span>
-                          <span class="detail-value" x-text="detailAgent.model_provider"></span>
-                          <button class="btn btn-ghost btn-sm" style="margin-left:8px;padding:2px 8px;font-size:11px" @click="editingProvider = true; newProviderValue = detailAgent.model_provider">Change</button>
-                        </span>
-                      </template>
-                      <template x-if="editingProvider">
-                        <span class="flex gap-1" style="align-items:center">
-                          <input class="form-input" style="width:160px;font-size:12px" x-model="newProviderValue" placeholder="provider" @keydown.enter="changeProvider()" @keydown.escape="editingProvider = false">
-                          <button class="btn btn-primary btn-sm" @click="changeProvider()" :disabled="modelSaving" style="padding:2px 10px">
-                            <span x-show="!modelSaving">Save</span><span x-show="modelSaving">...</span>
-                          </button>
-                          <button class="btn btn-ghost btn-sm" @click="editingProvider = false" style="padding:2px 8px">Cancel</button>
-                        </span>
-                      </template>
-                    </div>
-                    <div class="detail-row"><span class="detail-label">Model</span>
-                      <template x-if="!editingModel">
-                        <span>
-                          <span class="detail-value" x-text="detailAgent.model_name"></span>
-                          <button class="btn btn-ghost btn-sm" style="margin-left:8px;padding:2px 8px;font-size:11px" @click="editingModel = true; newModelValue = detailAgent.model_provider + '/' + detailAgent.model_name">Change</button>
-                        </span>
-                      </template>
-                      <template x-if="editingModel">
-                        <span class="flex gap-1" style="align-items:center">
-                          <input class="form-input" style="width:240px;font-size:12px" x-model="newModelValue" placeholder="provider/model" @keydown.enter="changeModel()" @keydown.escape="editingModel = false">
-                          <button class="btn btn-primary btn-sm" @click="changeModel()" :disabled="modelSaving" style="padding:2px 10px">
-                            <span x-show="!modelSaving">Save</span><span x-show="modelSaving">...</span>
-                          </button>
-                          <button class="btn btn-ghost btn-sm" @click="editingModel = false" style="padding:2px 8px">Cancel</button>
-                        </span>
-                      </template>
-                    </div>
-                    <div class="detail-row"><span class="detail-label">Created</span><span class="detail-value" x-text="detailAgent.created_at ? new Date(detailAgent.created_at).toLocaleString() : '-'"></span></div>
-
-                    <!-- Fallback Model Chain -->
-                    <div class="detail-row" style="align-items:flex-start">
-                      <span class="detail-label">Fallbacks</span>
-                      <div style="flex:1">
-                        <template x-if="detailAgent._fallbacks && detailAgent._fallbacks.length > 0">
-                          <div>
-                            <template x-for="(fb, idx) in detailAgent._fallbacks" :key="idx">
-                              <div class="flex gap-1 items-center" style="margin-bottom:4px">
-                                <span class="badge" style="font-size:11px;font-family:var(--font-mono)" x-text="(idx+1) + '. ' + fb.provider + '/' + fb.model"></span>
-                                <button class="btn btn-ghost btn-sm" style="padding:1px 4px;font-size:10px;color:var(--danger)" @click="removeFallback(idx)">&times;</button>
-                              </div>
-                            </template>
-                          </div>
-                        </template>
-                        <template x-if="!detailAgent._fallbacks || detailAgent._fallbacks.length === 0">
-                          <span class="text-dim" style="font-size:12px">None — add a fallback chain</span>
-                        </template>
-                        <template x-if="!editingFallback">
-                          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px;margin-top:4px" @click="editingFallback = true; newFallbackValue = ''">+ Add</button>
-                        </template>
-                        <template x-if="editingFallback">
-                          <div class="flex gap-1 mt-1" style="align-items:center">
-                            <input class="form-input" style="width:220px;font-size:12px" x-model="newFallbackValue" placeholder="provider/model" @keydown.enter="addFallback()" @keydown.escape="editingFallback = false">
-                            <button class="btn btn-primary btn-sm" @click="addFallback()" style="padding:2px 10px;font-size:11px">Add</button>
-                            <button class="btn btn-ghost btn-sm" @click="editingFallback = false" style="padding:2px 8px;font-size:11px">Cancel</button>
-                          </div>
-                        </template>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="flex gap-2 mt-4">
-                    <button class="btn btn-primary" @click="chatWithAgent(detailAgent); showDetailModal = false">Chat</button>
-                    <button class="btn btn-ghost" @click="cloneAgent(detailAgent)">Clone</button>
-                    <button class="btn btn-ghost" @click="clearHistory(detailAgent)">Clear History</button>
-                    <button class="btn btn-danger" @click="killAgent(detailAgent)">Stop</button>
-                  </div>
-                </div>
-
-                <!-- Tab: Files -->
-                <div x-show="detailTab === 'files'">
-                  <div x-show="filesLoading" class="text-center text-dim" style="padding:24px">Loading files...</div>
-                  <div x-show="!filesLoading && !editingFile">
-                    <template x-for="file in agentFiles" :key="file.name">
-                      <div class="file-list-item" @click="openFile(file)">
-                        <span class="font-mono" style="font-size:13px" x-text="file.name"></span>
-                        <span class="text-xs text-dim" x-text="file.exists ? (file.size_bytes + ' bytes') : 'Not created'"></span>
-                      </div>
-                    </template>
-                    <div x-show="!agentFiles.length && !filesLoading" class="text-center text-dim" style="padding:24px">No workspace files found</div>
-                  </div>
-                  <div x-show="editingFile">
-                    <div class="flex justify-between items-center mb-2">
-                      <span class="font-bold font-mono" x-text="editingFile"></span>
-                      <button class="btn btn-ghost btn-sm" @click="closeFileEditor()">&larr; Back</button>
-                    </div>
-                    <textarea class="file-editor" x-model="fileContent" style="width:100%;height:280px;resize:vertical"></textarea>
-                    <div class="flex gap-2 mt-2">
-                      <button class="btn btn-primary btn-sm" @click="saveFile()" :disabled="fileSaving"><span x-show="!fileSaving">Save</span><span x-show="fileSaving">Saving...</span></button>
-                      <button class="btn btn-ghost btn-sm" @click="closeFileEditor()">Cancel</button>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Tab: Config (inline editable) -->
-                <div x-show="detailTab === 'config'">
-                  <div class="form-group"><label>Name</label><input class="form-input" x-model="configForm.name"></div>
-                  <div class="form-group"><label>System Prompt</label><textarea class="form-textarea" x-model="configForm.system_prompt" style="height:80px"></textarea></div>
-                  <div class="form-group"><label>Emoji</label>
-                    <div class="emoji-grid">
-                      <template x-for="em in emojiOptions" :key="em">
-                        <button class="emoji-grid-item" :class="{ active: configForm.emoji === em }" @click="configForm.emoji = em" x-text="em"></button>
-                      </template>
-                    </div>
-                  </div>
-                  <div class="form-group"><label>Color</label><input type="color" x-model="configForm.color" style="width:48px;height:32px;border:none;cursor:pointer;background:none"></div>
-                  <div class="form-group"><label>Archetype</label>
-                    <select class="form-select" x-model="configForm.archetype">
-                      <option value="">None</option>
-                      <template x-for="a in archetypeOptions" :key="a"><option :value="a.toLowerCase()" x-text="a"></option></template>
-                    </select>
-                  </div>
-                  <div class="form-group"><label>Vibe</label>
-                    <select class="form-select" x-model="configForm.vibe">
-                      <option value="">None</option>
-                      <option value="professional">Professional</option><option value="friendly">Friendly</option>
-                      <option value="technical">Technical</option><option value="creative">Creative</option>
-                      <option value="concise">Concise</option><option value="mentor">Mentor</option>
-                    </select>
-                  </div>
-                  <button class="btn btn-primary mt-4" @click="saveConfig()" :disabled="configSaving">
-                    <span x-show="!configSaving">Save Config</span><span x-show="configSaving">Saving...</span>
-                  </button>
-
-                  <!-- Tool Filters -->
-                  <div class="mt-4" style="border-top:1px solid var(--border);padding-top:16px">
-                    <h4 style="margin-bottom:8px;font-size:13px">Tool Filters</h4>
-                    <p class="text-xs text-dim" style="margin-bottom:12px">Allowlist: only these tools available (empty = all). Blocklist: these tools excluded.</p>
-                    <div class="form-group">
-                      <label style="font-size:12px">Allowlist <span class="text-dim" x-text="'(' + toolFilters.tool_allowlist.length + ')'"></span></label>
-                      <div class="flex flex-wrap gap-1 mb-1">
-                        <template x-for="(t, i) in toolFilters.tool_allowlist" :key="'al-'+i">
-                          <span class="badge" style="cursor:pointer" @click="removeAllowTool(t)" :title="'Click to remove ' + t"><span x-text="t"></span> &times;</span>
-                        </template>
-                      </div>
-                      <div class="flex gap-1">
-                        <input class="form-input" style="font-size:12px;flex:1" x-model="newAllowTool" placeholder="tool name" @keydown.enter="addAllowTool()">
-                        <button class="btn btn-ghost btn-sm" @click="addAllowTool()">Add</button>
-                      </div>
-                    </div>
-                    <div class="form-group">
-                      <label style="font-size:12px">Blocklist <span class="text-dim" x-text="'(' + toolFilters.tool_blocklist.length + ')'"></span></label>
-                      <div class="flex flex-wrap gap-1 mb-1">
-                        <template x-for="(t, i) in toolFilters.tool_blocklist" :key="'bl-'+i">
-                          <span class="badge badge-danger" style="cursor:pointer" @click="removeBlockTool(t)" :title="'Click to remove ' + t"><span x-text="t"></span> &times;</span>
-                        </template>
-                      </div>
-                      <div class="flex gap-1">
-                        <input class="form-input" style="font-size:12px;flex:1" x-model="newBlockTool" placeholder="tool name" @keydown.enter="addBlockTool()">
-                        <button class="btn btn-ghost btn-sm" @click="addBlockTool()">Add</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
 
           <!-- Multi-step Spawn Wizard -->
           <template x-if="showSpawnModal">
@@ -964,7 +817,7 @@
                 <!-- Raw TOML mode (unchanged) -->
                 <div x-show="spawnMode === 'toml'">
                   <div class="form-group">
-                    <label>Agent Manifest (TOML)</label>
+                    <label>分身清单 (TOML)</label>
                     <textarea class="form-textarea" style="height:200px;font-size:11px" x-model="spawnToml" placeholder='name = "my-agent"&#10;module = "builtin:chat"&#10;[model]&#10;provider = "groq"&#10;model = "llama-3.3-70b-versatile"&#10;system_prompt = "You are helpful."'></textarea>
                   </div>
                   <button class="btn btn-primary btn-block mt-4" @click="spawnAgent()" :disabled="spawning">
@@ -986,11 +839,11 @@
                   <!-- Step 1: Name + Identity -->
                   <div x-show="spawnStep === 1">
                     <div class="form-group">
-                      <label>Agent Name</label>
+                      <label>分身名称</label>
                       <input class="form-input" x-model="spawnForm.name" placeholder="my-agent" @keydown.enter="if(!$event.isComposing && $event.keyCode !== 229) nextStep()">
                     </div>
                     <div class="form-group">
-                      <label>Emoji</label>
+                      <label>表情</label>
                       <div class="emoji-grid">
                         <template x-for="em in emojiOptions" :key="em">
                           <button class="emoji-grid-item" :class="{ active: spawnIdentity.emoji === em }" @click="spawnIdentity.emoji = em" x-text="em"></button>
@@ -998,11 +851,11 @@
                       </div>
                     </div>
                     <div class="form-group">
-                      <label>Color</label>
+                      <label>颜色</label>
                       <input type="color" x-model="spawnIdentity.color" style="width:48px;height:32px;border:none;cursor:pointer;background:none">
                     </div>
                     <div class="form-group">
-                      <label>Archetype</label>
+                      <label>原型</label>
                       <select class="form-select" x-model="spawnIdentity.archetype">
                         <option value="">Choose...</option>
                         <template x-for="a in archetypeOptions" :key="a"><option :value="a.toLowerCase()" x-text="a"></option></template>
@@ -1013,7 +866,7 @@
                   <!-- Step 2: Model Selection -->
                   <div x-show="spawnStep === 2">
                     <div class="form-group">
-                      <label>Provider</label>
+                      <label>提供商</label>
                       <select class="form-select" x-model="spawnForm.provider">
                         <option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>
                         <option value="groq">Groq</option><option value="ollama">Ollama</option>
@@ -1024,11 +877,11 @@
                       </select>
                     </div>
                     <div class="form-group">
-                      <label>Model</label>
+                      <label>模型</label>
                       <input class="form-input" x-model="spawnForm.model" placeholder="e.g. llama-3.3-70b-versatile">
                     </div>
                     <div class="form-group">
-                      <label>System Prompt</label>
+                      <label>系统提示词</label>
                       <textarea class="form-textarea" x-model="spawnForm.systemPrompt" placeholder="You are a helpful assistant."></textarea>
                     </div>
                   </div>
@@ -1050,7 +903,7 @@
                   <!-- Step 4: Tools & Capabilities -->
                   <div x-show="spawnStep === 4">
                     <div class="form-group">
-                      <label>Tool Profile</label>
+                      <label>工具配置</label>
                       <select class="form-select" x-model="spawnForm.profile" @focus="loadSpawnProfiles()">
                         <option value="minimal">Minimal &mdash; Read-only file access</option>
                         <option value="coding">Coding &mdash; Files + shell + web fetch</option>
@@ -1069,7 +922,7 @@
                       </div>
                     </div>
                     <div class="form-group" x-show="spawnForm.profile === 'custom'">
-                      <label>Capabilities</label>
+                      <label>能力</label>
                       <div class="flex gap-3" style="flex-wrap:wrap">
                         <label class="form-checkbox"><input type="checkbox" x-model="spawnForm.caps.memory_read"> Memory Read</label>
                         <label class="form-checkbox"><input type="checkbox" x-model="spawnForm.caps.memory_write"> Memory Write</label>
@@ -1093,9 +946,9 @@
                         </div>
                       </div>
                       <div class="detail-grid" style="gap:6px">
-                        <div class="detail-row"><span class="detail-label">Provider</span><span class="detail-value" x-text="spawnForm.provider"></span></div>
-                        <div class="detail-row"><span class="detail-label">Model</span><span class="detail-value" x-text="spawnForm.model"></span></div>
-                        <div class="detail-row"><span class="detail-label">Profile</span><span class="detail-value" x-text="spawnForm.profile"></span></div>
+                        <div class="detail-row"><span class="detail-label">提供商</span><span class="detail-value" x-text="spawnForm.provider"></span></div>
+                        <div class="detail-row"><span class="detail-label">模型</span><span class="detail-value" x-text="spawnForm.model"></span></div>
+                        <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value" x-text="spawnForm.profile"></span></div>
                         <div class="detail-row" x-show="selectedPreset"><span class="detail-label">Personality</span><span class="detail-value" style="text-transform:capitalize" x-text="selectedPreset"></span></div>
                       </div>
                     </div>
@@ -1133,7 +986,7 @@
                 <!-- Error -->
                 <div x-show="hubError && !hubLoading" style="padding:16px;background:var(--danger-subtle);border-radius:var(--radius-md);margin:16px">
                   <p class="text-xs" style="color:var(--danger)" x-text="hubError"></p>
-                  <button class="btn btn-ghost btn-sm" style="margin-top:8px" @click="loadHubTemplates()">Retry</button>
+                  <button class="btn btn-ghost btn-sm" style="margin-top:8px" @click="loadHubTemplates()">重试</button>
                 </div>
 
                 <!-- Empty -->
@@ -1183,10 +1036,10 @@
     </template>
 
     <!-- Page: Scheduler -->
-    <template x-if="page === 'scheduler'">
+    <template x-if="page === 'tasks'">
       <div x-data="schedulerPage()">
         <div class="page-header">
-          <h2>Scheduler</h2>
+          <h2>定时任务</h2>
           <div class="flex gap-2">
             <button class="btn btn-primary btn-sm" x-show="tab === 'jobs'" @click="showCreateForm = true">+ New Job</button>
           </div>
@@ -1199,7 +1052,7 @@
             <div x-show="!loading && loadError" class="error-state">
               <span class="error-icon">!</span>
               <p x-text="loadError"></p>
-              <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
+              <button class="btn btn-ghost btn-sm" @click="loadData()">重试</button>
             </div>
             <div x-show="!loading && !loadError">
               <!-- Explainer -->
@@ -1218,13 +1071,13 @@
                 <table>
                   <thead>
                     <tr>
-                      <th>Name</th>
-                      <th>Schedule</th>
-                      <th>Agent</th>
-                      <th>Status</th>
-                      <th>Last Run</th>
-                      <th>Next Run</th>
-                      <th>Actions</th>
+                      <th>名称</th>
+                      <th>计划</th>
+                      <th>分身</th>
+                      <th>状态</th>
+                      <th>上次运行</th>
+                      <th>下次运行</th>
+                      <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1251,7 +1104,7 @@
                               <span x-show="runningJobId === job.id">...</span>
                             </button>
                             <button class="btn btn-ghost btn-sm" @click="toggleJob(job)" x-text="job.enabled ? 'Pause' : 'Enable'"></button>
-                            <button class="btn btn-danger btn-sm" @click="deleteJob(job)">Del</button>
+                            <button class="btn btn-danger btn-sm" @click="deleteJob(job)">删除</button>
                           </div>
                         </td>
                       </tr>
@@ -1278,19 +1131,19 @@
                   </div>
 
                   <div class="form-group">
-                    <label>Job Name</label>
+                    <label>任务名称</label>
                     <input class="form-input" x-model="newJob.name" placeholder="daily-report">
                   </div>
 
                   <div class="form-group">
-                    <label>Cron Expression</label>
+                    <label>Cron 表达式</label>
                     <input class="form-input" x-model="newJob.cron" placeholder="0 9 * * 1-5" style="font-family:monospace">
                     <div class="text-xs text-dim mt-1" x-show="newJob.cron" x-text="describeCron(newJob.cron)"></div>
                     <div class="text-xs text-dim mt-1">Format: <code>minute hour day-of-month month day-of-week</code></div>
                   </div>
 
                   <div class="form-group">
-                    <label>Quick Presets</label>
+                    <label>快捷预设</label>
                     <div class="flex gap-1 flex-wrap">
                       <template x-for="preset in cronPresets" :key="preset.cron">
                         <button class="btn btn-sm" :class="newJob.cron === preset.cron ? 'btn-primary' : 'btn-ghost'" @click="applyCronPreset(preset)" x-text="preset.label"></button>
@@ -1299,7 +1152,7 @@
                   </div>
 
                   <div class="form-group">
-                    <label>Target Agent</label>
+                    <label>目标分身</label>
                     <select class="form-select" x-model="newJob.agent_id">
                       <option value="">Any available agent</option>
                       <template x-for="a in availableAgents" :key="a.id">
@@ -1310,7 +1163,7 @@
                   </div>
 
                   <div class="form-group">
-                    <label>Message to Send</label>
+                    <label>发送消息</label>
                     <textarea class="form-textarea" x-model="newJob.message" placeholder="Generate and email the daily status report..." rows="3"></textarea>
                     <div class="text-xs text-dim mt-1">The message sent to the agent each time this job runs.</div>
                   </div>
@@ -1335,105 +1188,23 @@
       </div>
     </template>
 
-    <!-- Page: Settings -->
-    <template x-if="page === 'settings'">
-      <div x-data="settingsPage">
-        <div class="page-header"><h2>Settings</h2></div>
-        <div class="page-body" x-init="loadSettings()">
-          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading settings...</span></div>
+    <!-- Page: Brain -->
+    <template x-if="page === 'brain'">
+      <div x-data="brainPage">
+        <div class="page-header"><h2>大脑</h2></div>
+        <div class="page-body" x-init="loadBrain()">
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
             <p x-text="loadError"></p>
-            <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
+            <button class="btn btn-ghost btn-sm" @click="loadBrain()">重试</button>
           </div>
           <div x-show="!loading && !loadError">
-          <div class="tabs" role="tablist">
-            <div class="tab" role="tab" :class="{ active: tab === 'config' }" @click="tab = 'config'; stopQrPoll(); if (!configSchema) loadConfigSchema()">Config</div>
-            <div class="tabs-separator"></div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'; stopQrPoll()">Tools</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'security' }" @click="tab = 'security'; stopQrPoll(); if (!securityData && !secLoading) loadSecurity()">Security</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'; stopQrPoll()">System</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'channels' }" @click="tab = 'channels'; if (!channelsData && !channelsLoading) loadChannelsFull()">Channels</div>
-          </div>
 
-          <!-- System Info tab -->
-          <div x-show="tab === 'info'">
-            <div class="stats-row">
-              <div class="stat-card"><div class="stat-value" x-text="sysInfo.version || '-'"></div><div class="stat-label">Version</div></div>
-              <div class="stat-card"><div class="stat-value" x-text="sysInfo.platform || '-'"></div><div class="stat-label">Platform</div></div>
-              <div class="stat-card"><div class="stat-value" x-text="formatUptime(sysInfo.uptime_seconds)"></div><div class="stat-label">Uptime</div></div>
-              <div class="stat-card"><div class="stat-value" x-text="sysInfo.agent_count || 0"></div><div class="stat-label">Agents</div></div>
-            </div>
-            <div class="card mt-4" x-show="sysInfo.default_provider">
-              <div class="card-header">Default Model</div>
-              <div class="card-meta" x-text="sysInfo.default_provider + ' : ' + sysInfo.default_model"></div>
-            </div>
-          </div>
-
-          <!-- Config tab -->
-          <div x-show="tab === 'config'">
-            <div class="info-card">
-              <h4>Runtime Configuration</h4>
-              <p>View and edit the active configuration. Changes are applied immediately. For advanced edits, modify <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px">config.toml</code> in your OpenCarrier data directory.</p>
-            </div>
-
-            <!-- Dynamic config form (when schema is available) -->
-            <template x-if="configSchema">
-              <div>
-                <template x-for="(fields, section) in configSchema" :key="section">
-                  <div class="card mb-4">
-                    <div class="card-header" style="text-transform:capitalize" x-text="section.replace(/_/g, ' ')"></div>
-                    <div class="detail-grid" style="margin-top:12px">
-                      <template x-for="field in fields" :key="section + '.' + field.name">
-                        <div class="detail-row" style="align-items:center">
-                          <span class="detail-label" x-text="field.label || field.name"></span>
-                          <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
-                            <template x-if="field.type === 'boolean'">
-                              <label class="form-checkbox" style="margin:0">
-                                <input type="checkbox"
-                                  :checked="configValues[section] && configValues[section][field.name]"
-                                  @change="configValues[section] = configValues[section] || {}; configValues[section][field.name] = $event.target.checked; markConfigDirty(section, field.name)">
-                              </label>
-                            </template>
-                            <template x-if="field.type === 'number'">
-                              <input class="form-input" type="number" style="width:120px"
-                                :value="configValues[section] && configValues[section][field.name]"
-                                @input="configValues[section] = configValues[section] || {}; configValues[section][field.name] = Number($event.target.value); markConfigDirty(section, field.name)">
-                            </template>
-                            <template x-if="field.type === 'select' && field.options">
-                              <select class="form-select" style="width:180px"
-                                :value="configValues[section] && configValues[section][field.name]"
-                                @change="configValues[section] = configValues[section] || {}; configValues[section][field.name] = $event.target.value; markConfigDirty(section, field.name)">
-                                <template x-for="opt in field.options" :key="opt">
-                                  <option :value="opt" x-text="opt" :selected="configValues[section] && configValues[section][field.name] === opt"></option>
-                                </template>
-                              </select>
-                            </template>
-                            <template x-if="!field.type || field.type === 'string'">
-                              <input class="form-input" type="text" style="flex:1"
-                                :value="configValues[section] && configValues[section][field.name]"
-                                @input="configValues[section] = configValues[section] || {}; configValues[section][field.name] = $event.target.value; markConfigDirty(section, field.name)">
-                            </template>
-                            <button class="btn btn-primary btn-sm" x-show="isConfigDirty(section, field.name)"
-                              @click="saveConfigField(section, field.name, configValues[section] && configValues[section][field.name])"
-                              :disabled="configSaving[section + '.' + field.name]">
-                              <span x-show="!configSaving[section + '.' + field.name]">Save</span>
-                              <span x-show="configSaving[section + '.' + field.name]" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
-                            </button>
-                          </div>
-                          <div class="text-xs text-dim" x-show="field.description" x-text="field.description" style="grid-column:1/-1;padding-left:2px"></div>
-                        </div>
-                      </template>
-                    </div>
-                  </div>
-                </template>
-              </div>
-            </template>
-
-            <!-- LLM Providers -->
-            <div class="card mt-4" style="border-left:3px solid var(--accent-light)">
+          <!-- LLM Providers -->
+            <div class="card" style="border-left:3px solid var(--accent-light)">
               <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
-                <span>LLM Providers</span>
+                <span>LLM 提供商</span>
                 <span class="badge badge-secondary" style="font-size:10px" x-show="providerKeySaving" x-text="Object.keys(providerKeySaving).filter(k=>providerKeySaving[k]).length + ' saving'"></span>
               </div>
               <div class="card-body" style="padding-top:8px">
@@ -1475,7 +1246,7 @@
                           <template x-if="p.auth_type !== 'jwt'">
                             <div style="display:flex;align-items:center;gap:6px">
                               <input class="form-input" type="password" style="flex:1;font-size:12px" :placeholder="p.has_key ? '******' : 'Enter API key...'" x-model="providerKeyInputs[p.name]" spellcheck="false">
-                              <button class="btn btn-primary btn-sm" :disabled="providerKeySaving[p.name] || !providerKeyInputs[p.name]" @click="saveProviderKey(p.name)">Save</button>
+                              <button class="btn btn-primary btn-sm" :disabled="providerKeySaving[p.name] || !providerKeyInputs[p.name]" @click="saveProviderKey(p.name)">保存</button>
                             </div>
                           </template>
                           <!-- jwt type: multi-param inputs -->
@@ -1488,7 +1259,7 @@
                                 </div>
                               </template>
                               <div style="display:flex;justify-content:flex-end;margin-top:4px">
-                                <button class="btn btn-primary btn-sm" :disabled="providerKeySaving[p.name]" @click="saveProviderKeyJwt(p.name)">Save</button>
+                                <button class="btn btn-primary btn-sm" :disabled="providerKeySaving[p.name]" @click="saveProviderKeyJwt(p.name)">保存</button>
                               </div>
                             </div>
                           </template>
@@ -1508,6 +1279,23 @@
               </div>
             </div>
 
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- Page: Security -->
+    <template x-if="page === 'security'">
+      <div x-data="securityPage">
+        <div class="page-header"><h2>安全</h2></div>
+        <div class="page-body" x-init="loadSecurity()">
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
+          <div x-show="!loading && loadError" class="error-state">
+            <span class="error-icon">!</span>
+            <p x-text="loadError"></p>
+            <button class="btn btn-ghost btn-sm" @click="loadSecurity()">重试</button>
+          </div>
+          <div x-show="!loading && !loadError">
             <!-- Raw JSON fallback -->
             <div class="card mt-4" style="border-left:3px solid var(--border)">
               <div class="card-header" style="font-size:12px;cursor:pointer" @click="$el.nextElementSibling.style.display = $el.nextElementSibling.style.display === 'none' ? 'block' : 'none'">Raw Config JSON (click to toggle)</div>
@@ -1516,7 +1304,7 @@
           </div>
 
           <!-- Security tab -->
-          <div x-show="tab === 'security'">
+          <div >
             <div x-show="secLoading" class="loading-state"><div class="spinner"></div><span>Loading security data...</span></div>
             <div x-show="!secLoading">
             <div class="security-hero">
@@ -1616,242 +1404,17 @@
                 <code style="color:var(--accent-light)">sha2</code> SHA-256 &middot;
                 <code style="color:var(--accent-light)">hmac</code> HMAC-SHA256 &middot;
                 <code style="color:var(--accent-light)">subtle</code> constant-time &middot;
-                <code style="color:var(--accent-light)">ed25519-dalek</code> signing &middot;
-                <code style="color:var(--accent-light)">zeroize</code> secret wiping &middot;
-                <code style="color:var(--accent-light)">rand</code> randomness &middot;
-                <code style="color:var(--accent-light)">governor</code> rate limiting
-              </div>
-            </div>
-            </div>
+
           </div>
+        </div>
+      </div>
+    </template>
 
-          <!-- Channels tab (unified) -->
-          <div x-show="tab === 'channels'">
-            <div class="info-card">
-              <h4>Channel Management</h4>
-              <p>Manage all messaging channels: WeChat personal account, WeChat Work (WeCom), and Feishu/Lark bots.</p>
-            </div>
-
-            <!-- WeChat iLink section -->
-            <div class="card mt-4" style="border-left:3px solid #07c160">
-              <div class="card-header">WeChat iLink</div>
-              <div class="card-body" style="padding-top:8px">
-                <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Bind your WeChat personal account via QR scan. Each binding is valid for 24 hours.</p>
-                <div style="display:flex;gap:8px;margin-bottom:12px">
-                  <button class="btn btn-sm" :disabled="wechatPolling" @click="startQrLogin()">
-                    <span x-show="!wechatPolling">Get QR Code</span>
-                    <span x-show="wechatPolling">Polling...</span>
-                  </button>
-                  <button class="btn btn-sm btn-ghost" @click="loadChannels()">Refresh</button>
-                </div>
-                <div x-show="wechatQrCode" style="text-align:center;padding:12px">
-                  <img :src="wechatQrCode" style="width:180px;height:180px;border-radius:8px;border:1px solid var(--border)">
-                  <p style="font-size:12px;color:var(--text-dim);margin-top:6px">
-                    Scan with WeChat &middot; <span x-text="wechatQrStatus || 'Waiting...'"></span>
-                  </p>
-                  <p x-show="wechatQrStatus === 'expired'" style="font-size:12px;color:var(--error)">QR code expired. Click "Get QR Code" again.</p>
-                </div>
-                <div x-show="!channelsData || (channelsData.weixin && channelsData.weixin.tenants.length === 0) && !wechatQrCode" style="font-size:12px;color:var(--text-dim);padding:4px 0">No WeChat accounts bound yet.</div>
-                <table x-show="channelsData && channelsData.weixin && channelsData.weixin.tenants.length > 0" style="width:100%;font-size:12px;border-collapse:collapse">
-                  <thead>
-                    <tr style="border-bottom:1px solid var(--border)">
-                      <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
-                      <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Bot ID</th>
-                      <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Status</th>
-                      <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Expires In</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="item in (channelsData && channelsData.weixin ? channelsData.weixin.tenants : [])" :key="item.name">
-                      <tr style="border-bottom:1px solid var(--border)">
-                        <td style="padding:6px 8px" x-text="item.name"></td>
-                        <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.ilink_bot_id || '-'"></td>
-                        <td style="padding:6px 8px">
-                          <span class="badge" :style="'background:' + (item.expired ? 'var(--error)' : '#07c160') + ';color:#fff;font-size:10px'" x-text="item.expired ? 'Expired' : 'Active'"></span>
-                        </td>
-                        <td style="padding:6px 8px" x-text="item.expired ? 'Re-scan needed' : formatWechatExpiry(item.remaining_secs)"></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <!-- WeCom section -->
-            <div class="card mt-4" style="border-left:3px solid #2b7ce9">
-              <div class="card-header">WeChat Work (WeCom)</div>
-              <div class="card-body" style="padding-top:8px">
-                <div x-show="channelsData && channelsData.wecom && channelsData.wecom.tenants.length > 0" style="margin-bottom:12px">
-                  <table style="width:100%;font-size:12px;border-collapse:collapse">
-                    <thead>
-                      <tr style="border-bottom:1px solid var(--border)">
-                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
-                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Mode</th>
-                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Corp ID</th>
-                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Bound Agent</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <template x-for="item in (channelsData && channelsData.wecom ? channelsData.wecom.tenants : [])" :key="item.name">
-                        <tr style="border-bottom:1px solid var(--border)">
-                          <td style="padding:6px 8px" x-text="item.name"></td>
-                          <td style="padding:6px 8px"><span class="badge" style="background:#2b7ce9;color:#fff;font-size:10px" x-text="item.mode"></span></td>
-                          <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.corp_id || '-'"></td>
-                          <td style="padding:6px 8px" x-text="item.bind_agent || '-'"></td>
-                        </tr>
-                      </template>
-                    </tbody>
-                  </table>
-                </div>
-                <div x-show="!channelsData || !channelsData.wecom || channelsData.wecom.tenants.length === 0" style="font-size:12px;color:var(--text-dim);margin-bottom:12px">No WeCom tenants configured yet.</div>
-                <details style="margin-top:8px">
-                  <summary style="font-size:12px;cursor:pointer;color:var(--accent-light)">Add WeCom Tenant</summary>
-                  <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
-                    <div><label style="color:var(--text-dim)">Name *</label><input class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.name" placeholder="default"></div>
-                    <div><label style="color:var(--text-dim)">Mode</label><select class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.mode"><option value="smartbot">SmartBot</option><option value="app">App</option><option value="kf">KF</option></select></div>
-                    <div><label style="color:var(--text-dim)">Corp ID *</label><input class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.corp_id" placeholder="ww..."></div>
-                    <div><label style="color:var(--text-dim)">Bot ID</label><input class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.bot_id" placeholder="bot_id"></div>
-                    <div><label style="color:var(--text-dim)">Secret *</label><input class="form-input" type="password" style="width:100%;font-size:12px" x-model="wecomForm.secret" placeholder="secret"></div>
-                    <div><label style="color:var(--text-dim)">Webhook Port</label><input class="form-input" type="number" style="width:100%;font-size:12px" x-model.number="wecomForm.webhook_port" placeholder="8454"></div>
-                    <div style="grid-column:span 2"><label style="color:var(--text-dim)">Encoding AES Key</label><input class="form-input" style="width:100%;font-size:12px" x-model="wecomForm.encoding_aes_key" placeholder="optional"></div>
-                    <div style="grid-column:span 2"><button class="btn btn-sm" :disabled="wecomSaving" @click="wecomAddTenant()"><span x-show="!wecomSaving">Add Tenant</span><span x-show="wecomSaving">Saving...</span></button></div>
-                  </div>
-                </details>
-              </div>
-            </div>
-
-            <!-- Feishu/Lark section -->
-            <div class="card mt-4" style="border-left:3px solid #3370ff">
-              <div class="card-header">Feishu / Lark</div>
-              <div class="card-body" style="padding-top:8px">
-                <div x-show="channelsData && channelsData.feishu && channelsData.feishu.tenants.length > 0" style="margin-bottom:12px">
-                  <table style="width:100%;font-size:12px;border-collapse:collapse">
-                    <thead>
-                      <tr style="border-bottom:1px solid var(--border)">
-                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Name</th>
-                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">App ID</th>
-                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Brand</th>
-                        <th style="text-align:left;padding:6px 8px;color:var(--text-dim)">Bound Agent</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <template x-for="item in (channelsData && channelsData.feishu ? channelsData.feishu.tenants : [])" :key="item.name">
-                        <tr style="border-bottom:1px solid var(--border)">
-                          <td style="padding:6px 8px" x-text="item.name"></td>
-                          <td style="padding:6px 8px;font-family:monospace;font-size:11px" x-text="item.app_id || '-'"></td>
-                          <td style="padding:6px 8px"><span class="badge" style="background:#3370ff;color:#fff;font-size:10px" x-text="item.brand"></span></td>
-                          <td style="padding:6px 8px" x-text="item.bind_agent || '-'"></td>
-                        </tr>
-                      </template>
-                    </tbody>
-                  </table>
-                </div>
-                <div x-show="!channelsData || !channelsData.feishu || channelsData.feishu.tenants.length === 0" style="font-size:12px;color:var(--text-dim);margin-bottom:12px">No Feishu tenants configured yet.</div>
-                <details style="margin-top:8px">
-                  <summary style="font-size:12px;cursor:pointer;color:var(--accent-light)">Add Feishu Tenant</summary>
-                  <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
-                    <div><label style="color:var(--text-dim)">Name *</label><input class="form-input" style="width:100%;font-size:12px" x-model="feishuForm.name" placeholder="default"></div>
-                    <div><label style="color:var(--text-dim)">Brand</label><select class="form-input" style="width:100%;font-size:12px" x-model="feishuForm.brand"><option value="feishu">Feishu (China)</option><option value="lark">Lark (International)</option></select></div>
-                    <div><label style="color:var(--text-dim)">App ID *</label><input class="form-input" style="width:100%;font-size:12px" x-model="feishuForm.app_id" placeholder="cli_..."></div>
-                    <div><label style="color:var(--text-dim)">App Secret *</label><input class="form-input" type="password" style="width:100%;font-size:12px" x-model="feishuForm.app_secret" placeholder="secret"></div>
-                    <div style="grid-column:span 2"><button class="btn btn-sm" :disabled="feishuSaving" @click="feishuAddTenant()"><span x-show="!feishuSaving">Add Tenant</span><span x-show="feishuSaving">Saving...</span></button></div>
-                  </div>
-                </details>
-              </div>
-            </div>
-
-            <!-- Agent Bindings section -->
-            <div class="card mt-4" style="border-left:3px solid var(--accent)">
-              <div class="card-header">Agent Bindings</div>
-              <div class="card-body" style="padding-top:8px">
-                <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Bind agents to messaging channels. Each binding routes matching messages to the specified agent.</p>
-
-                <div style="display:flex;gap:8px;margin-bottom:12px">
-                  <button class="btn btn-sm" @click="showBindForm = !showBindForm; if (showBindForm && bindingsTenants.length === 0 && $store.app.isAdmin()) loadBindingsTenants()">
-                    <span x-show="!showBindForm">+ Add Binding</span>
-                    <span x-show="showBindForm">Cancel</span>
-                  </button>
-                  <button class="btn btn-sm btn-ghost" :disabled="bindingsLoading" @click="loadBindings()">Refresh</button>
-                </div>
-
-                <!-- Add binding form -->
-                <div x-show="showBindForm" style="margin-bottom:14px;padding:12px;background:var(--bg);border-radius:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
-                  <div>
-                    <label style="color:var(--text-dim)">Agent *</label>
-                    <select class="form-input" style="width:100%;font-size:12px" x-model="bindForm.agent">
-                      <option value="">Select agent...</option>
-                      <template x-for="a in $store.app.agents" :key="a.id">
-                        <option :value="a.id" x-text="a.name + (a.tenant_id ? ' [' + a.tenant_id.slice(0,8) + ']' : '')"></option>
-                      </template>
-                    </select>
-                  </div>
-                  <div>
-                    <label style="color:var(--text-dim)">Channel *</label>
-                    <input class="form-input" style="width:100%;font-size:12px" x-model="bindForm.channel" placeholder="e.g. wecom, weixin, feishu">
-                  </div>
-                  <div>
-                    <label style="color:var(--text-dim)">Account ID</label>
-                    <input class="form-input" style="width:100%;font-size:12px" x-model="bindForm.account_id" placeholder="optional">
-                  </div>
-                  <div>
-                    <label style="color:var(--text-dim)">Peer ID</label>
-                    <input class="form-input" style="width:100%;font-size:12px" x-model="bindForm.peer_id" placeholder="optional">
-                  </div>
-                  <div>
-                    <label style="color:var(--text-dim)">Guild ID</label>
-                    <input class="form-input" style="width:100%;font-size:12px" x-model="bindForm.guild_id" placeholder="optional">
-                  </div>
-                  <div x-show="$store.app.isAdmin()">
-                    <label style="color:var(--text-dim)">Tenant</label>
-                    <select class="form-input" style="width:100%;font-size:12px" x-model="bindForm.tenant_id">
-                      <option value="">None (global)</option>
-                      <template x-for="t in bindingsTenants" :key="t.id">
-                        <option :value="t.id" x-text="t.name"></option>
-                      </template>
-                    </select>
-                  </div>
-                  <div style="grid-column:span 2">
-                    <button class="btn btn-sm" :disabled="bindSaving" @click="addBinding()">
-                      <span x-show="!bindSaving">Save Binding</span>
-                      <span x-show="bindSaving">Saving...</span>
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Bindings list -->
-                <div x-show="bindings.length > 0" style="margin-bottom:12px">
-                  <table style="width:100%;font-size:12px;border-collapse:collapse">
-                    <thead>
-                      <tr style="border-bottom:1px solid var(--border)">
-                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">#</th>
-                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">Agent</th>
-                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">Channel</th>
-                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">Match Rule</th>
-                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)">Tenant</th>
-                        <th style="text-align:left;padding:4px 6px;color:var(--text-dim)"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <template x-for="(b, i) in bindings" :key="i">
-                        <tr style="border-bottom:1px solid var(--border)">
-                          <td style="padding:4px 6px;font-family:monospace;font-size:11px" x-text="i"></td>
-                          <td style="padding:4px 6px;font-family:monospace;font-size:11px" x-text="b.agent ? b.agent.slice(0,8)+'...' : '-'"></td>
-                          <td style="padding:4px 6px"><span class="badge" style="background:var(--accent);color:#fff;font-size:10px" x-text="(b.match_rule && b.match_rule.channel) || '-'"></span></td>
-                          <td style="padding:4px 6px;font-size:11px">
-                            <span x-show="b.match_rule && b.match_rule.account_id" style="color:var(--text-dim)">acct:</span>
-                            <span x-show="b.match_rule && b.match_rule.account_id" x-text="b.match_rule.account_id.slice(0,12)+'...'" style="font-family:monospace"></span>
-                            <span x-show="b.match_rule && b.match_rule.peer_id" style="color:var(--text-dim)"> peer:</span>
-                            <span x-show="b.match_rule && b.match_rule.peer_id" x-text="b.match_rule.peer_id.slice(0,12)+'...'" style="font-family:monospace"></span>
-                            <span x-show="b.match_rule && b.match_rule.guild_id" style="color:var(--text-dim)"> guild:</span>
-                            <span x-show="b.match_rule && b.match_rule.guild_id" x-text="b.match_rule.guild_id.slice(0,12)+'...'" style="font-family:monospace"></span>
-                            <span x-show="!b.match_rule || (!b.match_rule.account_id && !b.match_rule.peer_id && !b.match_rule.guild_id)" style="color:var(--text-dim)">catch-all</span>
-                          </td>
-                          <td style="padding:4px 6px;font-size:11px" x-text="b.tenant_id ? b.tenant_id.slice(0,8)+'...' : '-'"></td>
-                          <td style="padding:4px 6px"><button class="btn btn-sm btn-ghost" style="color:var(--error);font-size:11px" @click="removeBinding(i)">Delete</button></td>
-                        </tr>
-                      </template>
-                    </tbody>
-                  </table>
+    <!-- Page: Team -->
+    <template x-if="page === 'team'">
+      <div x-data="tenantsPage">
+        <div class="page-header"><h2>团队</h2></div>
+        <div class="page-body" x-init="loadTenants()">
                 </div>
                 <div x-show="!bindingsLoading && bindings.length === 0" style="font-size:12px;color:var(--text-dim);padding:4px 0">No agent bindings configured yet.</div>
                 <div x-show="bindingsLoading" style="font-size:12px;color:var(--text-dim);padding:4px 0">Loading bindings...</div>
@@ -1859,8 +1422,71 @@
             </div>
           </div>
 
+          <!-- Tenants tab -->
+          <div >
+            <div class="info-card" style="display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <h4>租户管理</h4>
+                <p style="font-size:12px;color:var(--text-dim)">创建租户，为用户提供独立的工作空间。</p>
+              </div>
+              <button class="btn btn-primary btn-sm" @click="showTenantModal = true">
+                <span>+ 添加租户</span>
+              </button>
+            </div>
+            <div x-show="tenantsList.length === 0 && tenantsLoaded" class="empty-state" style="margin-top:16px">
+              <p style="color:var(--text-dim)">暂无租户</p>
+            </div>
+            <div x-show="tenantsList.length > 0" class="card" style="margin-top:12px">
+              <table style="width:100%;font-size:12px;border-collapse:collapse">
+                <thead>
+                  <tr style="border-bottom:1px solid var(--border)">
+                    <th style="text-align:left;padding:6px 4px;font-weight:600">名称</th>
+                    <th style="text-align:left;padding:6px 4px;font-weight:600">角色</th>
+                    <th style="text-align:left;padding:6px 4px;font-weight:600">状态</th>
+                    <th style="text-align:left;padding:6px 4px;font-weight:600">创建时间</th>
+                    <th style="text-align:right;padding:6px 4px;font-weight:600;width:100px">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="t in tenantsList" :key="t.id">
+                    <tr style="border-bottom:1px solid var(--border-light)">
+                      <td style="padding:8px 4px">
+                        <div style="font-weight:600" x-text="t.name"></div>
+                        <div style="font-size:10px;color:var(--text-dim);font-family:var(--font-mono)" x-text="t.id.substring(0,12)+'...'"></div>
+                      </td>
+                      <td style="padding:8px 4px">
+                        <span class="badge badge-secondary" style="font-size:10px;text-transform:capitalize" x-text="t.role || 'tenant'"></span>
+                      </td>
+                      <td style="padding:8px 4px">
+                        <span class="badge" :class="t.enabled !== false ? 'badge-running' : 'badge-crashed'" style="font-size:10px" x-text="t.enabled !== false ? '活跃' : '禁用'"></span>
+                      </td>
+                      <td style="padding:8px 4px;font-size:11px;color:var(--text-dim)" x-text="t.created_at ? new Date(t.created_at).toLocaleDateString() : '-'"></td>
+                      <td style="padding:8px 4px;text-align:right">
+                        <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--error)" @click="deleteTenantInSettings(t.id, t.name)">删除</button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <!-- Create tenant modal -->
+            <div class="modal-overlay" x-show="showTenantModal" x-transition @click.self="showTenantModal = false" @keydown.escape.window="showTenantModal = false">
+              <div class="modal" style="max-width:420px">
+                <div class="modal-header">
+                  <h3>创建租户</h3>
+                  <button class="modal-close" @click="showTenantModal = false">&times;</button>
+                </div>
+                <div class="form-group">
+                  <label>名称</label>
+                  <input class="form-input" x-model="newTenantName" placeholder="租户名称" autocomplete="off">
+                </div>
+                <div class="form-group">
+                  <label>密码</label>
+                  <input class="form-input" type="password" x-model="newTenantPass" placeholder="安全密码..." autocomplete="off">
+                </div>
+                <div class="flex gap-2 justify-end" style="margin-top:16px">
+                  <button class="btn btn-ghost btn-sm" @click="showTenantModal = false">取消</button>
 
-          </div>
         </div>
       </div>
     </template>
@@ -1869,12 +1495,12 @@
     <template x-if="page === 'sessions'">
       <div x-data="sessionsPage">
         <div class="page-header">
-          <h2>Sessions</h2>
+          <h2>会话</h2>
           <input class="form-input" style="width:200px" placeholder="Filter by agent..." x-model="searchFilter" x-show="tab === 'sessions'">
         </div>
         <div class="tabs">
-          <div class="tab" :class="{ active: tab === 'sessions' }" @click="tab = 'sessions'">Sessions</div>
-          <div class="tab" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">Memory</div>
+          <div class="tab" :class="{ active: tab === 'sessions' }" @click="tab = 'sessions'">会话</div>
+          <div class="tab" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">记忆</div>
         </div>
         <div class="page-body" x-init="loadSessions()">
           <!-- Sessions tab -->
@@ -1883,18 +1509,18 @@
             <div x-show="!loading && loadError" class="error-state">
               <span class="error-icon">!</span>
               <p x-text="loadError"></p>
-              <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
+              <button class="btn btn-ghost btn-sm" @click="loadData()">重试</button>
             </div>
             <div x-show="!loading && !loadError">
             <div class="card mb-4" style="border-left:3px solid var(--accent)">
-              <div class="font-bold" style="font-size:13px;margin-bottom:4px">Conversation Sessions</div>
+              <div class="font-bold" style="font-size:13px;margin-bottom:4px">对话会话</div>
               <div class="text-sm text-dim" style="line-height:1.6">
                 Each conversation with an agent creates a session. Sessions store the full message history so you can resume conversations later, or review past interactions.
               </div>
             </div>
             <div class="table-wrap" x-show="filteredSessions.length">
               <table>
-                <thead><tr><th>Session</th><th>Agent</th><th>Messages</th><th>Created</th><th>Actions</th></tr></thead>
+                <thead><tr><th>会话</th><th>分身</th><th>消息</th><th>创建时间</th><th>操作</th></tr></thead>
                 <tbody>
                   <template x-for="s in filteredSessions" :key="s.session_id">
                     <tr>
@@ -1903,8 +1529,8 @@
                       <td x-text="s.message_count"></td>
                       <td class="text-xs" x-text="s.created_at ? new Date(s.created_at).toLocaleString() : '-'"></td>
                       <td>
-                        <button class="btn btn-primary btn-sm" @click="openInChat(s)">Chat</button>
-                        <button class="btn btn-danger btn-sm" @click="deleteSession(s.session_id)">Delete</button>
+                        <button class="btn btn-primary btn-sm" @click="openInChat(s)">对话</button>
+                        <button class="btn btn-danger btn-sm" @click="deleteSession(s.session_id)">删除</button>
                       </td>
                     </tr>
                   </template>
@@ -1916,10 +1542,10 @@
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
               </div>
               <h3>No sessions yet</h3>
-              <p>Sessions are created when you chat with agents. Start a conversation to see session history here.</p>
+              <p>会话在与分身对话时自动创建。开始对话后即可在此查看历史。</p>
               <button class="btn btn-primary" @click="location.hash='agents'">Start Chatting</button>
             </div>
-            <div class="empty-state" x-show="!filteredSessions.length && searchFilter"><p>No sessions match your filter.</p></div>
+            <div class="empty-state" x-show="!filteredSessions.length && searchFilter"><p>没有匹配的会话。</p></div>
             </div>
           </div>
 
@@ -1941,7 +1567,7 @@
             <div x-show="!memLoading && memLoadError" class="error-state">
               <span class="error-icon">!</span>
               <p x-text="memLoadError"></p>
-              <button class="btn btn-ghost btn-sm" @click="loadKv()">Retry</button>
+              <button class="btn btn-ghost btn-sm" @click="loadKv()">重试</button>
             </div>
             <div x-show="memAgentId && !memLoading && !memLoadError">
               <div class="flex justify-between items-center mb-4">
@@ -1963,16 +1589,16 @@
                             <div>
                               <textarea class="form-textarea" x-model="editingValue" style="font-size:11px;min-height:60px;font-family:var(--font-mono)"></textarea>
                               <div class="flex gap-2 mt-2">
-                                <button class="btn btn-primary btn-sm" @click="saveEdit()">Save</button>
-                                <button class="btn btn-ghost btn-sm" @click="cancelEdit()">Cancel</button>
+                                <button class="btn btn-primary btn-sm" @click="saveEdit()">保存</button>
+                                <button class="btn btn-ghost btn-sm" @click="cancelEdit()">取消</button>
                               </div>
                             </div>
                           </template>
                         </td>
                         <td>
                           <div class="flex gap-2">
-                            <button class="btn btn-ghost btn-sm" @click="startEdit(kv)" x-show="editingKey !== kv.key">Edit</button>
-                            <button class="btn btn-danger btn-sm" @click="deleteKey(kv.key)" x-show="editingKey !== kv.key">Delete</button>
+                            <button class="btn btn-ghost btn-sm" @click="startEdit(kv)" x-show="editingKey !== kv.key">编辑</button>
+                            <button class="btn btn-danger btn-sm" @click="deleteKey(kv.key)" x-show="editingKey !== kv.key">删除</button>
                           </div>
                         </td>
                       </tr>
@@ -1991,7 +1617,7 @@
                     <div class="modal-header"><h3>Add Key</h3><button class="modal-close" @click="showAdd = false">&times;</button></div>
                     <div class="form-group"><label>Key</label><input class="form-input" x-model="newKey" placeholder="my_key"></div>
                     <div class="form-group"><label>Value (JSON)</label><textarea class="form-textarea" x-model="newValue" placeholder='"hello"'></textarea></div>
-                    <button class="btn btn-primary btn-block" @click="addKey()">Save</button>
+                    <button class="btn btn-primary btn-block" @click="addKey()">保存</button>
                   </div>
                 </div>
               </template>
@@ -2009,7 +1635,7 @@
     <template x-if="page === 'logs'">
       <div x-data="logsPage">
         <div class="page-header">
-          <h2>Logs</h2>
+          <h2>日志</h2>
           <div class="flex gap-2 items-center" x-show="tab === 'live'">
             <!-- Connection status indicator -->
             <span class="live-indicator" :class="connectionClass">
@@ -2045,7 +1671,7 @@
             <div x-show="!loading && loadError" class="error-state">
               <span class="error-icon">!</span>
               <p x-text="loadError"></p>
-              <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
+              <button class="btn btn-ghost btn-sm" @click="loadData()">重试</button>
             </div>
             <div x-show="!loading && !loadError">
             <div class="card" style="font-family:monospace;max-height:70vh;overflow-y:auto" id="log-container" @mouseenter="hovering = true" @mouseleave="hovering = false">
@@ -2071,7 +1697,7 @@
             <div x-show="!auditLoading && auditLoadError" class="error-state">
               <span class="error-icon">!</span>
               <p x-text="auditLoadError"></p>
-              <button class="btn btn-ghost btn-sm" @click="loadAudit()">Retry</button>
+              <button class="btn btn-ghost btn-sm" @click="loadAudit()">重试</button>
             </div>
             <div x-show="!auditLoading && !auditLoadError">
             <div class="card mb-4" style="border-left:3px solid var(--accent)">
@@ -2098,7 +1724,7 @@
             </div>
             <div class="table-wrap" x-show="filteredAuditEntries.length">
               <table>
-                <thead><tr><th>#</th><th>Timestamp</th><th>Agent</th><th>Action</th><th>Detail</th><th>Outcome</th></tr></thead>
+                <thead><tr><th>#</th><th>时间</th><th>分身</th><th>操作</th><th>详情</th><th>结果</th></tr></thead>
                 <tbody>
                   <template x-for="e in filteredAuditEntries" :key="e.seq">
                     <tr>
@@ -2127,7 +1753,7 @@
     <template x-if="page === 'comms'">
       <div x-data="commsPage" x-init="loadData()" @page-leave.window="stopSSE()">
         <div class="page-header">
-          <h2>Agent Comms</h2>
+          <h2>通讯</h2>
           <div class="flex items-center gap-2">
             <button class="btn btn-primary btn-sm" @click="openSendModal()">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
@@ -2150,9 +1776,9 @@
           </div>
           <!-- Error -->
           <div x-show="!loading && loadError" class="error-state" style="animation:fadeIn 0.3s">
-            <h3 style="color:var(--error)">Connection Error</h3>
+            <h3 style="color:var(--error)">连接错误</h3>
             <p class="text-xs text-dim" x-text="loadError"></p>
-            <button class="btn btn-primary btn-sm" @click="loadData()" style="margin-top:8px">Retry</button>
+            <button class="btn btn-primary btn-sm" @click="loadData()" style="margin-top:8px">重试</button>
           </div>
           <!-- Content -->
           <div x-show="!loading && !loadError" style="animation:fadeIn 0.3s">
@@ -2247,7 +1873,7 @@
                   <textarea x-model="sendMsg" class="input" rows="3" placeholder="Type a message..." style="width:100%;resize:vertical"></textarea>
                 </div>
                 <div class="flex gap-2" style="justify-content:flex-end">
-                  <button class="btn btn-ghost btn-sm" @click="showSendModal=false">Cancel</button>
+                  <button class="btn btn-ghost btn-sm" @click="showSendModal=false">取消</button>
                   <button class="btn btn-primary btn-sm" @click="submitSend()" :disabled="sendLoading || !sendFrom || !sendTo || !sendMsg.trim()">
                     <span x-show="sendLoading">Sending...</span>
                     <span x-show="!sendLoading">Send</span>
@@ -2280,7 +1906,7 @@
                   </select>
                 </div>
                 <div class="flex gap-2" style="justify-content:flex-end">
-                  <button class="btn btn-ghost btn-sm" @click="showTaskModal=false">Cancel</button>
+                  <button class="btn btn-ghost btn-sm" @click="showTaskModal=false">取消</button>
                   <button class="btn btn-primary btn-sm" @click="submitTask()" :disabled="taskLoading || !taskTitle.trim()">
                     <span x-show="taskLoading">Posting...</span>
                     <span x-show="!taskLoading">Post Task</span>
@@ -2298,7 +1924,7 @@
     <template x-if="page === 'mcp'">
       <div x-data="mcpPage" x-init="loadData()">
         <div class="page-header">
-          <h2>MCP & Tools</h2>
+          <h2>工具</h2>
           <div class="flex items-center gap-2">
             <button class="btn btn-ghost btn-sm" @click="loadData()" style="padding:4px 8px" title="Refresh">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
@@ -2308,7 +1934,7 @@
 
         <!-- Tabs -->
         <div class="tabs" style="margin-bottom:1rem">
-          <button class="tab" :class="{ active: activeTab === 'servers' }" @click="activeTab = 'servers'">MCP Servers</button>
+          <button class="tab" :class="{ active: activeTab === 'servers' }" @click="activeTab = 'servers'">MCP 服务器</button>
           <button class="tab" :class="{ active: activeTab === 'tools' }" @click="activeTab = 'tools'">All Tools</button>
         </div>
 
@@ -2430,122 +2056,6 @@
       </div>
     </template>
 
-    <!-- Page: Tenants -->
-    <template x-if="page === 'tenants'">
-      <div x-data="tenantsPage" x-init="loadTenants()">
-        <div class="page-header">
-          <h2>Tenants</h2>
-          <button class="btn btn-primary btn-sm" @click="showCreateModal = true" x-show="$store.app.isAdmin()">
-            <span>+ Add Tenant</span>
-          </button>
-        </div>
-        <div class="page-body">
-          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading tenants...</span></div>
-          <div x-show="!loading && loadError" class="error-state">
-            <span class="error-icon">!</span>
-            <p x-text="loadError"></p>
-            <button class="btn btn-ghost btn-sm" @click="loadTenants()">Retry</button>
-          </div>
-          <div x-show="!loading && !loadError">
-            <div x-show="tenants.length === 0" class="empty-state">
-              <h4>No Tenants</h4>
-              <p class="hint">Create a tenant to give a user their own isolated workspace.</p>
-              <button class="btn btn-primary btn-sm" @click="showCreateModal = true" style="margin-top:12px">Create Tenant</button>
-            </div>
-            <div x-show="tenants.length > 0" class="card">
-              <table style="width:100%;font-size:12px;border-collapse:collapse">
-                <thead>
-                  <tr style="border-bottom:1px solid var(--border)">
-                    <th style="text-align:left;padding:6px 4px;font-weight:600">Name</th>
-                    <th style="text-align:left;padding:6px 4px;font-weight:600">Role</th>
-                    <th style="text-align:left;padding:6px 4px;font-weight:600">Status</th>
-                    <th style="text-align:left;padding:6px 4px;font-weight:600">Created</th>
-                    <th style="text-align:right;padding:6px 4px;font-weight:600;width:100px">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <template x-for="t in tenants" :key="t.id">
-                    <tr style="border-bottom:1px solid var(--border-light)">
-                      <td style="padding:8px 4px">
-                        <div style="font-weight:600" x-text="t.name"></div>
-                        <div style="font-size:10px;color:var(--text-dim);font-family:var(--font-mono)" x-text="t.id.substring(0,12)+'...'"></div>
-                      </td>
-                      <td style="padding:8px 4px">
-                        <span class="badge badge-secondary" style="font-size:10px;text-transform:capitalize" x-text="t.role || 'tenant'"></span>
-                      </td>
-                      <td style="padding:8px 4px">
-                        <span class="badge" :class="t.enabled !== false ? 'badge-running' : 'badge-crashed'" style="font-size:10px" x-text="t.enabled !== false ? 'Active' : 'Disabled'"></span>
-                      </td>
-                      <td style="padding:8px 4px;font-size:11px;color:var(--text-dim)" x-text="formatDate(t.created_at)"></td>
-                      <td style="padding:8px 4px;text-align:right">
-                        <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px" @click="openEdit(t)" title="Edit">Edit</button>
-                        <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--error)" @click="deleteTenant(t.id, t.name)" title="Delete">Del</button>
-                      </td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <!-- Create modal -->
-        <div class="modal-overlay" x-show="showCreateModal" x-transition @click.self="showCreateModal = false" @keydown.escape.window="showCreateModal = false">
-          <div class="modal" style="max-width:420px">
-            <div class="modal-header">
-              <h3>Create Tenant</h3>
-              <button class="modal-close" @click="showCreateModal = false">&times;</button>
-            </div>
-            <div class="form-group">
-              <label>Name</label>
-              <input class="form-input" x-model="createForm.name" placeholder="tenant-name" autocomplete="off">
-            </div>
-            <div class="form-group">
-              <label>Password</label>
-              <input class="form-input" type="password" x-model="createForm.password" placeholder="Secure password..." autocomplete="off">
-            </div>
-            <div class="flex gap-2 justify-end" style="margin-top:16px">
-              <button class="btn btn-ghost btn-sm" @click="showCreateModal = false">Cancel</button>
-              <button class="btn btn-primary btn-sm" :disabled="saving || !createForm.name.trim() || !createForm.password.trim()" @click="createTenant()">
-                <span x-show="!saving">Create</span>
-                <span x-show="saving" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Edit modal -->
-        <div class="modal-overlay" x-show="showEditModal" x-transition @click.self="showEditModal = false" @keydown.escape.window="showEditModal = false">
-          <div class="modal" style="max-width:420px">
-            <div class="modal-header">
-              <h3>Edit Tenant</h3>
-              <button class="modal-close" @click="showEditModal = false">&times;</button>
-            </div>
-            <div class="form-group">
-              <label>Name</label>
-              <input class="form-input" x-model="editForm.name" placeholder="tenant-name" autocomplete="off">
-            </div>
-            <div class="form-group">
-              <label>New Password <span class="text-xs text-dim">(leave blank to keep current)</span></label>
-              <input class="form-input" type="password" x-model="editForm.password" placeholder="New password..." autocomplete="off">
-            </div>
-            <div class="form-group">
-              <label class="form-checkbox" style="margin:0">
-                <input type="checkbox" x-model="editForm.enabled">
-                <span>Enabled</span>
-              </label>
-            </div>
-            <div class="flex gap-2 justify-end" style="margin-top:16px">
-              <button class="btn btn-ghost btn-sm" @click="showEditModal = false">Cancel</button>
-              <button class="btn btn-primary btn-sm" :disabled="saving || !editForm.name.trim()" @click="updateTenant()">
-                <span x-show="!saving">Save</span>
-                <span x-show="saving" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </template>
 
   </main>
 </div>

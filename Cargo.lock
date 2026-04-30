@@ -2455,6 +2455,7 @@ dependencies = [
  "base64",
  "cbc",
  "dashmap",
+ "fs4",
  "futures-util",
  "hex",
  "opencarrier-plugin-sdk",
@@ -2468,7 +2469,9 @@ dependencies = [
  "sha2",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "toml 0.8.2",
  "tracing",
+ "urlencoding",
  "uuid",
 ]
 
@@ -5457,6 +5460,13 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "opencarrier-types",
+ "rmp-serde",
+ "rusqlite",
+ "serde",
+ "toml 0.8.2",
+]
 
 [[package]]
 name = "yoke"

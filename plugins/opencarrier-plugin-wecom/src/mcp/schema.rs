@@ -205,7 +205,7 @@ fn doc_tools() -> Vec<ToolSpec> {
                             "type": "object",
                             "properties": {
                                 "field_title": { "type": "string", "description": "字段标题" },
-                                "field_type": { "type": "integer", "description": "字段类型" }
+                                "field_type": { "type": "string", "description": "字段类型，如 FIELD_TYPE_TEXT、FIELD_TYPE_NUMBER、FIELD_TYPE_DATE 等" }
                             },
                             "required": ["field_title", "field_type"]
                         },
@@ -231,7 +231,7 @@ fn doc_tools() -> Vec<ToolSpec> {
                             "properties": {
                                 "field_id": { "type": "string", "description": "字段ID" },
                                 "field_title": { "type": "string", "description": "新字段标题" },
-                                "field_type": { "type": "integer", "description": "字段类型" }
+                                "field_type": { "type": "string", "description": "字段类型，如 FIELD_TYPE_TEXT、FIELD_TYPE_NUMBER、FIELD_TYPE_DATE 等" }
                             },
                             "required": ["field_id", "field_title"]
                         }
@@ -288,7 +288,7 @@ fn doc_tools() -> Vec<ToolSpec> {
                             "properties": {
                                 "values": {
                                     "type": "object",
-                                    "description": "字段名到值的映射"
+                                    "description": "字段名到值的映射。每个值必须是 [{\"type\": \"text\", \"text\": \"实际值\"}] 格式，例如 {\"车牌号\": [{\"type\": \"text\", \"text\": \"粤A12345\"}]}"
                                 }
                             },
                             "required": ["values"]
@@ -315,7 +315,7 @@ fn doc_tools() -> Vec<ToolSpec> {
                             "type": "object",
                             "properties": {
                                 "record_id": { "type": "string", "description": "记录ID" },
-                                "values": { "type": "object", "description": "要更新的字段值" }
+                                "values": { "type": "object", "description": "要更新的字段值，每个值必须是 [{\"type\": \"text\", \"text\": \"实际值\"}] 格式" }
                             },
                             "required": ["record_id", "values"]
                         }

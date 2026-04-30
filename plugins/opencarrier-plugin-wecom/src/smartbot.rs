@@ -16,6 +16,20 @@ use tracing::{error, info, warn};
 
 use crate::token;
 
+// ---------------------------------------------------------------------------
+// Global response_url store (shared across all SmartBot instances)
+// ---------------------------------------------------------------------------
+
+/// Global store for pending response_urls keyed by "{tenant_name}:{user_id}".
+/// Shared across all SmartBotChannel instances so that the kernel dispatch
+/// (which picks the first matching channel_type) can find response_urls
+/// regardless of which channel stored them.
+static RESPONSE_URLS: std::sync::OnceLock<Arc<Mutex<HashMap<String, String>>>> =
+    std::sync::OnceLock::new();
+
+/// Shared store type alias kept for convenience.
+type ResponseUrlStore = Arc<Mutex<HashMap<String, String>>>;
+
 /// WebSocket endpoint for WeChat Work AI Bot.
 const WS_URL: &str = "wss://openws.work.weixin.qq.com";
 /// Heartbeat interval in seconds.
@@ -79,13 +93,6 @@ struct EventDetail {
 }
 
 // ---------------------------------------------------------------------------
-// Shared response_url store
-// ---------------------------------------------------------------------------
-
-/// Shared store for pending response_urls keyed by "{tenant_name}:{user_id}".
-type ResponseUrlStore = Arc<Mutex<HashMap<String, String>>>;
-
-// ---------------------------------------------------------------------------
 // SmartBotChannel
 // ---------------------------------------------------------------------------
 
@@ -101,8 +108,6 @@ pub struct SmartBotChannel {
     corp_id: String,
     bot_id: String,
     secret: String,
-    /// Pending response_urls keyed by "{tenant_name}:{user_id}".
-    response_urls: ResponseUrlStore,
 }
 
 impl SmartBotChannel {
@@ -112,7 +117,6 @@ impl SmartBotChannel {
             corp_id,
             bot_id,
             secret,
-            response_urls: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -131,7 +135,7 @@ impl ChannelAdapter for SmartBotChannel {
         let secret = self.secret.clone();
         let tenant_name = self.tenant_name.clone();
         let corp_id = self.corp_id.clone();
-        let response_urls = self.response_urls.clone();
+        let response_urls = RESPONSE_URLS.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))).clone();
 
         // Spawn the WebSocket connection loop in its own thread with a dedicated
         // tokio runtime (cdylib plugins cannot use the host's tokio runtime).
@@ -155,9 +159,13 @@ impl ChannelAdapter for SmartBotChannel {
     }
 
     fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), PluginError> {
-        let key = format!("{}:{}", self.tenant_name, user_id);
-        let response_url = self
-            .response_urls
+        // Use the passed tenant_id (from the original message's tenant_id field)
+        // rather than self.tenant_name, because the kernel dispatch picks channels
+        // by channel_type only and may route to a different SmartBotChannel instance.
+        let key = format!("{}:{}", tenant_id, user_id);
+        let response_url = RESPONSE_URLS
+            .get()
+            .expect("RESPONSE_URLS not initialized")
             .lock()
             .unwrap()
             .remove(&key)

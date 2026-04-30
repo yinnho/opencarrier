@@ -37,7 +37,7 @@ function sessionsPage() {
         this.sessions = sessions;
       } catch(e) {
         this.sessions = [];
-        this.loadError = e.message || 'Could not load sessions.';
+        this.loadError = e.message || '无法加载会话。';
       }
       this.loading = false;
     },
@@ -64,13 +64,13 @@ function sessionsPage() {
 
     deleteSession(sessionId) {
       var self = this;
-      OpenCarrierToast.confirm('Delete Session', 'This will permanently remove the session and its messages.', async function() {
+      OpenCarrierToast.confirm('删除会话', '此操作将永久删除该会话及其消息。', async function() {
         try {
           await OpenCarrierAPI.del('/api/sessions/' + sessionId);
           self.sessions = self.sessions.filter(function(s) { return s.session_id !== sessionId; });
-          OpenCarrierToast.success('Session deleted');
+          OpenCarrierToast.success('会话已删除');
         } catch(e) {
-          OpenCarrierToast.error('Failed to delete session: ' + e.message);
+          OpenCarrierToast.error('删除会话失败: ' + e.message);
         }
       });
     },
@@ -85,7 +85,7 @@ function sessionsPage() {
         this.kvPairs = data.kv_pairs || [];
       } catch(e) {
         this.kvPairs = [];
-        this.memLoadError = e.message || 'Could not load memory data.';
+        this.memLoadError = e.message || '无法加载记忆数据。';
       }
       this.memLoading = false;
     },
@@ -97,24 +97,24 @@ function sessionsPage() {
       try {
         await OpenCarrierAPI.put('/api/memory/agents/' + this.memAgentId + '/kv/' + encodeURIComponent(this.newKey), { value: value });
         this.showAdd = false;
-        OpenCarrierToast.success('Key "' + this.newKey + '" saved');
+        OpenCarrierToast.success('键 "' + this.newKey + '" 已保存');
         this.newKey = '';
         this.newValue = '""';
         await this.loadKv();
       } catch(e) {
-        OpenCarrierToast.error('Failed to save key: ' + e.message);
+        OpenCarrierToast.error('保存键失败: ' + e.message);
       }
     },
 
     deleteKey(key) {
       var self = this;
-      OpenCarrierToast.confirm('Delete Key', 'Delete key "' + key + '"? This cannot be undone.', async function() {
+      OpenCarrierToast.confirm('删除键', '确定删除键 "' + key + '" 吗？此操作无法撤销。', async function() {
         try {
           await OpenCarrierAPI.del('/api/memory/agents/' + self.memAgentId + '/kv/' + encodeURIComponent(key));
-          OpenCarrierToast.success('Key "' + key + '" deleted');
+          OpenCarrierToast.success('键 "' + key + '" 已删除');
           await self.loadKv();
         } catch(e) {
-          OpenCarrierToast.error('Failed to delete key: ' + e.message);
+          OpenCarrierToast.error('删除键失败: ' + e.message);
         }
       });
     },
@@ -135,12 +135,12 @@ function sessionsPage() {
       try { value = JSON.parse(this.editingValue); } catch(e) { value = this.editingValue; }
       try {
         await OpenCarrierAPI.put('/api/memory/agents/' + this.memAgentId + '/kv/' + encodeURIComponent(this.editingKey), { value: value });
-        OpenCarrierToast.success('Key "' + this.editingKey + '" updated');
+        OpenCarrierToast.success('键 "' + this.editingKey + '" 已更新');
         this.editingKey = null;
         this.editingValue = '';
         await this.loadKv();
       } catch(e) {
-        OpenCarrierToast.error('Failed to save: ' + e.message);
+        OpenCarrierToast.error('保存失败: ' + e.message);
       }
     }
   };

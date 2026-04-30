@@ -69,6 +69,7 @@ impl TenantEntry {
     // -----------------------------------------------------------------------
 
     /// Create an enterprise application tenant.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_app(
         name: String,
         corp_id: String,
@@ -96,6 +97,7 @@ impl TenantEntry {
     }
 
     /// Create a customer service tenant.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_kf(
         name: String,
         corp_id: String,
@@ -206,8 +208,11 @@ impl TenantEntry {
         }
 
         // Fetch new token
-        let handle = tokio::runtime::Handle::current();
-        let token = tokio::task::block_in_place(|| handle.block_on(self.fetch_token()))?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Runtime error: {e}"))?;
+        let token = rt.block_on(self.fetch_token())?;
 
         Ok(token)
     }
@@ -336,17 +341,18 @@ pub fn send_app_message(
         .to_string();
     let token = tenant.get_access_token()?;
 
-    let handle = tokio::runtime::Handle::current();
-    tokio::task::block_in_place(|| {
-        handle.block_on(async {
-            let body = serde_json::json!({
-                "touser": user_id,
-                "msgtype": "text",
-                "agentid": agent_id,
-                "text": { "content": content }
-            });
-            wedoc_post(&tenant.http, "cgi-bin/message/send", &token, &body).await
-        })
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Runtime error: {e}"))?;
+    rt.block_on(async {
+        let body = serde_json::json!({
+            "touser": user_id,
+            "msgtype": "text",
+            "agentid": agent_id,
+            "text": { "content": content }
+        });
+        wedoc_post(&tenant.http, "cgi-bin/message/send", &token, &body).await
     })?;
 
     Ok(())
@@ -364,17 +370,18 @@ pub fn send_kf_message(
         .to_string();
     let token = tenant.get_access_token()?;
 
-    let handle = tokio::runtime::Handle::current();
-    tokio::task::block_in_place(|| {
-        handle.block_on(async {
-            let body = serde_json::json!({
-                "touser": user_id,
-                "open_kfid": open_kfid,
-                "msgtype": "text",
-                "text": { "content": content }
-            });
-            wedoc_post(&tenant.http, "cgi-bin/kf/send_msg", &token, &body).await
-        })
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Runtime error: {e}"))?;
+    rt.block_on(async {
+        let body = serde_json::json!({
+            "touser": user_id,
+            "open_kfid": open_kfid,
+            "msgtype": "text",
+            "text": { "content": content }
+        });
+        wedoc_post(&tenant.http, "cgi-bin/kf/send_msg", &token, &body).await
     })?;
 
     Ok(())
@@ -383,10 +390,11 @@ pub fn send_kf_message(
 /// Send a reply via the SmartBot response_url (HTTP POST with markdown).
 #[allow(dead_code)]
 pub fn send_smartbot_response(http: &Client, response_url: &str, content: &str) -> Result<(), String> {
-    let handle = tokio::runtime::Handle::current();
-    tokio::task::block_in_place(|| {
-        handle.block_on(send_smartbot_response_async(http, response_url, content))
-    })
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Runtime error: {e}"))?;
+    rt.block_on(send_smartbot_response_async(http, response_url, content))
 }
 
 /// Async version of send_smartbot_response (for use within plugin's own runtime).

@@ -17,6 +17,8 @@ pub mod comms;
 pub mod templates;
 pub mod kv;
 pub mod brain;
+pub mod plugin_toml;
+pub mod bots;
 pub mod weixin;
 pub mod cron;
 pub mod tenants;
@@ -68,8 +70,8 @@ pub async fn status(
                 "state": format!("{:?}", e.state),
                 "mode": e.mode,
                 "created_at": e.created_at.to_rfc3339(),
-                "modality": modality,
-                "model": model,
+                "model_provider": modality,
+                "model_name": model,
                 "profile": e.manifest.profile,
             })
         })

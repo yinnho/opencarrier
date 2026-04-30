@@ -37,6 +37,7 @@ pub trait KernelHandle: Send + Sync {
     /// Send a message to another agent and get the response.
     /// `sender_id` and `sender_name` identify the originating user (e.g. WeChat user).
     /// `caller_agent_id` is the agent invoking this tool, used for tenant isolation.
+    /// `source_tenant_id` is the bot/channel tenant that originated the message (for plugin tool routing).
     async fn send_to_agent(
         &self,
         agent_id: &str,
@@ -44,6 +45,7 @@ pub trait KernelHandle: Send + Sync {
         sender_id: Option<&str>,
         sender_name: Option<&str>,
         caller_agent_id: Option<&str>,
+        source_tenant_id: Option<&str>,
     ) -> Result<String, String>;
 
     /// List all running agents visible to the caller.
@@ -90,6 +92,9 @@ pub trait KernelHandle: Send + Sync {
         event_type: &str,
         payload: serde_json::Value,
     ) -> Result<(), String>;
+
+    /// Set the default plugin tenant for an agent (used when no channel context is available).
+    fn set_default_plugin_tenant(&self, agent_id: &str, tenant_id: &str);
 
     /// Add an entity to the knowledge graph, scoped to tenant.
     async fn knowledge_add_entity(

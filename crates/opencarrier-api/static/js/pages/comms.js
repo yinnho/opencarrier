@@ -31,7 +31,7 @@ function commsPage() {
         this.events = results[1] || [];
         this.startSSE();
       } catch(e) {
-        this.loadError = e.message || 'Could not load comms data.';
+        this.loadError = e.message || '无法加载通讯数据。';
       }
       this.loading = false;
     },
@@ -132,12 +132,12 @@ function commsPage() {
 
     eventLabel(kind) {
       switch(kind) {
-        case 'agent_message': return 'Message';
-        case 'agent_spawned': return 'Spawned';
-        case 'agent_terminated': return 'Terminated';
-        case 'task_posted': return 'Task Posted';
-        case 'task_claimed': return 'Task Claimed';
-        case 'task_completed': return 'Task Done';
+        case 'agent_message': return '消息';
+        case 'agent_spawned': return '已创建';
+        case 'agent_terminated': return '已终止';
+        case 'task_posted': return '任务已发布';
+        case 'task_claimed': return '任务已认领';
+        case 'task_completed': return '任务已完成';
         default: return kind;
       }
     },
@@ -146,10 +146,10 @@ function commsPage() {
       if (!dateStr) return '';
       var d = new Date(dateStr);
       var secs = Math.floor((Date.now() - d.getTime()) / 1000);
-      if (secs < 60) return secs + 's ago';
-      if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
-      if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
-      return Math.floor(secs / 86400) + 'd ago';
+      if (secs < 60) return secs + '秒前';
+      if (secs < 3600) return Math.floor(secs / 60) + '分钟前';
+      if (secs < 86400) return Math.floor(secs / 3600) + '小时前';
+      return Math.floor(secs / 86400) + '天前';
     },
 
     openSendModal() {
@@ -168,10 +168,10 @@ function commsPage() {
           to_agent_id: this.sendTo,
           message: this.sendMsg
         });
-        OpenCarrierToast.success('Message sent');
+        OpenCarrierToast.success('消息已发送');
         this.showSendModal = false;
       } catch(e) {
-        OpenCarrierToast.error(e.message || 'Send failed');
+        OpenCarrierToast.error(e.message || '发送失败');
       }
       this.sendLoading = false;
     },
@@ -190,10 +190,10 @@ function commsPage() {
         var body = { title: this.taskTitle, description: this.taskDesc };
         if (this.taskAssign) body.assigned_to = this.taskAssign;
         await OpenCarrierAPI.post('/api/comms/task', body);
-        OpenCarrierToast.success('Task posted');
+        OpenCarrierToast.success('任务已发布');
         this.showTaskModal = false;
       } catch(e) {
-        OpenCarrierToast.error(e.message || 'Task failed');
+        OpenCarrierToast.error(e.message || '任务创建失败');
       }
       this.taskLoading = false;
     }

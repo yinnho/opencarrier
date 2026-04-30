@@ -6,7 +6,7 @@ description = "WeChat Work (WeCom) channel and tools via MCP protocol"
 author = "Yinnhoo"
 
 [[channels]]
-channel_type = "wecom"
+channel_type = "wecom_smartbot"
 name = "WeChat Work"
 
 # Channel-layer tool (direct REST API)
@@ -14,6 +14,17 @@ name = "WeChat Work"
 name = "send_wecom_message"
 description = "发送企业微信消息（支持企业应用和微信客服模式）"
 parameters_json = '{"type":"object","properties":{"user_id":{"type":"string","description":"接收人UserID"},"content":{"type":"string","description":"消息内容"}},"required":["user_id","content"]}'
+
+# Bot creation tools (SmartBot)
+[[tools]]
+name = "wecom_bot_generate"
+description = "生成企业微信智能机器人创建链接（返回 scode 和 auth_url，用户扫码完成创建）"
+parameters_json = '{"type":"object","properties":{},"required":[]}'
+
+[[tools]]
+name = "wecom_bot_poll"
+description = "轮询企业微信智能机器人创建结果（传入 scode，返回状态和 bot_id/secret）"
+parameters_json = '{"type":"object","properties":{"scode":{"type":"string","description":"wecom_bot_generate 返回的 scode"}},"required":["scode"]}'
 
 # ---- Contact (MCP) ----
 [[tools]]
