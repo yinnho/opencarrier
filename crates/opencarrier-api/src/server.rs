@@ -114,7 +114,6 @@ pub async fn build_router(
         .merge(routes::observability::router())
         .merge(routes::providers::router())
         .merge(routes::sessions::router())
-        .merge(routes::templates::router())
         .merge(routes::tenants::router())
         .merge(routes::tools_skills::router())
         .merge(routes::webhooks::router())
@@ -122,7 +121,6 @@ pub async fn build_router(
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route("/api/commands", axum::routing::get(routes::list_commands))
         // plugins routes handled by routes::plugins::router() above
-        .route("/api/profiles", axum::routing::get(routes::list_profiles))
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .route("/api/status", axum::routing::get(routes::status))
         .route("/api/version", axum::routing::get(routes::version))

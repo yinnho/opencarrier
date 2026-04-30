@@ -14,7 +14,6 @@ pub mod providers;
 pub mod webhooks;
 pub mod bindings;
 pub mod comms;
-pub mod templates;
 pub mod kv;
 pub mod brain;
 pub mod plugin_toml;
@@ -111,32 +110,6 @@ pub async fn shutdown(State(state): State<Arc<AppState>>, extensions: axum::http
     state.kernel.shutdown();
     state.shutdown_notify.notify_one();
     Json(serde_json::json!({"status": "shutting_down"})).into_response()
-}
-
-/// GET /api/profiles — List all tool profiles and their tool lists.
-pub async fn list_profiles() -> impl IntoResponse {
-    use opencarrier_types::agent::ToolProfile;
-
-    let profiles = [
-        ("minimal", ToolProfile::Minimal),
-        ("coding", ToolProfile::Coding),
-        ("research", ToolProfile::Research),
-        ("messaging", ToolProfile::Messaging),
-        ("automation", ToolProfile::Automation),
-        ("full", ToolProfile::Full),
-    ];
-
-    let result: Vec<serde_json::Value> = profiles
-        .iter()
-        .map(|(name, profile)| {
-            serde_json::json!({
-                "name": name,
-                "tools": profile.tools(),
-            })
-        })
-        .collect();
-
-    Json(result)
 }
 
 /// GET /api/version — Build & version info.

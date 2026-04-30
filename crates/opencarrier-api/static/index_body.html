@@ -799,175 +799,59 @@
           <!-- Custom spawn modal still available -->
           </div>
 
-          <!-- Multi-step Spawn Wizard -->
+
+          <!-- Spawn Wizard (2 steps) -->
           <template x-if="showSpawnModal">
             <div class="modal-overlay" @click.self="showSpawnModal = false" @keydown.escape.window="showSpawnModal = false">
-              <div class="modal" style="max-width:560px">
+              <div class="modal" style="max-width:520px">
                 <div class="modal-header">
-                  <h3>Create Agent</h3>
+                  <h3 x-text="spawnStep === 1 ? '创建分身' : '系统提示词'"></h3>
                   <button class="modal-close" @click="showSpawnModal = false">&times;</button>
                 </div>
 
-                <!-- Wizard / TOML toggle -->
-                <div class="tabs" style="margin-bottom:12px">
-                  <div class="tab" :class="{ active: spawnMode === 'wizard' }" @click="spawnMode = 'wizard'">Wizard</div>
-                  <div class="tab" :class="{ active: spawnMode === 'toml' }" @click="spawnMode = 'toml'">Raw TOML</div>
-                </div>
-
-                <!-- Raw TOML mode (unchanged) -->
-                <div x-show="spawnMode === 'toml'">
+                <!-- Step 1: Name + Model -->
+                <div x-show="spawnStep === 1">
                   <div class="form-group">
-                    <label>分身清单 (TOML)</label>
-                    <textarea class="form-textarea" style="height:200px;font-size:11px" x-model="spawnToml" placeholder='name = "my-agent"&#10;module = "builtin:chat"&#10;[model]&#10;provider = "groq"&#10;model = "llama-3.3-70b-versatile"&#10;system_prompt = "You are helpful."'></textarea>
+                    <label>分身名称</label>
+                    <input class="form-input" x-model="spawnForm.name" placeholder="my-agent" @keydown.enter="if(!$event.isComposing && $event.keyCode !== 229) nextStep()">
                   </div>
-                  <button class="btn btn-primary btn-block mt-4" @click="spawnAgent()" :disabled="spawning">
-                    <span x-show="!spawning">Spawn Agent</span><span x-show="spawning">Spawning...</span>
-                  </button>
+                  <div class="form-group">
+                    <label>提供商</label>
+                    <select class="form-select" x-model="spawnForm.provider">
+                      <option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>
+                      <option value="groq">Groq</option><option value="ollama">Ollama</option>
+                      <option value="google">Google</option><option value="mistral">Mistral</option>
+                      <option value="xai">xAI</option><option value="deepseek">DeepSeek</option>
+                      <option value="cerebras">Cerebras</option><option value="sambanova">SambaNova</option>
+                      <option value="together">Together</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>模型</label>
+                    <input class="form-input" x-model="spawnForm.model" placeholder="e.g. llama-3.3-70b-versatile">
+                  </div>
                 </div>
 
-                <!-- Wizard steps -->
-                <div x-show="spawnMode === 'wizard'">
-                  <!-- Step indicator -->
-                  <div class="wizard-steps">
-                    <template x-for="s in [1,2,3,4,5]" :key="s">
-                      <div class="wizard-dot" :class="{ active: spawnStep === s, done: spawnStep > s }">
-                        <span x-text="spawnStep > s ? '\u2713' : s"></span>
-                      </div>
-                    </template>
+                <!-- Step 2: System Prompt -->
+                <div x-show="spawnStep === 2">
+                  <div class="form-group">
+                    <label>系统提示词</label>
+                    <textarea class="form-textarea" x-model="spawnForm.systemPrompt" style="height:200px" placeholder="You are a helpful assistant."></textarea>
                   </div>
+                </div>
 
-                  <!-- Step 1: Name + Identity -->
-                  <div x-show="spawnStep === 1">
-                    <div class="form-group">
-                      <label>分身名称</label>
-                      <input class="form-input" x-model="spawnForm.name" placeholder="my-agent" @keydown.enter="if(!$event.isComposing && $event.keyCode !== 229) nextStep()">
-                    </div>
-                    <div class="form-group">
-                      <label>表情</label>
-                      <div class="emoji-grid">
-                        <template x-for="em in emojiOptions" :key="em">
-                          <button class="emoji-grid-item" :class="{ active: spawnIdentity.emoji === em }" @click="spawnIdentity.emoji = em" x-text="em"></button>
-                        </template>
-                      </div>
-                    </div>
-                    <div class="form-group">
-                      <label>颜色</label>
-                      <input type="color" x-model="spawnIdentity.color" style="width:48px;height:32px;border:none;cursor:pointer;background:none">
-                    </div>
-                    <div class="form-group">
-                      <label>原型</label>
-                      <select class="form-select" x-model="spawnIdentity.archetype">
-                        <option value="">Choose...</option>
-                        <template x-for="a in archetypeOptions" :key="a"><option :value="a.toLowerCase()" x-text="a"></option></template>
-                      </select>
-                    </div>
-                  </div>
-
-                  <!-- Step 2: Model Selection -->
-                  <div x-show="spawnStep === 2">
-                    <div class="form-group">
-                      <label>提供商</label>
-                      <select class="form-select" x-model="spawnForm.provider">
-                        <option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>
-                        <option value="groq">Groq</option><option value="ollama">Ollama</option>
-                        <option value="google">Google</option><option value="mistral">Mistral</option>
-                        <option value="xai">xAI</option><option value="deepseek">DeepSeek</option>
-                        <option value="cerebras">Cerebras</option><option value="sambanova">SambaNova</option>
-                        <option value="together">Together</option>
-                      </select>
-                    </div>
-                    <div class="form-group">
-                      <label>模型</label>
-                      <input class="form-input" x-model="spawnForm.model" placeholder="e.g. llama-3.3-70b-versatile">
-                    </div>
-                    <div class="form-group">
-                      <label>系统提示词</label>
-                      <textarea class="form-textarea" x-model="spawnForm.systemPrompt" placeholder="You are a helpful assistant."></textarea>
-                    </div>
-                  </div>
-
-                  <!-- Step 3: Personality Presets -->
-                  <div x-show="spawnStep === 3">
-                    <label class="mb-2" style="display:block;font-size:13px;font-weight:600">Personality</label>
-                    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
-                      <template x-for="preset in personalityPresets" :key="preset.id">
-                        <button class="personality-pill" :class="{ active: selectedPreset === preset.id }" @click="selectPreset(preset)" x-text="preset.label"></button>
-                      </template>
-                    </div>
-                    <div class="form-group">
-                      <label>Soul / Persona <span class="text-xs text-dim">(editable)</span></label>
-                      <textarea class="form-textarea" x-model="soulContent" style="height:100px" placeholder="Describe this agent's personality and communication style..."></textarea>
-                    </div>
-                  </div>
-
-                  <!-- Step 4: Tools & Capabilities -->
-                  <div x-show="spawnStep === 4">
-                    <div class="form-group">
-                      <label>工具配置</label>
-                      <select class="form-select" x-model="spawnForm.profile" @focus="loadSpawnProfiles()">
-                        <option value="minimal">Minimal &mdash; Read-only file access</option>
-                        <option value="coding">Coding &mdash; Files + shell + web fetch</option>
-                        <option value="research">Research &mdash; Web search + file read/write</option>
-                        <option value="messaging">Messaging &mdash; Agents + memory access</option>
-                        <option value="automation">Automation &mdash; All tools except custom</option>
-                        <option value="full" selected>Full &mdash; All 35+ tools</option>
-                        <option value="custom">Custom (manual capabilities)</option>
-                      </select>
-                      <div class="capability-preview" x-show="selectedProfileTools.length > 0" style="margin-top:8px">
-                        <div class="capability-preview-title">Tools included</div>
-                        <div style="display:flex;flex-wrap:wrap;gap:2px">
-                          <template x-for="tool in selectedProfileTools" :key="tool"><span class="tool-badge" x-text="tool"></span></template>
-                          <span class="tool-badge" x-show="selectedProfileTools.length >= 15" style="opacity:0.6">...</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="form-group" x-show="spawnForm.profile === 'custom'">
-                      <label>能力</label>
-                      <div class="flex gap-3" style="flex-wrap:wrap">
-                        <label class="form-checkbox"><input type="checkbox" x-model="spawnForm.caps.memory_read"> Memory Read</label>
-                        <label class="form-checkbox"><input type="checkbox" x-model="spawnForm.caps.memory_write"> Memory Write</label>
-                        <label class="form-checkbox"><input type="checkbox" x-model="spawnForm.caps.network"> Network</label>
-                        <label class="form-checkbox"><input type="checkbox" x-model="spawnForm.caps.shell"> Shell</label>
-                        <label class="form-checkbox"><input type="checkbox" x-model="spawnForm.caps.agent_spawn"> Agent Spawn</label>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Step 5: Review & Spawn -->
-                  <div x-show="spawnStep === 5">
-                    <div class="card" style="margin-bottom:16px">
-                      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-                        <div style="width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px" :style="'background:' + spawnIdentity.color + '22; border:2px solid ' + spawnIdentity.color">
-                          <span x-text="spawnIdentity.emoji || '\u{1F916}'"></span>
-                        </div>
-                        <div>
-                          <div class="font-bold" style="font-size:15px" x-text="spawnForm.name || 'Unnamed'"></div>
-                          <div class="text-xs text-dim" x-text="spawnIdentity.archetype || 'agent'"></div>
-                        </div>
-                      </div>
-                      <div class="detail-grid" style="gap:6px">
-                        <div class="detail-row"><span class="detail-label">提供商</span><span class="detail-value" x-text="spawnForm.provider"></span></div>
-                        <div class="detail-row"><span class="detail-label">模型</span><span class="detail-value" x-text="spawnForm.model"></span></div>
-                        <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value" x-text="spawnForm.profile"></span></div>
-                        <div class="detail-row" x-show="selectedPreset"><span class="detail-label">Personality</span><span class="detail-value" style="text-transform:capitalize" x-text="selectedPreset"></span></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Navigation buttons -->
-                  <div class="flex justify-between mt-4">
-                    <button class="btn btn-ghost" x-show="spawnStep > 1" @click="prevStep()">Back</button>
-                    <div x-show="spawnStep <= 1"></div>
-                    <button class="btn btn-primary" x-show="spawnStep < 5" @click="nextStep()">Next</button>
-                    <button class="btn btn-primary" x-show="spawnStep === 5" @click="spawnAgent()" :disabled="spawning">
-                      <span x-show="!spawning">Spawn Agent</span><span x-show="spawning">Spawning...</span>
-                    </button>
-                  </div>
+                <!-- Navigation -->
+                <div class="flex justify-between mt-4">
+                  <button class="btn btn-ghost" x-show="spawnStep > 1" @click="prevStep()">返回</button>
+                  <div x-show="spawnStep <= 1"></div>
+                  <button class="btn btn-primary" x-show="spawnStep < 2" @click="nextStep()">下一步</button>
+                  <button class="btn btn-primary" x-show="spawnStep === 2" @click="spawnAgent()" :disabled="spawning">
+                    <span x-show="!spawning">创建</span><span x-show="spawning">创建中...</span>
+                  </button>
                 </div>
               </div>
             </div>
           </template>
-
           <!-- Hub Install Modal -->
           <template x-if="showHubModal">
             <div class="modal-overlay" @click.self="closeHubModal()" @keydown.escape.window="closeHubModal()">
@@ -1462,7 +1346,7 @@
                       </td>
                       <td style="padding:8px 4px;font-size:11px;color:var(--text-dim)" x-text="t.created_at ? new Date(t.created_at).toLocaleDateString() : '-'"></td>
                       <td style="padding:8px 4px;text-align:right">
-                        <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--error)" @click="deleteTenantInSettings(t.id, t.name)">删除</button>
+                        <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--error)" @click="deleteTenant(t.id, t.name)">删除</button>
                       </td>
                     </tr>
                   </template>
