@@ -1081,11 +1081,8 @@ impl KernelConfig {
     ///
     /// Returns `workspaces/{tenant_id}/` under the effective workspaces directory.
     /// Falls back to `effective_workspaces_dir()` if tenant_id is None (global agents).
-    pub fn tenant_workspaces_dir(&self, tenant_id: Option<&str>) -> PathBuf {
-        match tenant_id {
-            Some(tid) => self.effective_workspaces_dir().join(tid),
-            None => self.effective_workspaces_dir(),
-        }
+    pub fn tenant_workspaces_dir(&self, tenant_id: &str) -> PathBuf {
+        self.effective_workspaces_dir().join(tenant_id)
     }
 
     /// Resolve the API key env var name for a provider.

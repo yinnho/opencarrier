@@ -170,9 +170,9 @@ pub struct CronJob {
     pub last_run: Option<DateTime<Utc>>,
     /// When the job is next expected to fire.
     pub next_run: Option<DateTime<Utc>>,
-    /// Owning tenant ID (None for global/admin jobs).
+    /// Owning tenant ID — every job must belong to a tenant.
     #[serde(default)]
-    pub tenant_id: Option<String>,
+    pub tenant_id: String,
 }
 
 impl CronJob {
@@ -379,7 +379,7 @@ mod tests {
             created_at: Utc::now(),
             last_run: None,
             next_run: None,
-            tenant_id: None,
+            tenant_id: "test-tenant".to_string(),
         }
     }
 

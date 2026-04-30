@@ -481,10 +481,12 @@ fn host_agent_spawn(state: &GuestState, params: &serde_json::Value) -> serde_jso
         None => return json!({"error": "No kernel handle available"}),
     };
     // SECURITY: Enforce capability inheritance — child <= parent
+    let tenant_id = kernel.get_agent_tenant_id(&state.agent_id).unwrap_or_default();
     match state.tokio_handle.block_on(kernel.spawn_agent_checked(
         manifest_toml,
         Some(&state.agent_id),
         &state.capabilities,
+        &tenant_id,
     )) {
         Ok((id, name)) => json!({"ok": {"id": id, "name": name}}),
         Err(e) => json!({"error": e}),

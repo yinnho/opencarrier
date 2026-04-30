@@ -80,7 +80,7 @@ pub async fn create_tenant(
         Ok(()) => {
             // Try to auto-start clone-creator and clone-trainer for this tenant
             for clone_name in &["clone-creator", "clone-trainer"] {
-                if state.kernel.registry.find_by_name_and_tenant(clone_name, Some(&tenant_id)).is_some() {
+                if state.kernel.registry.find_by_name_and_tenant(clone_name, &tenant_id).is_some() {
                     // Already running in this tenant — skip
                     continue;
                 }
@@ -88,7 +88,7 @@ pub async fn create_tenant(
                 let clone_toml = state
                     .kernel
                     .config
-                    .tenant_workspaces_dir(Some(tenant_id.as_str()))
+                    .tenant_workspaces_dir(&tenant_id)
                     .join(clone_name)
                     .join("agent.toml");
                 if clone_toml.exists() {
@@ -96,11 +96,11 @@ pub async fn create_tenant(
                         Ok(toml_str) => {
                             match toml::from_str::<AgentManifest>(&toml_str) {
                                 Ok(manifest) => {
-                                    match state.kernel.spawn_agent(manifest) {
+                                    match state.kernel.spawn_agent(manifest, &tenant_id) {
                                         Ok(agent_id) => {
                                             state.kernel.registry.set_tenant_id(
                                                 agent_id,
-                                                Some(tenant_id.clone()),
+                                                tenant_id.clone(),
                                             );
                                             tracing::info!(
                                                 "Auto-started {} for tenant {}",

@@ -113,7 +113,7 @@ pub async fn webhook_agent(
             Err(_) => {
                 // Name lookup — use tenant-scoped if tenant_id provided
                 let entry = match &body.tenant_id {
-                    Some(tid) => state.kernel.registry.find_by_name_and_tenant(agent_ref, Some(tid)),
+                    Some(tid) => state.kernel.registry.find_by_name_and_tenant(agent_ref, tid.as_str()),
                     None => {
                         // No tenant context: reject name lookup to prevent cross-tenant ambiguity
                         return (

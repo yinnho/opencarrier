@@ -732,7 +732,7 @@ mod tests {
             messages: vec![Message::user("hello")],
             context_window_tokens: 0,
             label: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         let config = CompactionConfig::default();
         assert!(!needs_compaction(&session, &config));
@@ -749,7 +749,7 @@ mod tests {
             messages,
             context_window_tokens: 0,
             label: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         let config = CompactionConfig::default();
         assert!(needs_compaction(&session, &config));
@@ -799,7 +799,7 @@ mod tests {
             messages: vec![Message::user("hello"), Message::assistant("hi")],
             context_window_tokens: 0,
             label: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         let config = CompactionConfig {
             threshold: 30,
@@ -887,7 +887,7 @@ mod tests {
             messages,
             context_window_tokens: 0,
             label: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         let config = CompactionConfig {
             threshold: 5,
@@ -959,7 +959,7 @@ mod tests {
             messages,
             context_window_tokens: 0,
             label: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         let config = CompactionConfig {
             threshold: 30,
@@ -1087,7 +1087,7 @@ mod tests {
             messages,
             context_window_tokens: 0,
             label: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         let config = CompactionConfig {
             threshold: 10,

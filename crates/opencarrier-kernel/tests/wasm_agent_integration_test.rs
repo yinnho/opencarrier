@@ -179,7 +179,7 @@ async fn test_wasm_agent_hello_response() {
     let kernel = OpenCarrierKernel::boot_with_config(config).expect("Kernel should boot");
 
     let manifest = wasm_manifest("wasm-hello", "hello.wat");
-    let agent_id = kernel.spawn_agent(manifest).unwrap();
+    let agent_id = kernel.spawn_agent(manifest, "test-tenant").unwrap();
 
     let result = kernel
         .send_message(agent_id, "Hi there!")
@@ -202,7 +202,7 @@ async fn test_wasm_agent_echo() {
     let kernel = OpenCarrierKernel::boot_with_config(config).expect("Kernel should boot");
 
     let manifest = wasm_manifest("wasm-echo", "echo.wat");
-    let agent_id = kernel.spawn_agent(manifest).unwrap();
+    let agent_id = kernel.spawn_agent(manifest, "test-tenant").unwrap();
 
     let result = kernel
         .send_message(agent_id, "test message")
@@ -229,7 +229,7 @@ async fn test_wasm_agent_fuel_exhaustion() {
     let kernel = OpenCarrierKernel::boot_with_config(config).expect("Kernel should boot");
 
     let manifest = wasm_manifest("wasm-loop", "loop.wat");
-    let agent_id = kernel.spawn_agent(manifest).unwrap();
+    let agent_id = kernel.spawn_agent(manifest, "test-tenant").unwrap();
 
     let result = kernel.send_message(agent_id, "go").await;
     assert!(
@@ -255,7 +255,7 @@ async fn test_wasm_agent_missing_module() {
     let kernel = OpenCarrierKernel::boot_with_config(config).expect("Kernel should boot");
 
     let manifest = wasm_manifest("wasm-missing", "nonexistent.wasm");
-    let agent_id = kernel.spawn_agent(manifest).unwrap();
+    let agent_id = kernel.spawn_agent(manifest, "test-tenant").unwrap();
 
     let result = kernel.send_message(agent_id, "hello").await;
     assert!(result.is_err(), "Missing module should fail");
@@ -295,7 +295,7 @@ memory_read = ["*"]
 memory_write = ["self.*"]
 "#;
     let manifest: AgentManifest = toml::from_str(toml_str).unwrap();
-    let agent_id = kernel.spawn_agent(manifest).unwrap();
+    let agent_id = kernel.spawn_agent(manifest, "test-tenant").unwrap();
 
     // The proxy module expects JSON like {"method":"time_now","params":{}}
     // But our kernel wraps it as {"message":"...", "agent_id":"...", "agent_name":"..."}
@@ -323,7 +323,7 @@ async fn test_wasm_agent_streaming_fallback() {
     let kernel = Arc::new(kernel);
 
     let manifest = wasm_manifest("wasm-stream", "hello.wat");
-    let agent_id = kernel.spawn_agent(manifest).unwrap();
+    let agent_id = kernel.spawn_agent(manifest, "test-tenant").unwrap();
 
     let (mut rx, handle) = kernel
         .send_message_streaming(agent_id, "Hi!", None, None, None)
@@ -359,10 +359,10 @@ async fn test_multiple_wasm_agents() {
     let kernel = OpenCarrierKernel::boot_with_config(config).expect("Kernel should boot");
 
     let hello_id = kernel
-        .spawn_agent(wasm_manifest("hello-agent", "hello.wat"))
+        .spawn_agent(wasm_manifest("hello-agent", "hello.wat"), "test-tenant")
         .unwrap();
     let echo_id = kernel
-        .spawn_agent(wasm_manifest("echo-agent", "echo.wat"))
+        .spawn_agent(wasm_manifest("echo-agent", "echo.wat"), "test-tenant")
         .unwrap();
 
     // Execute both
@@ -374,7 +374,7 @@ async fn test_multiple_wasm_agents() {
 
     // Verify agent list shows both + default assistant
     let agents = kernel.registry.list();
-    assert_eq!(agents.len(), 3);
+    assert_eq!(agents.len(), 2);
 
     kernel.shutdown();
 }
@@ -390,7 +390,7 @@ async fn test_mixed_wasm_and_llm_agents() {
 
     // Spawn a WASM agent
     let wasm_id = kernel
-        .spawn_agent(wasm_manifest("wasm-agent", "hello.wat"))
+        .spawn_agent(wasm_manifest("wasm-agent", "hello.wat"), "test-tenant")
         .unwrap();
 
     // Spawn a regular LLM agent (won't actually call LLM since ollama isn't running,
@@ -412,11 +412,11 @@ memory_read = ["*"]
 memory_write = ["self.*"]
 "#;
     let llm_manifest: AgentManifest = toml::from_str(llm_toml).unwrap();
-    let llm_id = kernel.spawn_agent(llm_manifest).unwrap();
+    let llm_id = kernel.spawn_agent(llm_manifest, "test-tenant").unwrap();
 
     // Verify both agents exist + default assistant
     let agents = kernel.registry.list();
-    assert_eq!(agents.len(), 3);
+    assert_eq!(agents.len(), 2);
 
     // WASM agent should work
     let result = kernel.send_message(wasm_id, "hello").await.unwrap();
@@ -427,7 +427,7 @@ memory_write = ["self.*"]
 
     // Kill WASM agent
     kernel.kill_agent(wasm_id).unwrap();
-    assert_eq!(kernel.registry.list().len(), 2);
+    assert_eq!(kernel.registry.list().len(), 1);
 
     kernel.shutdown();
 }

@@ -1067,9 +1067,34 @@ fn cmd_start(config: Option<PathBuf>) {
         const DEFAULT_CLONES: &[&str] = &["clone-creator", "clone-trainer"];
         let hub = &kernel.config.hub;
         // Resolve admin tenant_id so clones are visible after login
-        let admin_tenant_id = kernel.config.auth.enabled
-            .then(|| kernel.memory.tenant().get_tenant_by_name(&kernel.config.auth.username).ok().flatten().map(|t| t.id))
-            .flatten();
+        let admin_tenant_id: String = kernel.config.auth.enabled
+            .then(|| {
+                // Ensure admin tenant record exists
+                let tenant_store = kernel.memory.tenant();
+                match tenant_store.get_tenant_by_name(&kernel.config.auth.username) {
+                    Ok(Some(t)) => Some(t.id),
+                    _ => {
+                        // Auto-create admin tenant record
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let hash = kernel.config.auth.password_hash.clone();
+                        let entry = opencarrier_types::tenant::TenantEntry {
+                            id: id.clone(),
+                            name: kernel.config.auth.username.clone(),
+                            password_hash: hash,
+                            role: opencarrier_types::tenant::TenantRole::Admin,
+                            enabled: true,
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                            updated_at: chrono::Utc::now().to_rfc3339(),
+                        };
+                        if let Err(e) = tenant_store.create_tenant(&entry) {
+                            eprintln!("  ⚠ Failed to create admin tenant: {e}");
+                        }
+                        Some(id)
+                    }
+                }
+            })
+            .flatten()
+            .unwrap_or_default();
         if let Ok(api_key) = std::env::var(&hub.api_key_env) {
             for clone_name in DEFAULT_CLONES {
                 if kernel.registry.find_by_name(clone_name).is_some() {
@@ -1097,7 +1122,7 @@ fn cmd_start(config: Option<PathBuf>) {
                         if resp.status().is_success() {
                             match resp.bytes().await {
                                 Ok(bytes) => {
-                                    match kernel.clone_install(clone_name, &bytes, admin_tenant_id.as_deref()).await {
+                                    match kernel.clone_install(clone_name, &bytes, &admin_tenant_id).await {
                                         Ok((id, name)) => {
                                             eprintln!("  ✓ Clone '{}' installed (id={})", name, id);
                                         }
@@ -1343,7 +1368,13 @@ fn cmd_agent_spawn(config: Option<PathBuf>, manifest_path: PathBuf) {
             std::process::exit(1);
         });
         let kernel = boot_kernel(config);
-        match kernel.spawn_agent(manifest) {
+        let spawn_tid = kernel.memory.tenant()
+            .get_tenant_by_name(&kernel.config.auth.username)
+            .ok()
+            .flatten()
+            .map(|t| t.id)
+            .unwrap_or_default();
+        match kernel.spawn_agent(manifest, &spawn_tid) {
             Ok(id) => {
                 println!("Agent spawned (in-process mode).");
                 println!("  ID: {id}");
@@ -1704,7 +1735,13 @@ fn spawn_template_agent(config: Option<PathBuf>, template: &templates::AgentTemp
             std::process::exit(1);
         });
         let kernel = boot_kernel(config);
-        match kernel.spawn_agent(manifest) {
+        let spawn_tid = kernel.memory.tenant()
+            .get_tenant_by_name(&kernel.config.auth.username)
+            .ok()
+            .flatten()
+            .map(|t| t.id)
+            .unwrap_or_default();
+        match kernel.spawn_agent(manifest, &spawn_tid) {
             Ok(id) => {
                 ui::blank();
                 ui::success(&format!("Agent '{}' spawned (in-process)", template.name));

@@ -23,7 +23,7 @@ pub struct Session {
     /// Optional human-readable session label.
     pub label: Option<String>,
     /// Owning tenant ID (for multi-tenant isolation).
-    pub tenant_id: Option<String>,
+    pub tenant_id: String,
 }
 
 /// Session store backed by SQLite.
@@ -69,7 +69,7 @@ impl SessionStore {
                     messages,
                     context_window_tokens: tokens as u64,
                     label,
-                    tenant_id: None,
+                    tenant_id: String::new(),
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -86,7 +86,7 @@ impl SessionStore {
         let messages_blob = rmp_serde::to_vec_named(&session.messages)
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
-        let tenant_id_str = session.tenant_id.as_deref().unwrap_or("");
+        let tenant_id_str = session.tenant_id.as_str();
         conn.execute(
             "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, created_at, updated_at, tenant_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
@@ -207,11 +207,11 @@ impl SessionStore {
 
     /// Create a new empty session for an agent.
     pub fn create_session(&self, agent_id: AgentId) -> OpenCarrierResult<Session> {
-        self.create_session_with_tenant(agent_id, None)
+        self.create_session_with_tenant(agent_id, String::new())
     }
 
     /// Create a new empty session for an agent with a tenant ID.
-    pub fn create_session_with_tenant(&self, agent_id: AgentId, tenant_id: Option<String>) -> OpenCarrierResult<Session> {
+    pub fn create_session_with_tenant(&self, agent_id: AgentId, tenant_id: String) -> OpenCarrierResult<Session> {
         let session = Session {
             id: SessionId::new(),
             agent_id,
@@ -280,7 +280,7 @@ impl SessionStore {
                     messages,
                     context_window_tokens: tokens as u64,
                     label: lbl,
-                    tenant_id: None,
+                    tenant_id: String::new(),
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -342,7 +342,7 @@ impl SessionStore {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: label.map(|s| s.to_string()),
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         self.save_session(&session)?;
         Ok(session)

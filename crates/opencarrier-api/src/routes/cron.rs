@@ -29,7 +29,7 @@ pub async fn list_cron_jobs(
                 if ctx.is_admin() {
                     jobs
                 } else {
-                    jobs.into_iter().filter(|j| can_access(&ctx, j.tenant_id.as_deref())).collect()
+                    jobs.into_iter().filter(|j| can_access(&ctx, &j.tenant_id)).collect()
                 }
             }
             Err(_) => {
@@ -65,7 +65,7 @@ pub async fn create_cron_job(
     // Verify tenant owns the target agent
     if let Ok(aid) = agent_id.parse::<AgentId>() {
         if let Some(entry) = state.kernel.registry.get(aid) {
-            if !can_access(&ctx, entry.tenant_id.as_deref()) {
+            if !can_access(&ctx, &entry.tenant_id) {
                 return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
             }
         }
@@ -93,7 +93,7 @@ pub async fn delete_cron_job(
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
             // Tenant ownership check
             if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
-                if !can_access(&ctx, job.tenant_id.as_deref()) {
+                if !can_access(&ctx, &job.tenant_id) {
                     return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
                 }
             }
@@ -131,7 +131,7 @@ pub async fn toggle_cron_job(
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
             // Tenant ownership check
             if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
-                if !can_access(&ctx, job.tenant_id.as_deref()) {
+                if !can_access(&ctx, &job.tenant_id) {
                     return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
                 }
             }
@@ -167,7 +167,7 @@ pub async fn cron_job_status(
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
             // Tenant ownership check
             if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
-                if !can_access(&ctx, job.tenant_id.as_deref()) {
+                if !can_access(&ctx, &job.tenant_id) {
                     return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
                 }
             }

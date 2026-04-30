@@ -224,7 +224,7 @@ impl CronScheduler {
         self.jobs
             .iter()
             .filter(|r| {
-                r.value().job.tenant_id.as_deref() == Some(tenant_id)
+                r.value().job.tenant_id == tenant_id
             })
             .map(|r| r.value().job.clone())
             .collect()
@@ -479,7 +479,7 @@ mod tests {
             created_at: Utc::now(),
             last_run: None,
             next_run: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         }
     }
 

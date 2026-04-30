@@ -1266,7 +1266,7 @@ impl OpenCarrierKernel {
                     let mut entry = entry;
 
                     // Workspace 始终从 tenant_id + name 推导，不依赖 DB/TOML 中的值
-                    let ws = kernel.config.tenant_workspaces_dir(entry.tenant_id.as_deref())
+                    let ws = kernel.config.tenant_workspaces_dir(entry.tenant_id.as_str())
                         .join(&name);
                     entry.manifest.workspace = Some(ws);
 
@@ -1319,8 +1319,8 @@ impl OpenCarrierKernel {
     }
 
     /// Spawn a new agent from a manifest, optionally linking to a parent agent.
-    pub fn spawn_agent(&self, manifest: AgentManifest) -> KernelResult<AgentId> {
-        self.spawn_agent_with_parent(manifest, None, None, None)
+    pub fn spawn_agent(&self, manifest: AgentManifest, tenant_id: &str) -> KernelResult<AgentId> {
+        self.spawn_agent_with_parent(manifest, None, None, tenant_id)
     }
 
     /// Spawn a new agent with an optional parent for lineage tracking.
@@ -1331,7 +1331,7 @@ impl OpenCarrierKernel {
         manifest: AgentManifest,
         parent: Option<AgentId>,
         fixed_id: Option<AgentId>,
-        tenant_id: Option<&str>,
+        tenant_id: &str,
     ) -> KernelResult<AgentId> {
         let agent_id = fixed_id.unwrap_or_default();
         let session_id = SessionId::new();
@@ -1401,7 +1401,7 @@ impl OpenCarrierKernel {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: tenant_id.map(|s| s.to_string()),
+            tenant_id: tenant_id.to_string(),
         };
         self.registry
             .register(entry.clone())
@@ -1699,7 +1699,7 @@ impl OpenCarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
-                    tenant_id: None,
+                    tenant_id: String::new(),
                 })
         };
 
@@ -1920,7 +1920,7 @@ impl OpenCarrierKernel {
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
                             tool_calls: result.iterations.saturating_sub(1),
-                            tenant_id: None,
+                            tenant_id: String::new(),
                         });
 
                     let _ = kernel_clone
@@ -2149,7 +2149,7 @@ impl OpenCarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
-                    tenant_id: None,
+                    tenant_id: String::new(),
                 })
         };
 
@@ -2315,7 +2315,7 @@ impl OpenCarrierKernel {
                 input_tokens: result.total_usage.input_tokens,
                 output_tokens: result.total_usage.output_tokens,
                 tool_calls: result.iterations.saturating_sub(1),
-                tenant_id: None,
+                tenant_id: String::new(),
             });
 
         Ok(result)
@@ -2718,7 +2718,7 @@ impl OpenCarrierKernel {
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
-                tenant_id: None,
+                tenant_id: String::new(),
             });
 
         let config = CompactionConfig::default();
@@ -2803,7 +2803,7 @@ impl OpenCarrierKernel {
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
-                tenant_id: None,
+                tenant_id: String::new(),
             });
 
         let system_prompt = &entry.manifest.model.system_prompt;
@@ -4420,6 +4420,7 @@ impl KernelHandle for OpenCarrierKernel {
         &self,
         manifest_toml: &str,
         parent_id: Option<&str>,
+        tenant_id: &str,
     ) -> Result<(String, String), String> {
         // Verify manifest integrity if a signed manifest hash is present
         let content_hash = opencarrier_types::manifest_signing::hash_manifest(manifest_toml);
@@ -4430,7 +4431,7 @@ impl KernelHandle for OpenCarrierKernel {
         let name = manifest.name.clone();
         let parent = parent_id.and_then(|pid| pid.parse::<AgentId>().ok());
         let id = self
-            .spawn_agent_with_parent(manifest, parent, None, None)
+            .spawn_agent_with_parent(manifest, parent, None, tenant_id)
             .map_err(|e| format!("Spawn failed: {e}"))?;
         Ok((id.to_string(), name))
     }
@@ -4456,10 +4457,12 @@ impl KernelHandle for OpenCarrierKernel {
                 let caller_tid = caller_agent_id
                     .and_then(|cid| self.get_agent_tenant_id(cid));
                 let entry = if let Some(ref tid) = caller_tid {
-                    self.registry.find_by_name_and_tenant(agent_id, Some(tid))
+                    self.registry.find_by_name_and_tenant(agent_id, tid)
                 } else {
-                    self.registry.find_by_name_and_tenant(agent_id, None)
-                }.ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
+                    // No caller context — try a global name lookup as fallback
+                    self.registry.find_by_name(agent_id)
+                }
+                .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
                 (entry.id, entry)
             }
         };
@@ -4467,10 +4470,8 @@ impl KernelHandle for OpenCarrierKernel {
         // Tenant isolation: caller and target must share the same tenant
         if let Some(caller_id) = caller_agent_id {
             if let Some(caller_tid) = self.get_agent_tenant_id(caller_id) {
-                if let Some(ref target_tid) = target_entry.tenant_id {
-                    if caller_tid != *target_tid {
-                        return Err("Access denied: target agent belongs to another tenant".to_string());
-                    }
+                if caller_tid != target_entry.tenant_id {
+                    return Err("Access denied: target agent belongs to another tenant".to_string());
                 }
             }
         }
@@ -4497,11 +4498,8 @@ impl KernelHandle for OpenCarrierKernel {
         Ok(result.response)
     }
 
-    fn list_agents(&self, caller_tenant_id: Option<&str>) -> Vec<kernel_handle::AgentInfo> {
-        let agents = match caller_tenant_id {
-            Some(tid) => self.registry.list_by_tenant(tid),
-            None => self.registry.list(),
-        };
+    fn list_agents(&self, caller_tenant_id: &str) -> Vec<kernel_handle::AgentInfo> {
+        let agents = self.registry.list_by_tenant(caller_tenant_id);
         agents
             .into_iter()
             .map(|e| {
@@ -4548,12 +4546,9 @@ impl KernelHandle for OpenCarrierKernel {
             .map_err(|e| format!("Memory list failed: {e}"))
     }
 
-    fn find_agents(&self, query: &str, caller_tenant_id: Option<&str>) -> Vec<kernel_handle::AgentInfo> {
+    fn find_agents(&self, query: &str, caller_tenant_id: &str) -> Vec<kernel_handle::AgentInfo> {
         let q = query.to_lowercase();
-        let agents = match caller_tenant_id {
-            Some(tid) => self.registry.list_by_tenant(tid),
-            None => self.registry.list(),
-        };
+        let agents = self.registry.list_by_tenant(caller_tenant_id);
         agents
             .into_iter()
             .filter(|e| {
@@ -4599,23 +4594,23 @@ impl KernelHandle for OpenCarrierKernel {
             .map_err(|e| format!("Task post failed: {e}"))
     }
 
-    async fn task_claim(&self, agent_id: &str, tenant_id: Option<&str>) -> Result<Option<serde_json::Value>, String> {
+    async fn task_claim(&self, agent_id: &str, tenant_id: &str) -> Result<Option<serde_json::Value>, String> {
         self.memory
-            .task_claim(agent_id, tenant_id)
+            .task_claim(agent_id, Some(tenant_id))
             .await
             .map_err(|e| format!("Task claim failed: {e}"))
     }
 
-    async fn task_complete(&self, task_id: &str, result: &str, tenant_id: Option<&str>) -> Result<(), String> {
+    async fn task_complete(&self, task_id: &str, result: &str, tenant_id: &str) -> Result<(), String> {
         self.memory
-            .task_complete(task_id, result, tenant_id)
+            .task_complete(task_id, result, Some(tenant_id))
             .await
             .map_err(|e| format!("Task complete failed: {e}"))
     }
 
-    async fn task_list(&self, status: Option<&str>, tenant_id: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+    async fn task_list(&self, status: Option<&str>, tenant_id: &str) -> Result<Vec<serde_json::Value>, String> {
         self.memory
-            .task_list(status, tenant_id)
+            .task_list(status, Some(tenant_id))
             .await
             .map_err(|e| format!("Task list failed: {e}"))
     }
@@ -4641,10 +4636,10 @@ impl KernelHandle for OpenCarrierKernel {
     async fn knowledge_add_entity(
         &self,
         entity: opencarrier_types::memory::Entity,
-        tenant_id: Option<&str>,
+        tenant_id: &str,
     ) -> Result<String, String> {
         self.memory
-            .add_entity(entity, tenant_id)
+            .add_entity(entity, Some(tenant_id))
             .await
             .map_err(|e| format!("Knowledge add entity failed: {e}"))
     }
@@ -4652,10 +4647,10 @@ impl KernelHandle for OpenCarrierKernel {
     async fn knowledge_add_relation(
         &self,
         relation: opencarrier_types::memory::Relation,
-        tenant_id: Option<&str>,
+        tenant_id: &str,
     ) -> Result<String, String> {
         self.memory
-            .add_relation(relation, tenant_id)
+            .add_relation(relation, Some(tenant_id))
             .await
             .map_err(|e| format!("Knowledge add relation failed: {e}"))
     }
@@ -4663,10 +4658,10 @@ impl KernelHandle for OpenCarrierKernel {
     async fn knowledge_query(
         &self,
         pattern: opencarrier_types::memory::GraphPattern,
-        tenant_id: Option<&str>,
+        tenant_id: &str,
     ) -> Result<Vec<opencarrier_types::memory::GraphMatch>, String> {
         self.memory
-            .query_graph(pattern, tenant_id)
+            .query_graph(pattern, Some(tenant_id))
             .await
             .map_err(|e| format!("Knowledge query failed: {e}"))
     }
@@ -4714,7 +4709,7 @@ impl KernelHandle for OpenCarrierKernel {
             created_at: chrono::Utc::now(),
             next_run: None,
             last_run: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
 
         let id = self
@@ -4792,6 +4787,7 @@ impl KernelHandle for OpenCarrierKernel {
         manifest_toml: &str,
         parent_id: Option<&str>,
         parent_caps: &[opencarrier_types::capability::Capability],
+        tenant_id: &str,
     ) -> Result<(String, String), String> {
         // Parse the child manifest to extract its capabilities
         let child_manifest: AgentManifest =
@@ -4809,7 +4805,7 @@ impl KernelHandle for OpenCarrierKernel {
         );
 
         // Delegate to the normal spawn path (use trait method via KernelHandle::)
-        KernelHandle::spawn_agent(self, manifest_toml, parent_id).await
+        KernelHandle::spawn_agent(self, manifest_toml, parent_id, tenant_id).await
     }
 
     fn resolve_agent_workspace(&self, agent_name: &str) -> Option<String> {
@@ -4819,7 +4815,7 @@ impl KernelHandle for OpenCarrierKernel {
             .map(|p| p.to_string_lossy().to_string())
     }
 
-    fn resolve_agent_workspace_in_tenant(&self, agent_name: &str, tenant_id: Option<&str>) -> Option<String> {
+    fn resolve_agent_workspace_in_tenant(&self, agent_name: &str, tenant_id: &str) -> Option<String> {
         self.registry
             .find_by_name_and_tenant(agent_name, tenant_id)
             .and_then(|entry| entry.manifest.workspace.clone())
@@ -4828,18 +4824,18 @@ impl KernelHandle for OpenCarrierKernel {
 
     fn get_agent_tenant_id(&self, agent_id: &str) -> Option<String> {
         let aid: opencarrier_types::agent::AgentId = agent_id.parse().ok()?;
-        self.registry.get(aid).and_then(|entry| entry.tenant_id.clone())
+        self.registry.get(aid).map(|entry| entry.tenant_id.clone())
     }
 
-    fn set_agent_tenant(&self, agent_id: &str, tenant_id: Option<&str>) -> Result<(), String> {
+    fn set_agent_tenant(&self, agent_id: &str, tenant_id: &str) -> Result<(), String> {
         let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
         self.registry.get(aid).ok_or_else(|| "Agent not found".to_string())?;
-        self.registry.set_tenant_id(aid, tenant_id.map(|s| s.to_string()));
+        self.registry.set_tenant_id(aid, tenant_id.to_string());
         Ok(())
     }
 
     fn get_agent_tenant_id_from_name(&self, agent_name: &str) -> Option<String> {
-        self.registry.find_by_name(agent_name).and_then(|entry| entry.tenant_id.clone())
+        self.registry.find_by_name(agent_name).map(|entry| entry.tenant_id.clone())
     }
 
     fn refresh_tools(&self, agent_id_str: &str) -> Option<Vec<opencarrier_types::tool::ToolDefinition>> {
@@ -4852,7 +4848,7 @@ impl KernelHandle for OpenCarrierKernel {
         }
     }
 
-    async fn clone_install(&self, name: &str, agx_data: &[u8], tenant_id: Option<&str>) -> Result<(String, String), String> {
+    async fn clone_install(&self, name: &str, agx_data: &[u8], tenant_id: &str) -> Result<(String, String), String> {
         use opencarrier_clone::{load_agx, install_clone_to_workspace, convert_to_manifest};
 
         // Validate name: only lowercase alphanumeric and hyphens
@@ -4912,12 +4908,11 @@ impl KernelHandle for OpenCarrierKernel {
 
         // Spawn agent
         let agent_name = manifest.name.clone();
-        let id = self.spawn_agent(manifest).map_err(|e| format!("Spawn failed: {e}"))?;
+        let id = self.spawn_agent(manifest, tenant_id).map_err(|e| format!("Spawn failed: {e}"))?;
 
-        // Assign tenant ownership if specified
-        if let Some(tid) = tenant_id {
-            self.registry.set_tenant_id(id, Some(tid.to_string()));
-        }
+        // Ensure tenant ownership is set (spawn_agent_with_parent already sets it,
+        // but be explicit for clone_install)
+        self.registry.set_tenant_id(id, tenant_id.to_string());
 
         // Resolve plugin dependencies
         if !clone_data.plugins.is_empty() {
@@ -5311,7 +5306,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         registry.register(entry).unwrap();
 
@@ -5349,7 +5344,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         registry.register(e1).unwrap();
 
@@ -5373,7 +5368,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: None,
+            tenant_id: String::new(),
         };
         registry.register(e2).unwrap();
 

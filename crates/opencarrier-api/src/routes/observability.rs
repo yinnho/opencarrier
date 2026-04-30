@@ -357,7 +357,7 @@ pub async fn usage_stats(
     let agents_filtered: Vec<_> = if ctx.is_admin() {
         all_agents
     } else {
-        all_agents.into_iter().filter(|e| can_access(&ctx, e.tenant_id.as_deref())).collect()
+        all_agents.into_iter().filter(|e| can_access(&ctx, &e.tenant_id)).collect()
     };
     let agents: Vec<serde_json::Value> = agents_filtered
         .iter()

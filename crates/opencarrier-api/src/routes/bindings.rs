@@ -24,12 +24,12 @@ pub async fn list_bindings(
             // Check if the binding's agent belongs to this tenant
             if let Ok(uuid) = b.agent.parse::<uuid::Uuid>() {
                 if let Some(entry) = state.kernel.registry.get(opencarrier_types::agent::AgentId(uuid)) {
-                    return can_access(&ctx, entry.tenant_id.as_deref());
+                    return can_access(&ctx, entry.tenant_id.as_str());
                 }
             }
             // Name lookup scoped to tenant
             ctx.tenant_id.as_ref().map(|tid| {
-                state.kernel.registry.find_by_name_and_tenant(&b.agent, Some(tid.as_str())).is_some()
+                state.kernel.registry.find_by_name_and_tenant(&b.agent, tid.as_str()).is_some()
             }).unwrap_or(false)
         }).collect()
     };
@@ -49,11 +49,11 @@ pub async fn add_binding(
     // Tenant check: verify the binding's agent belongs to the caller
     let agent_owned = if let Ok(uuid) = binding.agent.parse::<uuid::Uuid>() {
         state.kernel.registry.get(opencarrier_types::agent::AgentId(uuid))
-            .map(|e| can_access(&ctx, e.tenant_id.as_deref()))
+            .map(|e| can_access(&ctx, &e.tenant_id))
             .unwrap_or(false)
     } else {
         ctx.tenant_id.as_ref().map(|tid| {
-            state.kernel.registry.find_by_name_and_tenant(&binding.agent, Some(tid.as_str())).is_some()
+            state.kernel.registry.find_by_name_and_tenant(&binding.agent, tid.as_str()).is_some()
         }).unwrap_or(false)
     };
     if !agent_owned && !ctx.is_admin() {
@@ -81,11 +81,11 @@ pub async fn remove_binding(
     if let Some(binding) = bindings.get(index) {
         let agent_owned = if let Ok(uuid) = binding.agent.parse::<uuid::Uuid>() {
             state.kernel.registry.get(opencarrier_types::agent::AgentId(uuid))
-                .map(|e| can_access(&ctx, e.tenant_id.as_deref()))
+                .map(|e| can_access(&ctx, &e.tenant_id))
                 .unwrap_or(false)
         } else {
             ctx.tenant_id.as_ref().map(|tid| {
-                state.kernel.registry.find_by_name_and_tenant(&binding.agent, Some(tid.as_str())).is_some()
+                state.kernel.registry.find_by_name_and_tenant(&binding.agent, tid.as_str()).is_some()
             }).unwrap_or(false)
         };
         if !agent_owned && !ctx.is_admin() {
