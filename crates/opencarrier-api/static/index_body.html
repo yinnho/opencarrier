@@ -800,58 +800,6 @@
           </div>
 
 
-          <!-- Spawn Wizard (2 steps) -->
-          <template x-if="showSpawnModal">
-            <div class="modal-overlay" @click.self="showSpawnModal = false" @keydown.escape.window="showSpawnModal = false">
-              <div class="modal" style="max-width:520px">
-                <div class="modal-header">
-                  <h3 x-text="spawnStep === 1 ? '创建分身' : '系统提示词'"></h3>
-                  <button class="modal-close" @click="showSpawnModal = false">&times;</button>
-                </div>
-
-                <!-- Step 1: Name + Model -->
-                <div x-show="spawnStep === 1">
-                  <div class="form-group">
-                    <label>分身名称</label>
-                    <input class="form-input" x-model="spawnForm.name" placeholder="my-agent" @keydown.enter="if(!$event.isComposing && $event.keyCode !== 229) nextStep()">
-                  </div>
-                  <div class="form-group">
-                    <label>提供商</label>
-                    <select class="form-select" x-model="spawnForm.provider">
-                      <option value="anthropic">Anthropic</option><option value="openai">OpenAI</option>
-                      <option value="groq">Groq</option><option value="ollama">Ollama</option>
-                      <option value="google">Google</option><option value="mistral">Mistral</option>
-                      <option value="xai">xAI</option><option value="deepseek">DeepSeek</option>
-                      <option value="cerebras">Cerebras</option><option value="sambanova">SambaNova</option>
-                      <option value="together">Together</option>
-                    </select>
-                  </div>
-                  <div class="form-group">
-                    <label>模型</label>
-                    <input class="form-input" x-model="spawnForm.model" placeholder="e.g. llama-3.3-70b-versatile">
-                  </div>
-                </div>
-
-                <!-- Step 2: System Prompt -->
-                <div x-show="spawnStep === 2">
-                  <div class="form-group">
-                    <label>系统提示词</label>
-                    <textarea class="form-textarea" x-model="spawnForm.systemPrompt" style="height:200px" placeholder="You are a helpful assistant."></textarea>
-                  </div>
-                </div>
-
-                <!-- Navigation -->
-                <div class="flex justify-between mt-4">
-                  <button class="btn btn-ghost" x-show="spawnStep > 1" @click="prevStep()">返回</button>
-                  <div x-show="spawnStep <= 1"></div>
-                  <button class="btn btn-primary" x-show="spawnStep < 2" @click="nextStep()">下一步</button>
-                  <button class="btn btn-primary" x-show="spawnStep === 2" @click="spawnAgent()" :disabled="spawning">
-                    <span x-show="!spawning">创建</span><span x-show="spawning">创建中...</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </template>
           <!-- Hub Install Modal -->
           <template x-if="showHubModal">
             <div class="modal-overlay" @click.self="closeHubModal()" @keydown.escape.window="closeHubModal()">
@@ -908,7 +856,7 @@
 
                 <!-- Footer -->
                 <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-                  <button class="btn btn-ghost btn-sm" @click="closeHubModal(); openSpawnWizard()" style="font-size:11px">Create empty agent manually</button>
+                  <span></span>
                   <button class="btn btn-ghost btn-sm" @click="loadHubTemplates()" style="font-size:11px">Refresh</button>
                 </div>
               </div>
