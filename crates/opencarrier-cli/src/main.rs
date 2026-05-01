@@ -701,6 +701,25 @@ pub(crate) fn find_daemon() -> Option<String> {
     }
 }
 
+/// Async version of find_daemon — safe to call inside tokio runtime.
+async fn find_daemon_async() -> Option<String> {
+    let home_dir = cli_opencarrier_home();
+    let info = read_daemon_info(&home_dir)?;
+    let addr = info.listen_addr.replace("0.0.0.0", "127.0.0.1");
+    let url = format!("http://{addr}/api/health");
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(1))
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    if resp.status().is_success() {
+        Some(format!("http://{addr}"))
+    } else {
+        None
+    }
+}
+
 /// Build an HTTP client for daemon calls.
 ///
 /// When api_key is configured in config.toml, the client automatically
@@ -4165,49 +4184,79 @@ async fn cmd_plugin(cmd: PluginCommands) {
     let config = opencarrier_kernel::config::load_config(None::<&std::path::Path>);
 
     let plugins_dir = match &config.plugins_dir {
-        Some(dir) => dir.clone(),
+        Some(dir) => {
+            if dir.is_absolute() {
+                dir.clone()
+            } else {
+                config.home_dir.join(dir)
+            }
+        }
         None => config.home_dir.join("plugins"),
     };
 
     match cmd {
         PluginCommands::List { json } => {
-            // Try daemon first
-            if let Some(base_url) = find_daemon() {
-                let client = daemon_client();
-                let resp = client.get(format!("{base_url}/api/plugins")).send();
-                let body = daemon_json(resp);
-                if json {
-                    print_json(&body);
-                } else {
-                    let plugins = body["plugins"].as_array();
-                    match plugins {
-                        Some(list) if !list.is_empty() => {
-                            println!("{}", "已安装插件:".bold());
-                            println!();
-                            for p in list {
-                                let name = p["name"].as_str().unwrap_or("?");
-                                let version = p["version"].as_str().unwrap_or("?");
-                                let tools = p["tools"].as_array().map(|a| a.len()).unwrap_or(0);
-                                let loaded = p["loaded"].as_bool().unwrap_or(false);
-                                println!(
-                                    "  {} {} {} ({} tools)",
-                                    if loaded {
-                                        "●".green()
-                                    } else {
-                                        "○".yellow()
-                                    },
-                                    name.bold(),
-                                    version.dimmed(),
-                                    tools
-                                );
-                            }
-                            println!();
-                            println!("共 {} 个插件", list.len());
-                        }
-                        _ => println!("没有已安装的插件"),
+            // Try daemon first via async HTTP, fall back to directory scan
+            let mut shown = false;
+            if let Some(base_url) = find_daemon_async().await {
+                let mut client_builder = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(5));
+                if let Some(key) = read_api_key() {
+                    let mut headers = reqwest::header::HeaderMap::new();
+                    if let Ok(val) =
+                        reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+                    {
+                        headers.insert(reqwest::header::AUTHORIZATION, val);
                     }
+                    client_builder = client_builder.default_headers(headers);
                 }
-            } else {
+                let client = client_builder.build().unwrap_or_default();
+
+                let resp = client.get(format!("{base_url}/api/plugins")).send().await;
+                let body = match resp {
+                    Ok(r) if r.status().is_success() => {
+                        r.json::<serde_json::Value>().await.unwrap_or_default()
+                    }
+                    _ => serde_json::Value::Null,
+                };
+
+                if !body.is_null() && body["plugins"].is_array() {
+                    if json {
+                        print_json(&body);
+                    } else {
+                        let plugins = body["plugins"].as_array();
+                        match plugins {
+                            Some(list) if !list.is_empty() => {
+                                println!("{}", "已安装插件:".bold());
+                                println!();
+                                for p in list {
+                                    let name = p["name"].as_str().unwrap_or("?");
+                                    let version = p["version"].as_str().unwrap_or("?");
+                                    let tools = p["tools"].as_array().map(|a| a.len()).unwrap_or(0);
+                                    let loaded = p["loaded"].as_bool().unwrap_or(false);
+                                    println!(
+                                        "  {} {} {} ({} tools)",
+                                        if loaded {
+                                            "●".green()
+                                        } else {
+                                            "○".yellow()
+                                        },
+                                        name.bold(),
+                                        version.dimmed(),
+                                        tools
+                                    );
+                                }
+                                println!();
+                                println!("共 {} 个插件", list.len());
+                            }
+                            _ => println!("没有已安装的插件"),
+                        }
+                    }
+                    shown = true;
+                }
+            }
+
+            if !shown {
                 // Fallback: scan plugins_dir directly
                 if !plugins_dir.is_dir() {
                     println!("没有已安装的插件 (目录不存在: {})", plugins_dir.display());
