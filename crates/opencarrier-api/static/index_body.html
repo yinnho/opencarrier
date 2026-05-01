@@ -203,32 +203,33 @@
         <div class="modal-overlay" x-show="showCreateModal" @click.self="showCreateModal = false; smartbotPolling = false; if(smartbotPollTimer){clearInterval(smartbotPollTimer);smartbotPollTimer=null;}">
           <div class="modal-content" style="max-width:520px">
             <div class="modal-header">
-              <h3 x-text="createStep === 1 ? '创建机器人' : platformLabel(createPlatform) + ' 机器人'"></h3>
+              <h3 x-text="createStep === 1 ? '创建机器人' : (createPlugin ? createPlugin.displayName + ' 机器人' : '创建机器人')"></h3>
               <button class="btn btn-ghost btn-sm" @click="showCreateModal = false; smartbotPolling = false; if(smartbotPollTimer){clearInterval(smartbotPollTimer);smartbotPollTimer=null;}">&times;</button>
             </div>
             <div class="modal-body">
-              <!-- Step 1: Platform selection -->
-              <div x-show="createStep === 1" style="display:flex;gap:16px;flex-direction:column">
-                <p style="font-size:14px;opacity:0.7;margin-bottom:8px">选择平台</p>
-                <button class="btn btn-lg" style="justify-content:flex-start;padding:16px 20px" @click="selectPlatform('wecom')">
-                  <span x-html="platformIcon('wecom')" style="margin-right:12px"></span>
-                  企业微信
-                  <span style="margin-left:auto;font-size:12px;opacity:0.5">SmartBot / 应用 / 客服</span>
-                </button>
-                <button class="btn btn-lg" style="justify-content:flex-start;padding:16px 20px" @click="selectPlatform('feishu')">
-                  <span x-html="platformIcon('feishu')" style="margin-right:12px"></span>
-                  飞书
-                </button>
-                <button class="btn btn-lg" style="justify-content:flex-start;padding:16px 20px;opacity:0.5" disabled>
-                  <span x-html="platformIcon('dingtalk')" style="margin-right:12px"></span>
-                  钉钉
-                  <span style="margin-left:auto;font-size:12px">即将支持</span>
-                </button>
+              <!-- Step 1: Dynamic plugin selection -->
+              <div x-show="createStep === 1" style="display:flex;gap:12px;flex-direction:column">
+                <p style="font-size:14px;opacity:0.7;margin-bottom:4px">选择渠道</p>
+                <template x-for="plugin in channelPlugins" :key="plugin.name">
+                  <button class="btn btn-lg" style="justify-content:flex-start;padding:16px 20px;position:relative"
+                    @click="selectPlugin(plugin)"
+                    :disabled="installState[plugin.name] === 'installing'">
+                    <span x-html="platformIcon(plugin.channels && plugin.channels[0] || '')" style="margin-right:12px"></span>
+                    <span x-text="plugin.displayName"></span>
+                    <span x-show="!plugin.installed" style="margin-left:auto;font-size:12px;opacity:0.7;color:var(--primary)">点击安装</span>
+                    <span x-show="plugin.installed" style="margin-left:auto;font-size:12px;opacity:0.5">已安装</span>
+                    <span x-show="installState[plugin.name] === 'installing'" style="margin-left:auto;font-size:12px;color:var(--primary)">安装中...</span>
+                  </button>
+                </template>
+                <div x-show="channelPlugins.length === 0" style="text-align:center;padding:24px;opacity:0.5">
+                  <p>没有可用的渠道插件</p>
+                  <p style="font-size:12px;margin-top:4px">请先安装渠道插件（企业微信、飞书、微信等）</p>
+                </div>
               </div>
 
               <!-- Step 2: WeCom form -->
-              <div x-show="createStep === 2 && createPlatform === 'wecom'">
-                <button class="btn btn-ghost btn-sm" @click="backToStep1()" style="margin-bottom:12px">&larr; 返回选择平台</button>
+              <div x-show="createStep === 2 && botForm.platform === 'wecom'">
+                <button class="btn btn-ghost btn-sm" @click="backToStep1()" style="margin-bottom:12px">&larr; 返回选择渠道</button>
                 <div style="margin-bottom:16px">
                   <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">机器人名称</label>
                   <input class="input" x-model="botForm.name" placeholder="例如: my-bot" style="width:100%">
@@ -288,8 +289,8 @@
               </div>
 
               <!-- Step 2: Feishu form -->
-              <div x-show="createStep === 2 && createPlatform === 'feishu'">
-                <button class="btn btn-ghost btn-sm" @click="backToStep1()" style="margin-bottom:12px">&larr; 返回选择平台</button>
+              <div x-show="createStep === 2 && botForm.platform === 'feishu'">
+                <button class="btn btn-ghost btn-sm" @click="backToStep1()" style="margin-bottom:12px">&larr; 返回选择渠道</button>
                 <div style="margin-bottom:16px">
                   <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">机器人名称</label>
                   <input class="input" x-model="botForm.name" placeholder="例如: feishu-bot" style="width:100%">
@@ -308,6 +309,28 @@
                     <option value="feishu">飞书</option>
                     <option value="lark">Lark</option>
                   </select>
+                </div>
+                <div style="margin-bottom:16px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">绑定分身（可选）</label>
+                  <select class="input" x-model="botForm.bind_agent" style="width:100%">
+                    <option value="">不绑定</option>
+                    <template x-for="a in agents" :key="a.id">
+                      <option :value="a.name" x-text="a.name"></option>
+                    </template>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Step 2: WeChat (iLink) form — QR scan at runtime, minimal config -->
+              <div x-show="createStep === 2 && botForm.platform === 'weixin'">
+                <button class="btn btn-ghost btn-sm" @click="backToStep1()" style="margin-bottom:12px">&larr; 返回选择渠道</button>
+                <div style="margin-bottom:16px">
+                  <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">机器人名称</label>
+                  <input class="input" x-model="botForm.name" placeholder="例如: my-wechat" style="width:100%">
+                </div>
+                <div style="background:var(--midground);border-radius:8px;padding:16px;margin-bottom:16px">
+                  <p style="font-size:13px;font-weight:600;margin-bottom:8px">个人微信授权</p>
+                  <p style="font-size:12px;opacity:0.7">创建后，启动 daemon 时会显示二维码，用微信扫码即可授权登录。无需填写其他参数。</p>
                 </div>
                 <div style="margin-bottom:16px">
                   <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">绑定分身（可选）</label>
