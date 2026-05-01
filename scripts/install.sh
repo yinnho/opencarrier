@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-REPO="RightNow-AI/opencarrier"
+REPO="yinnho/opencarrier"
 INSTALL_DIR="${OPENCARRIER_INSTALL_DIR:-$HOME/.opencarrier/bin}"
 
 detect_platform() {
@@ -64,6 +64,8 @@ install() {
 
     URL="https://github.com/$REPO/releases/download/$VERSION/opencarrier-$PLATFORM.tar.gz"
     CHECKSUM_URL="$URL.sha256"
+    HUB_DL_URL="https://hub.aginx.net/api/releases/$VERSION/download/opencarrier-$PLATFORM.tar.gz"
+    HUB_CHECKSUM_URL="https://hub.aginx.net/api/releases/$VERSION/download/opencarrier-$PLATFORM.tar.gz.sha256"
 
     echo "  Installing OpenCarrier $VERSION for $PLATFORM..."
     mkdir -p "$INSTALL_DIR"
@@ -76,8 +78,16 @@ install() {
     cleanup() { rm -rf "$TMPDIR"; }
     trap cleanup EXIT
 
-    if ! curl -fsSL "$URL" -o "$ARCHIVE" 2>/dev/null; then
-        echo "  Download failed. The release may not exist for your platform."
+    # Try GitHub first, then Hub mirror (for China / no-GitHub access)
+    DL_FROM=""
+    if curl -fsSL --connect-timeout 5 "$URL" -o "$ARCHIVE" 2>/dev/null; then
+        DL_FROM="github"
+    elif curl -fsSL --connect-timeout 10 "$HUB_DL_URL" -o "$ARCHIVE" 2>/dev/null; then
+        DL_FROM="hub"
+        CHECKSUM_URL="$HUB_CHECKSUM_URL"
+        echo "  Downloaded from Hub mirror (hub.aginx.net)."
+    else
+        echo "  Download failed from both GitHub and Hub."
         echo "  Install from source instead:"
         echo "    cargo install --git https://github.com/$REPO opencarrier-cli"
         exit 1

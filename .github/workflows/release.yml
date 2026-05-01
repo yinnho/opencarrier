@@ -107,7 +107,7 @@ jobs:
           releaseBody: |
             ## What's New
 
-            See the [CHANGELOG](https://github.com/RightNow-AI/opencarrier/blob/main/CHANGELOG.md) for full details.
+            See the [CHANGELOG](https://github.com/yinnho/opencarrier/blob/main/CHANGELOG.md) for full details.
 
             ## Installation
 
@@ -200,4 +200,18 @@ jobs:
           files: opencarrier-${{ matrix.target }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to Hub (mirror for China)
+        if: matrix.archive == 'tar.gz'
+        env:
+          HUB_URL: ${{ secrets.HUB_URL }}
+          HUB_TOKEN: ${{ secrets.HUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          FILE="opencarrier-${{ matrix.target }}.tar.gz"
+          PLATFORM="${{ matrix.target }}"
+          curl -X POST "${HUB_URL}/api/releases/binary?platform=${PLATFORM}&version=${VERSION}" \
+            -H "Authorization: Bearer ${HUB_TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@${FILE}" || echo "Hub upload failed (non-blocking)"
 

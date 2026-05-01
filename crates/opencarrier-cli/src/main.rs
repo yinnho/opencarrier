@@ -67,7 +67,7 @@ fn print_json(value: &serde_json::Value) {
 
 /// Default config.toml content written to ~/.opencarrier/config.toml when missing.
 const DEFAULT_CONFIG_TOML: &str = r#"# OpenCarrier Agent OS configuration
-# See https://github.com/RightNow-AI/opencarrier for documentation
+# See https://github.com/yinnho/opencarrier for documentation
 
 # For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
 api_listen = "127.0.0.1:4200"

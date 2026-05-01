@@ -2526,7 +2526,7 @@ async fn tool_web_search_legacy(input: &serde_json::Value) -> Result<String, Str
         .query(&[("q", query)])
         .header(
             "User-Agent",
-            "Mozilla/5.0 (compatible; OpenCarrierAgent/0.1)",
+            format!("Mozilla/5.0 (compatible; OpenCarrierAgent/{})", env!("CARGO_PKG_VERSION")),
         )
         .send()
         .await
@@ -3628,7 +3628,7 @@ async fn tool_location_get() -> Result<String, String> {
     // Use ip-api.com (free, no API key, JSON response)
     let resp = client
         .get("https://ip-api.com/json/?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,query")
-        .header("User-Agent", "OpenCarrier/0.1")
+        .header("User-Agent", format!("OpenCarrier/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .await
         .map_err(|e| format!("Location request failed: {e}"))?;

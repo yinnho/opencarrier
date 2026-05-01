@@ -16,7 +16,15 @@
 
 ## Installation
 
-### Linux / macOS
+### 一键安装（推荐）
+
+```bash
+curl -sSf https://opencarrier.sh | sh
+```
+
+国内用户自动 fallback 到 hub.aginx.net 镜像，无需访问 GitHub。
+
+### 手动下载
 
 从 [GitHub Releases](https://github.com/yinnho/opencarrier/releases) 下载对应平台的二进制：
 
@@ -48,35 +56,65 @@ cp target/release/opencarrier /usr/local/bin/
 ## Quick Start
 
 ```bash
-# 1. 初始化配置
+# 1. 初始化（自动注册 Hub，生成配置和登录凭据）
 opencarrier init
 
-# 2. 编辑配置 — 填入 LLM API key
-vim ~/.opencarrier/config.toml
-
-# 3. 启动守护进程
+# 2. 启动守护进程（首次启动自动从 Hub 拉取 brain.json）
 opencarrier start
 
-# 4. 打开 Dashboard
+# 3. 打开 Dashboard
 open http://localhost:4200
 ```
 
-### 配置 LLM
+### 配置 Brain（LLM 路由）
 
-编辑 `~/.opencarrier/config.toml`：
+OpenCarrier 使用 `brain.json` 进行 LLM 智能路由，**不是** config.toml。
 
-```toml
-[default_model]
-provider = "anthropic"          # anthropic / openai / zhipu / deepseek / ollama / ...
-model = "claude-sonnet-4-20250514"
-api_key_env = "ANTHROPIC_API_KEY"  # 从环境变量读取 API key
+`opencarrier init` 首次启动时会自动从 Hub 拉取 `brain.json`。如需自定义，编辑 `~/.opencarrier/brain.json`：
 
-# 或直接用兼容 OpenAI 的服务
-# provider = "openai"
-# model = "gpt-4o"
-# base_url = "https://api.openai.com/v1"
-# api_key_env = "OPENAI_API_KEY"
+```json
+{
+  "providers": {
+    "zhipu": { "api_key_env": "ZHIPU_API_KEY" },
+    "deepseek": { "api_key_env": "DEEPSEEK_API_KEY" },
+    "ollama": {}
+  },
+  "endpoints": {
+    "zhipu_chat": {
+      "provider": "zhipu",
+      "model": "glm-4-flash",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "format": "openai"
+    },
+    "deepseek_chat": {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "base_url": "https://api.deepseek.com/v1",
+      "format": "openai"
+    },
+    "ollama_local": {
+      "provider": "ollama",
+      "model": "llama3:latest",
+      "base_url": "http://localhost:11434/v1"
+    }
+  },
+  "modalities": {
+    "chat": { "primary": "zhipu_chat", "fallbacks": ["deepseek_chat"] },
+    "fast": { "primary": "ollama_local" }
+  }
+}
 ```
+
+三层路由结构：
+- **Provider** — 身份 + 凭据（API key 从环境变量读取）
+- **Endpoint** — 完整调用单元（provider + model + base_url + format）
+- **Modality** — 任务类型 → endpoint 映射（chat/fast/vision...）支持 fallback 链
+
+支持的 format: `openai`（兼容 OpenAI/Groq/DeepSeek/Ollama 等）、`anthropic`、`gemini`
+
+修改 `brain.json` 后**即时生效**，无需重启（热重载）。
+
+> **提示**: API key 通过环境变量设置（如 `export ZHIPU_API_KEY=xxx`），也可写入 `~/.opencarrier/.env`。
 
 ### 安装插件
 

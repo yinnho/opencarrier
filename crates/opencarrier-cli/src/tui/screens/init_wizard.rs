@@ -909,7 +909,7 @@ complex_threshold = 500
 
     let config = format!(
         r#"# OpenCarrier Agent OS configuration
-# See https://github.com/RightNow-AI/opencarrier for documentation
+# See https://github.com/yinnho/opencarrier for documentation
 
 api_listen = "127.0.0.1:4200"
 
