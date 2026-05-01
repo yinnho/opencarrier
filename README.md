@@ -133,13 +133,32 @@ opencarrier-types          共享类型 (Agent, Capability, Config, Message, Too
 opencarrier-memory         SQLite 记忆层 (KV / Semantic / Knowledge Graph / Session)
 opencarrier-runtime        Agent loop + 3 LLM drivers + 23 tools + MCP + A2A
 opencarrier-kernel         内核: 组装所有子系统, RBAC, 调度, 触发器
-opencarrier-api            REST/WS/SSE API (76 endpoints) + Dashboard
+opencarrier-api            REST/WS/SSE API + Dashboard
 opencarrier-cli            CLI (init/start/agent/chat/config/mcp)
 opencarrier-lifecycle      分身生命周期: 进化, 编译, 健康, 评估, 版本
 opencarrier-clone          分身管理: Hub 下载, .agx 加载, workspace 安装
-opencarrier-skills         60 bundled skills
-opencarrier-plugin-sdk     Plugin SDK for external tool integrations
+opencarrier-skills         Bundled skills
+opencarrier-plugin-sdk     Plugin SDK (crates.io) for external integrations
 ```
+
+---
+
+## 插件系统
+
+消息渠道通过独立插件实现，插件通过 Plugin SDK（[crates.io](https://crates.io/crates/opencarrier-plugin-sdk)）开发，动态加载：
+
+| 插件 | 说明 |
+|------|------|
+| wecom | 企业微信 |
+| weixin | 微信公众号 |
+| feishu | 飞书 |
+| bilibili | B站 |
+| xiaohongshu | 小红书 |
+| zhihu | 知乎 |
+| twitter | Twitter/X |
+| reddit | Reddit |
+
+插件仓库: [opencarrier-plugins](https://github.com/yinnho/opencarrier-plugins)
 
 ---
 
@@ -188,31 +207,6 @@ cargo build --workspace --lib          # 编译
 cargo test --workspace                 # 1493 tests
 cargo clippy --workspace --all-targets -- -D warnings  # 0 warnings
 ```
-
----
-
-## Channel Adapters
-
-40 个消息平台适配器：
-
-**Core**: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email
-**Enterprise**: Teams, Mattermost, Google Chat, Webex, Feishu, Zulip, DingTalk
-**Social**: LINE, Viber, Messenger, Mastodon, Bluesky, Reddit, LinkedIn, Twitch
-**Community**: IRC, XMPP, Guilded, Revolt, Keybase, Discourse, Gitter
-**Privacy**: Threema, Nostr, Mumble, Nextcloud, Rocket.Chat, Ntfy, Gotify
-
----
-
-## Documentation
-
-| 文档 | 内容 |
-|------|------|
-| [architecture.md](docs/architecture.md) | 技术架构: crate 结构、内核启动、agent 生命周期 |
-| [ARCHITECTURE-PRINCIPLES.md](docs/ARCHITECTURE-PRINCIPLES.md) | 架构原则: 五层系统、分身结构、动态组装 |
-| [getting-started.md](docs/getting-started.md) | 快速开始 |
-| [configuration.md](docs/configuration.md) | 配置参考 |
-| [api-reference.md](docs/api-reference.md) | API 文档 |
-| [security.md](docs/security.md) | 安全体系 |
 
 ---
 
