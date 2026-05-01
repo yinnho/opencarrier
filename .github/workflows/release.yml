@@ -195,7 +195,7 @@ jobs:
           $hash = (Get-FileHash "opencarrier-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  opencarrier-${{ matrix.target }}.zip" | Out-File -Encoding ASCII "opencarrier-${{ matrix.target }}.zip.sha256"
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: opencarrier-${{ matrix.target }}.*
         env:
