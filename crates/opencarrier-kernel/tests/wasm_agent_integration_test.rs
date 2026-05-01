@@ -128,7 +128,11 @@ fn test_config(tmp: &tempfile::TempDir) -> KernelConfig {
         },
         "default_modality": "chat"
     });
-    std::fs::write(tmp.path().join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap()).unwrap();
+    std::fs::write(
+        tmp.path().join("brain.json"),
+        serde_json::to_string_pretty(&brain_json).unwrap(),
+    )
+    .unwrap();
 
     KernelConfig {
         home_dir: tmp.path().to_path_buf(),

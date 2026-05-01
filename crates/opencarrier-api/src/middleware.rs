@@ -112,9 +112,9 @@ pub async fn auth(
     let api_key_trimmed = auth_state.api_key.trim().to_string();
     if api_key_trimmed.is_empty() && !auth_state.auth_enabled {
         // No auth → admin context (backward compatible)
-        request.extensions_mut().insert(
-            opencarrier_types::tenant::TenantContext::admin(),
-        );
+        request
+            .extensions_mut()
+            .insert(opencarrier_types::tenant::TenantContext::admin());
         return next.run(request).await;
     }
     let api_key = api_key_trimmed.as_str();
@@ -161,16 +161,18 @@ pub async fn auth(
     // Accept if either auth method matches
     if header_auth == Some(true) || query_auth == Some(true) {
         // Bearer/API-key auth → admin context (backward compatible)
-        request.extensions_mut().insert(
-            opencarrier_types::tenant::TenantContext::admin(),
-        );
+        request
+            .extensions_mut()
+            .insert(opencarrier_types::tenant::TenantContext::admin());
         return next.run(request).await;
     }
 
     // Check session cookie (dashboard login sessions)
     if auth_state.auth_enabled {
         if let Some(token) = extract_session_cookie(&request) {
-            if let Some(info) = crate::session_auth::verify_session_token(&token, &auth_state.session_secret) {
+            if let Some(info) =
+                crate::session_auth::verify_session_token(&token, &auth_state.session_secret)
+            {
                 // Inject TenantContext from session token
                 let ctx = opencarrier_types::tenant::TenantContext {
                     tenant_id: info.tenant_id,

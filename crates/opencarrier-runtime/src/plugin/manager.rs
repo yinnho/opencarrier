@@ -8,10 +8,10 @@ use opencarrier_types::tool::ToolDefinition;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::kernel_handle::KernelHandle;
 use super::bridge::PluginBridgeManager;
 use super::loader::PluginLoader;
 use super::tool_dispatch::PluginToolDispatcher;
+use crate::kernel_handle::KernelHandle;
 
 // ---------------------------------------------------------------------------
 // Plugin manager
@@ -103,7 +103,11 @@ impl PluginManager {
             // Discover bots from <plugin-dir>/<uuid>/bot.toml
             let plugin_dir = &plugin.path;
             let bots = super::loader::PluginLoader::discover_bots(plugin_dir);
-            let channels: Vec<String> = plugin.channels.iter().map(|c| c.channel_type.clone()).collect();
+            let channels: Vec<String> = plugin
+                .channels
+                .iter()
+                .map(|c| c.channel_type.clone())
+                .collect();
 
             for (bot_uuid, bot_config) in &bots {
                 if let Some(ref agent_uuid) = bot_config.bind_agent {
@@ -118,11 +122,7 @@ impl PluginManager {
                     }
 
                     for ch in &channels {
-                        bridge.bind_channel(
-                            ch.clone(),
-                            bot_uuid.clone(),
-                            agent_uuid.clone(),
-                        );
+                        bridge.bind_channel(ch.clone(), bot_uuid.clone(), agent_uuid.clone());
                         info!(
                             channel = %ch,
                             bot = %bot_config.name,

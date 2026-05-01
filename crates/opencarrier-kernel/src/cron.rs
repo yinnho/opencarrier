@@ -223,9 +223,7 @@ impl CronScheduler {
     pub fn list_all_jobs_by_tenant(&self, tenant_id: &str) -> Vec<CronJob> {
         self.jobs
             .iter()
-            .filter(|r| {
-                r.value().job.tenant_id == tenant_id
-            })
+            .filter(|r| r.value().job.tenant_id == tenant_id)
             .map(|r| r.value().job.clone())
             .collect()
     }

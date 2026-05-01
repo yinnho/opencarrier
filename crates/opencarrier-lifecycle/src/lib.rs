@@ -10,9 +10,9 @@
 
 pub mod bloat;
 pub mod compile;
+pub mod evaluate;
 pub mod evolution;
 pub mod evolution_config;
-pub mod evaluate;
 pub mod feedback;
 pub mod health;
 pub mod parsers;

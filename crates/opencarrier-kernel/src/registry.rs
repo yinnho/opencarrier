@@ -40,7 +40,10 @@ impl AgentRegistry {
         for tag in &entry.tags {
             self.tag_index.entry(tag.clone()).or_default().push(id);
         }
-        self.tenant_index.entry(entry.tenant_id.clone()).or_default().push(id);
+        self.tenant_index
+            .entry(entry.tenant_id.clone())
+            .or_default()
+            .push(id);
         self.agents.insert(id, entry);
         Ok(())
     }
@@ -151,7 +154,10 @@ impl AgentRegistry {
                 ids.retain(|id| *id != agent_id);
             }
             // Add to new tenant index
-            self.tenant_index.entry(tenant_id).or_default().push(agent_id);
+            self.tenant_index
+                .entry(tenant_id)
+                .or_default()
+                .push(agent_id);
         }
     }
 
@@ -272,7 +278,9 @@ impl AgentRegistry {
 
     /// Update an agent's name (also updates the name index).
     pub fn update_name(&self, id: AgentId, new_name: String) -> OpenCarrierResult<()> {
-        let entry = self.agents.get(&id)
+        let entry = self
+            .agents
+            .get(&id)
             .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
         let old_name = entry.name.clone();
         let tenant_id = entry.tenant_id.clone();
@@ -423,15 +431,23 @@ mod tests {
     #[test]
     fn test_duplicate_name_same_tenant() {
         let registry = AgentRegistry::new();
-        registry.register(test_entry_with_tenant("dup", "t1")).unwrap();
-        assert!(registry.register(test_entry_with_tenant("dup", "t1")).is_err());
+        registry
+            .register(test_entry_with_tenant("dup", "t1"))
+            .unwrap();
+        assert!(registry
+            .register(test_entry_with_tenant("dup", "t1"))
+            .is_err());
     }
 
     #[test]
     fn test_same_name_different_tenant() {
         let registry = AgentRegistry::new();
-        registry.register(test_entry_with_tenant("helper", "t1")).unwrap();
-        registry.register(test_entry_with_tenant("helper", "t2")).unwrap();
+        registry
+            .register(test_entry_with_tenant("helper", "t1"))
+            .unwrap();
+        registry
+            .register(test_entry_with_tenant("helper", "t2"))
+            .unwrap();
         assert!(registry.find_by_name_and_tenant("helper", "t1").is_some());
         assert!(registry.find_by_name_and_tenant("helper", "t2").is_some());
     }

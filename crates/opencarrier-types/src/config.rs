@@ -1403,24 +1403,6 @@ mod tests {
         assert_eq!(config.language, "ar");
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     #[test]
     fn test_fallback_config_serde_roundtrip() {
         let fb = FallbackProviderConfig {
@@ -1460,9 +1442,6 @@ mod tests {
         assert_eq!(config.fallback_providers[0].provider, "ollama");
         assert_eq!(config.fallback_providers[1].provider, "groq");
     }
-
-
-
 
     #[test]
     fn test_clamp_bounds_zero_browser_timeout() {

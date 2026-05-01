@@ -412,7 +412,9 @@ impl State {
             None => return,
         };
 
-        let models = self.model_catalog.list_models()
+        let models = self
+            .model_catalog
+            .list_models()
             .iter()
             .filter(|m| m.provider == p.name)
             .collect::<Vec<_>>();
@@ -457,7 +459,9 @@ impl State {
             None => return,
         };
 
-        let models = self.model_catalog.list_models()
+        let models = self
+            .model_catalog
+            .list_models()
             .iter()
             .filter(|m| m.provider == p.name)
             .collect::<Vec<_>>();
@@ -495,7 +499,6 @@ impl State {
         self.routing_tier_list.select(Some(idx));
     }
 }
-
 
 // ── Entry point ────────────────────────────────────────────────────────────
 

@@ -89,15 +89,13 @@ tokio::task_local! {
 macro_rules! browser_dispatch {
     ($input:expr, $browser_ctx:expr, $caller_agent_id:expr, $func:path) => {
         match $browser_ctx {
-            Some(mgr) => {
-                match $caller_agent_id {
-                    Some(aid) => $func($input, mgr, aid).await,
-                    None => Err("Missing caller agent identity".to_string()),
-                }
+            Some(mgr) => match $caller_agent_id {
+                Some(aid) => $func($input, mgr, aid).await,
+                None => Err("Missing caller agent identity".to_string()),
+            },
+            None => {
+                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
             }
-            None => Err(
-                "Browser tools not available. Ensure Chrome/Chromium is installed.".to_string(),
-            ),
         }
     };
 }
@@ -170,7 +168,9 @@ pub async fn execute_tool(
         "train_write" => tool_train_write(input, kernel, caller_agent_id).await,
         "train_list" => tool_train_list(input, kernel, caller_agent_id).await,
         "train_knowledge_add" => tool_train_knowledge_add(input, kernel, caller_agent_id).await,
-        "train_knowledge_import" => tool_train_knowledge_import(input, kernel, caller_agent_id).await,
+        "train_knowledge_import" => {
+            tool_train_knowledge_import(input, kernel, caller_agent_id).await
+        }
         "train_knowledge_list" => tool_train_knowledge_list(input, kernel, caller_agent_id).await,
         "train_knowledge_read" => tool_train_knowledge_read(input, kernel, caller_agent_id).await,
         "train_knowledge_lint" => tool_train_knowledge_lint(input, kernel, caller_agent_id).await,
@@ -296,7 +296,9 @@ pub async fn execute_tool(
 
         // Knowledge graph tools
         "knowledge_add_entity" => tool_knowledge_add_entity(input, kernel, caller_agent_id).await,
-        "knowledge_add_relation" => tool_knowledge_add_relation(input, kernel, caller_agent_id).await,
+        "knowledge_add_relation" => {
+            tool_knowledge_add_relation(input, kernel, caller_agent_id).await
+        }
         "knowledge_query" => tool_knowledge_query(input, kernel, caller_agent_id).await,
 
         // Image analysis tool
@@ -350,17 +352,67 @@ pub async fn execute_tool(
                     is_error: true,
                 };
             }
-            browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_navigate)
+            browser_dispatch!(
+                input,
+                browser_ctx,
+                caller_agent_id,
+                crate::browser::tool_browser_navigate
+            )
         }
-        "browser_click" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_click),
-        "browser_type" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_type),
-        "browser_screenshot" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_screenshot),
-        "browser_read_page" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_read_page),
-        "browser_close" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_close),
-        "browser_scroll" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_scroll),
-        "browser_wait" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_wait),
-        "browser_run_js" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_run_js),
-        "browser_back" => browser_dispatch!(input, browser_ctx, caller_agent_id, crate::browser::tool_browser_back),
+        "browser_click" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_click
+        ),
+        "browser_type" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_type
+        ),
+        "browser_screenshot" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_screenshot
+        ),
+        "browser_read_page" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_read_page
+        ),
+        "browser_close" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_close
+        ),
+        "browser_scroll" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_scroll
+        ),
+        "browser_wait" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_wait
+        ),
+        "browser_run_js" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_run_js
+        ),
+        "browser_back" => browser_dispatch!(
+            input,
+            browser_ctx,
+            caller_agent_id,
+            crate::browser::tool_browser_back
+        ),
 
         // Canvas / A2UI tool
         "canvas_present" => tool_canvas_present(input, workspace_root).await,
@@ -1431,7 +1483,10 @@ fn validate_clone_name(name: &str) -> Result<&str, String> {
     if name.starts_with('-') || name.ends_with('-') {
         return Err("Clone name cannot start or end with a hyphen".to_string());
     }
-    if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
         return Err(
             "Clone name must contain only lowercase letters, digits, and hyphens (e.g. 'customer-support')".to_string()
         );
@@ -1445,7 +1500,10 @@ fn validate_clone_file_path(path: &str) -> Result<&str, String> {
         return Err("File path cannot be empty".to_string());
     }
     if path.starts_with('/') || path.starts_with("..") {
-        return Err(format!("Invalid file path '{}': must be relative and not escape the archive", path));
+        return Err(format!(
+            "Invalid file path '{}': must be relative and not escape the archive",
+            path
+        ));
     }
     validate_path(path)
 }
@@ -1461,7 +1519,11 @@ fn resolve_file_path(raw_path: &str, workspace_root: Option<&Path>) -> Result<Pa
 }
 
 /// Resolve a file read path through the workspace sandbox with sender_id-aware rewriting.
-fn resolve_file_path_for_read(raw_path: &str, workspace_root: Option<&Path>, sender_id: Option<&str>) -> Result<PathBuf, String> {
+fn resolve_file_path_for_read(
+    raw_path: &str,
+    workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
+) -> Result<PathBuf, String> {
     if let Some(root) = workspace_root {
         crate::workspace_sandbox::resolve_sandbox_path_for_read(raw_path, root, sender_id)
     } else {
@@ -1544,9 +1606,7 @@ async fn tool_file_list(
 // Knowledge tools (safe access to data/knowledge/)
 // ---------------------------------------------------------------------------
 
-async fn tool_knowledge_list(
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
+async fn tool_knowledge_list(workspace_root: Option<&Path>) -> Result<String, String> {
     let root = workspace_root.ok_or("knowledge_list requires a workspace root")?;
     let knowledge_dir = root.join("data/knowledge");
 
@@ -1583,7 +1643,11 @@ async fn tool_knowledge_list(
     if files.is_empty() {
         Ok("No knowledge files found.".to_string())
     } else {
-        Ok(format!("Knowledge files ({}):\n{}", files.len(), files.join("\n")))
+        Ok(format!(
+            "Knowledge files ({}):\n{}",
+            files.len(),
+            files.join("\n")
+        ))
     }
 }
 
@@ -1667,7 +1731,10 @@ async fn tool_knowledge_lint(workspace_root: Option<&Path>) -> Result<String, St
     } else {
         let mut out = format!("Found {} issue(s):\n", report.issues.len());
         for issue in &report.issues {
-            out.push_str(&format!("- [{:?}] {}: {}\n", issue.severity, issue.filename, issue.message));
+            out.push_str(&format!(
+                "- [{:?}] {}: {}\n",
+                issue.severity, issue.filename, issue.message
+            ));
         }
         Ok(out)
     }
@@ -1744,9 +1811,7 @@ async fn tool_knowledge_add(
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
     let root = workspace_root.ok_or("knowledge_add requires a workspace root")?;
-    let title = input["title"]
-        .as_str()
-        .ok_or("Missing 'title' parameter")?;
+    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
@@ -1790,9 +1855,7 @@ async fn tool_knowledge_import(
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
     let root = workspace_root.ok_or("knowledge_import requires a workspace root")?;
-    let data = input["data"]
-        .as_str()
-        .ok_or("Missing 'data' parameter")?;
+    let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
     let data_type = input["data_type"].as_str().unwrap_or("auto");
     let (saved, quality) = knowledge_import_core(root, data, data_type).await?;
     Ok(format!(
@@ -1836,15 +1899,24 @@ fn resolve_target_workspace(
         .ok_or("Missing 'target' parameter (target clone name)")?;
 
     // Tenant isolation: single tenant-scoped lookup for both workspace and tenant check
-    let caller_tenant = kh.get_agent_tenant_id(caller_id)
+    let caller_tenant = kh
+        .get_agent_tenant_id(caller_id)
         .ok_or("Cannot determine caller tenant")?;
     let target_workspace = kh
         .resolve_agent_workspace_in_tenant(target, &caller_tenant)
-        .ok_or_else(|| format!("Agent '{}' not found in your tenant or has no workspace", target))?;
+        .ok_or_else(|| {
+            format!(
+                "Agent '{}' not found in your tenant or has no workspace",
+                target
+            )
+        })?;
 
     let path = PathBuf::from(&target_workspace);
     if !path.exists() {
-        return Err(format!("Workspace for '{}' does not exist: {}", target, target_workspace));
+        return Err(format!(
+            "Workspace for '{}' does not exist: {}",
+            target, target_workspace
+        ));
     }
     Ok(path)
 }
@@ -1935,9 +2007,7 @@ async fn tool_train_knowledge_add(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
-    let title = input["title"]
-        .as_str()
-        .ok_or("Missing 'title' parameter")?;
+    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
@@ -1951,9 +2021,7 @@ async fn tool_train_knowledge_import(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
-    let data = input["data"]
-        .as_str()
-        .ok_or("Missing 'data' parameter")?;
+    let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
     let data_type = input["data_type"].as_str().unwrap_or("auto");
     let (saved, quality) = knowledge_import_core(&target_root, data, data_type).await?;
     Ok(format!(
@@ -2043,8 +2111,7 @@ async fn tool_user_profile(
                     "first_seen": null,
                     "last_seen": null,
                 });
-                Ok(serde_json::to_string_pretty(&template)
-                    .unwrap_or_else(|_| "{}".to_string()))
+                Ok(serde_json::to_string_pretty(&template).unwrap_or_else(|_| "{}".to_string()))
             }
         }
         "update" => {
@@ -2093,7 +2160,10 @@ async fn tool_user_profile(
                 .map_err(|e| format!("Failed to write profile: {e}"))?;
             Ok(format!("Profile updated for user '{}'", sender))
         }
-        _ => Err(format!("Unknown action '{}'. Use 'read' or 'update'.", action)),
+        _ => Err(format!(
+            "Unknown action '{}'. Use 'read' or 'update'.",
+            action
+        )),
     }
 }
 
@@ -2107,21 +2177,26 @@ async fn tool_clone_install(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_install requires kernel access")?;
-    let name_raw = input["name"].as_str()
-        .ok_or("Missing 'name' parameter")?;
+    let name_raw = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let name = validate_clone_name(name_raw)?.to_string();
 
-    let files = input.get("files")
+    let files = input
+        .get("files")
         .and_then(|v| v.as_object())
         .ok_or("Missing 'files' parameter (must be a JSON object of path→content)")?;
 
     if files.is_empty() {
-        return Err("No files provided. At minimum, SOUL.md and system_prompt.md are required.".to_string());
+        return Err(
+            "No files provided. At minimum, SOUL.md and system_prompt.md are required.".to_string(),
+        );
     }
 
     // SECURITY: Reject oversized file maps (max 20MB total content)
     const MAX_FILES_TOTAL: usize = 20 * 1024 * 1024;
-    let total_size: usize = files.values().map(|v| v.as_str().map(|s| s.len()).unwrap_or(0)).sum();
+    let total_size: usize = files
+        .values()
+        .map(|v| v.as_str().map(|s| s.len()).unwrap_or(0))
+        .sum();
     if total_size > MAX_FILES_TOTAL {
         return Err(format!(
             "Clone files too large: {} bytes total (max 20MB)",
@@ -2130,14 +2205,34 @@ async fn tool_clone_install(
     }
 
     // Build CloneData from the file map
-    use opencarrier_clone::{CloneData, SkillData, AgentData, pack_agx};
+    use opencarrier_clone::{pack_agx, AgentData, CloneData, SkillData};
     use std::collections::HashMap;
 
-    let soul = files.get("SOUL.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
-    let system_prompt = files.get("system_prompt.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
-    let memory_index = files.get("MEMORY.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
-    let profile = files.get("profile.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
-    let evolution = files.get("EVOLUTION.md").map(|v| v.as_str().unwrap_or("")).unwrap_or("").to_string();
+    let soul = files
+        .get("SOUL.md")
+        .map(|v| v.as_str().unwrap_or(""))
+        .unwrap_or("")
+        .to_string();
+    let system_prompt = files
+        .get("system_prompt.md")
+        .map(|v| v.as_str().unwrap_or(""))
+        .unwrap_or("")
+        .to_string();
+    let memory_index = files
+        .get("MEMORY.md")
+        .map(|v| v.as_str().unwrap_or(""))
+        .unwrap_or("")
+        .to_string();
+    let profile = files
+        .get("profile.md")
+        .map(|v| v.as_str().unwrap_or(""))
+        .unwrap_or("")
+        .to_string();
+    let evolution = files
+        .get("EVOLUTION.md")
+        .map(|v| v.as_str().unwrap_or(""))
+        .unwrap_or("")
+        .to_string();
 
     if soul.is_empty() {
         return Err("SOUL.md is required in files".to_string());
@@ -2166,19 +2261,18 @@ async fn tool_clone_install(
         if path.starts_with("skills/") && path.ends_with(".md") {
             let content = val.as_str().unwrap_or("");
             let (fm, body) = opencarrier_clone::parse_frontmatter(content);
-            let skill_name = fm.get("name")
-                .cloned()
-                .unwrap_or_else(|| {
-                    path.strip_prefix("skills/")
-                        .unwrap_or(path)
-                        .strip_suffix(".md")
-                        .unwrap_or("unknown")
-                        .to_string()
-                });
+            let skill_name = fm.get("name").cloned().unwrap_or_else(|| {
+                path.strip_prefix("skills/")
+                    .unwrap_or(path)
+                    .strip_suffix(".md")
+                    .unwrap_or("unknown")
+                    .to_string()
+            });
             skills.push(SkillData {
                 name: skill_name,
                 when_to_use: fm.get("when_to_use").cloned().unwrap_or_default(),
-                allowed_tools: fm.get("allowed_tools")
+                allowed_tools: fm
+                    .get("allowed_tools")
                     .map(|s| opencarrier_clone::parse_string_array(s))
                     .unwrap_or_default(),
                 prompt: body.trim().to_string(),
@@ -2202,8 +2296,14 @@ async fn tool_clone_install(
                         .to_string()
                 }),
                 description: fm.get("description").cloned().unwrap_or_default(),
-                tools: fm.get("tools").map(|s| opencarrier_clone::parse_string_array(s)).unwrap_or_default(),
-                model: fm.get("model").cloned().unwrap_or_else(|| "sonnet".to_string()),
+                tools: fm
+                    .get("tools")
+                    .map(|s| opencarrier_clone::parse_string_array(s))
+                    .unwrap_or_default(),
+                model: fm
+                    .get("model")
+                    .cloned()
+                    .unwrap_or_else(|| "sonnet".to_string()),
                 color: fm.get("color").cloned(),
                 prompt: body.trim().to_string(),
             });
@@ -2237,11 +2337,11 @@ async fn tool_clone_install(
     };
 
     // Pack into .agx bytes
-    let agx_bytes = pack_agx(&clone_data)
-        .map_err(|e| format!("Failed to pack .agx: {e}"))?;
+    let agx_bytes = pack_agx(&clone_data).map_err(|e| format!("Failed to pack .agx: {e}"))?;
 
     // Install via kernel — inherit tenant_id from the calling agent
-    let tenant_id = caller_agent_id.and_then(|aid| kernel.get_agent_tenant_id(aid))
+    let tenant_id = caller_agent_id
+        .and_then(|aid| kernel.get_agent_tenant_id(aid))
         .ok_or("Cannot determine caller tenant")?;
     let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes, &tenant_id).await?;
 
@@ -2261,14 +2361,15 @@ async fn tool_clone_export(
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_export requires kernel access")?;
     let caller_id = caller_agent_id.ok_or("clone_export requires caller agent identity")?;
-    let name = validate_clone_name(
-        input["name"].as_str().ok_or("Missing 'name' parameter")?
-    )?.to_string();
+    let name =
+        validate_clone_name(input["name"].as_str().ok_or("Missing 'name' parameter")?)?.to_string();
 
     // Tenant check: verify caller owns this clone
-    let caller_tenant = kernel.get_agent_tenant_id(caller_id)
+    let caller_tenant = kernel
+        .get_agent_tenant_id(caller_id)
         .ok_or("Cannot determine caller tenant")?;
-    kernel.resolve_agent_workspace_in_tenant(&name, &caller_tenant)
+    kernel
+        .resolve_agent_workspace_in_tenant(&name, &caller_tenant)
         .ok_or_else(|| format!("Clone '{}' not found in your tenant", name))?;
 
     let agx_bytes = kernel.clone_export(&name)?;
@@ -2288,14 +2389,15 @@ async fn tool_clone_publish(
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_publish requires kernel access")?;
     let caller_id = caller_agent_id.ok_or("clone_publish requires caller agent identity")?;
-    let name = validate_clone_name(
-        input["name"].as_str().ok_or("Missing 'name' parameter")?
-    )?.to_string();
+    let name =
+        validate_clone_name(input["name"].as_str().ok_or("Missing 'name' parameter")?)?.to_string();
 
     // Tenant check: verify caller owns this clone
-    let caller_tenant = kernel.get_agent_tenant_id(caller_id)
+    let caller_tenant = kernel
+        .get_agent_tenant_id(caller_id)
         .ok_or("Cannot determine caller tenant")?;
-    kernel.resolve_agent_workspace_in_tenant(&name, &caller_tenant)
+    kernel
+        .resolve_agent_workspace_in_tenant(&name, &caller_tenant)
         .ok_or_else(|| format!("Clone '{}' not found in your tenant", name))?;
 
     // Export the clone first
@@ -2626,7 +2728,8 @@ async fn tool_agent_send(
 
     AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message, None, None, caller_agent_id, None).await
+            kh.send_to_agent(agent_id, message, None, None, caller_agent_id, None)
+                .await
         })
         .await
 }
@@ -2640,7 +2743,8 @@ async fn tool_agent_spawn(
     let manifest_toml = input["manifest_toml"]
         .as_str()
         .ok_or("Missing 'manifest_toml' parameter")?;
-    let tenant_id = parent_id.and_then(|pid| kh.get_agent_tenant_id(pid))
+    let tenant_id = parent_id
+        .and_then(|pid| kh.get_agent_tenant_id(pid))
         .ok_or("Cannot determine tenant for spawn")?;
     let (id, name) = kh.spawn_agent(manifest_toml, parent_id, &tenant_id).await?;
     // Inherit parent's tenant
@@ -2659,7 +2763,8 @@ fn tool_agent_list(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+    let tenant_id = caller_agent_id
+        .and_then(|id| kh.get_agent_tenant_id(id))
         .ok_or("Cannot determine caller tenant")?;
     let agents = kh.list_agents(&tenant_id);
     if agents.is_empty() {
@@ -2686,7 +2791,8 @@ fn tool_agent_kill(
         .as_str()
         .ok_or("Missing 'agent_id' parameter")?;
     // Tenant check: caller and target must share tenant
-    let caller_tenant = kh.get_agent_tenant_id(caller_id)
+    let caller_tenant = kh
+        .get_agent_tenant_id(caller_id)
         .ok_or("Cannot determine caller tenant")?;
     let target_tenant = kh.get_agent_tenant_id(target_id);
     if target_tenant.as_ref() != Some(&caller_tenant) {
@@ -2760,7 +2866,8 @@ fn tool_agent_find(
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+    let tenant_id = caller_agent_id
+        .and_then(|id| kh.get_agent_tenant_id(id))
         .ok_or("Cannot determine caller tenant")?;
     let agents = kh.find_agents(query, &tenant_id);
     if agents.is_empty() {
@@ -2806,7 +2913,8 @@ async fn tool_task_claim(
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    let tenant_id = kh.get_agent_tenant_id(agent_id)
+    let tenant_id = kh
+        .get_agent_tenant_id(agent_id)
         .ok_or("Cannot determine caller tenant")?;
     match kh.task_claim(agent_id, &tenant_id).await? {
         Some(task) => {
@@ -2829,7 +2937,8 @@ async fn tool_task_complete(
     let result = input["result"]
         .as_str()
         .ok_or("Missing 'result' parameter")?;
-    let tenant_id = kh.get_agent_tenant_id(caller_id)
+    let tenant_id = kh
+        .get_agent_tenant_id(caller_id)
         .ok_or("Cannot determine caller tenant")?;
     kh.task_complete(task_id, result, &tenant_id).await?;
     Ok(format!("Task {task_id} marked as completed."))
@@ -2841,7 +2950,8 @@ async fn tool_task_list(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+    let tenant_id = caller_agent_id
+        .and_then(|id| kh.get_agent_tenant_id(id))
         .ok_or("Cannot determine caller tenant")?;
     let status = input["status"].as_str();
     let tasks = kh.task_list(status, &tenant_id).await?;
@@ -2916,7 +3026,8 @@ async fn tool_knowledge_add_entity(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+    let tenant_id = caller_agent_id
+        .and_then(|id| kh.get_agent_tenant_id(id))
         .ok_or("Cannot determine caller tenant")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let entity_type_str = input["entity_type"]
@@ -2947,7 +3058,8 @@ async fn tool_knowledge_add_relation(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+    let tenant_id = caller_agent_id
+        .and_then(|id| kh.get_agent_tenant_id(id))
         .ok_or("Cannot determine caller tenant")?;
     let source = input["source"]
         .as_str()
@@ -2986,7 +3098,8 @@ async fn tool_knowledge_query(
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id.and_then(|id| kh.get_agent_tenant_id(id))
+    let tenant_id = caller_agent_id
+        .and_then(|id| kh.get_agent_tenant_id(id))
         .ok_or("Cannot determine caller tenant")?;
     let source = input["source"].as_str().map(|s| s.to_string());
     let target = input["target"].as_str().map(|s| s.to_string());
@@ -3189,7 +3302,10 @@ async fn tool_schedule_create(
     ))
 }
 
-async fn tool_schedule_list(kernel: Option<&Arc<dyn KernelHandle>>, caller_agent_id: Option<&str>) -> Result<String, String> {
+async fn tool_schedule_list(
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for schedule_list")?;
 
@@ -3280,7 +3396,9 @@ async fn tool_cron_cancel(
         .ok_or("Missing 'job_id' parameter")?;
     // Ownership check: verify this job belongs to the caller
     let jobs = kh.cron_list(agent_id).await?;
-    let owned = jobs.iter().any(|j| j.get("id").and_then(|v| v.as_str()) == Some(job_id));
+    let owned = jobs
+        .iter()
+        .any(|j| j.get("id").and_then(|v| v.as_str()) == Some(job_id));
     if !owned {
         return Err("Cron job not found or does not belong to you".to_string());
     }
@@ -4142,10 +4260,17 @@ mod tests {
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         // Training tools (cross-workspace)
-        assert!(names.contains(&"train_read"), "Missing train_read in: {:?}", names);
+        assert!(
+            names.contains(&"train_read"),
+            "Missing train_read in: {:?}",
+            names
+        );
         assert!(names.contains(&"train_write"), "Missing train_write");
         assert!(names.contains(&"train_list"), "Missing train_list");
-        assert!(names.contains(&"train_knowledge_add"), "Missing train_knowledge_add");
+        assert!(
+            names.contains(&"train_knowledge_add"),
+            "Missing train_knowledge_add"
+        );
         assert!(names.contains(&"train_evaluate"), "Missing train_evaluate");
         // Original 12
         assert!(names.contains(&"file_read"));

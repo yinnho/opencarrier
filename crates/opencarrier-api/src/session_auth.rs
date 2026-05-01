@@ -67,10 +67,7 @@ pub fn verify_session_token(token: &str, secret: &str) -> Option<SessionInfo> {
                 return None;
             }
 
-            let payload = format!(
-                "{}:{}:{}:{}",
-                tenant_id_str, role, username, expiry_str
-            );
+            let payload = format!("{}:{}:{}:{}", tenant_id_str, role, username, expiry_str);
             let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
             mac.update(payload.as_bytes());
             let expected_sig = hex::encode(mac.finalize().into_bytes());
@@ -192,13 +189,7 @@ mod tests {
 
     #[test]
     fn test_create_and_verify_new_token() {
-        let token = create_session_token(
-            Some("tenant-123"),
-            "tenant",
-            "user1",
-            "my-secret",
-            1,
-        );
+        let token = create_session_token(Some("tenant-123"), "tenant", "user1", "my-secret", 1);
         let info = verify_session_token(&token, "my-secret").unwrap();
         assert_eq!(info.tenant_id, Some("tenant-123".to_string()));
         assert_eq!(info.role, "tenant");

@@ -8,14 +8,15 @@ pub mod brain;
 pub mod capability;
 pub mod comms;
 pub mod config;
+pub mod conversation;
 pub mod error;
 pub mod event;
 pub mod manifest_signing;
 pub mod media;
 pub mod memory;
-pub mod plugin;
 pub mod message;
 pub mod model_catalog;
+pub mod plugin;
 pub mod scheduler;
 pub mod serde_compat;
 pub mod taint;
@@ -23,7 +24,6 @@ pub mod tenant;
 pub mod tool;
 pub mod tool_compat;
 pub mod webhook;
-pub mod conversation;
 
 /// Safely truncate a string to at most `max_bytes`, never splitting a UTF-8 char.
 pub fn truncate_str(s: &str, max_bytes: usize) -> &str {

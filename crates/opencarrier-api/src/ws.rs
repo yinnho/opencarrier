@@ -184,13 +184,12 @@ pub async fn agent_ws(
             .and_then(|v| v.to_str().ok())
             .and_then(|cookies| {
                 cookies.split(';').find_map(|c| {
-                    c.trim().strip_prefix("opencarrier_session=")
+                    c.trim()
+                        .strip_prefix("opencarrier_session=")
                         .map(|v| v.to_string())
                 })
             })
-            .and_then(|token| {
-                crate::session_auth::verify_session_token(&token, &session_secret)
-            })
+            .and_then(|token| crate::session_auth::verify_session_token(&token, &session_secret))
             .is_some();
 
         if !header_auth && !query_auth && !cookie_auth {
@@ -278,7 +277,9 @@ async fn handle_agent_ws(
                 .list()
                 .into_iter()
                 .map(|e| {
-                    let (modality, model) = state_clone.kernel.resolve_model_label(&e.manifest.model.modality);
+                    let (modality, model) = state_clone
+                        .kernel
+                        .resolve_model_label(&e.manifest.model.modality);
                     serde_json::json!({
                         "id": e.id.to_string(),
                         "name": e.name,
@@ -650,7 +651,10 @@ async fn handle_text_message(
                             accumulated_text.len(), accumulated_thinking.len(), stream_usage);
                         if accumulated_text.is_empty() && !accumulated_thinking.is_empty() {
                             accumulated_text = accumulated_thinking;
-                            eprintln!("[ws-stream] fallback: using thinking as text ({} bytes)", accumulated_text.len());
+                            eprintln!(
+                                "[ws-stream] fallback: using thinking as text ({} bytes)",
+                                accumulated_text.len()
+                            );
                         }
 
                         // Detect silent responses (e.g. tool-only loops that produce
@@ -1002,7 +1006,9 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
                 "title": title,
             }))
         }
-        StreamEvent::ToolUseEnd { id, name, input, .. } => match verbose {
+        StreamEvent::ToolUseEnd {
+            id, name, input, ..
+        } => match verbose {
             VerboseLevel::Off => None,
             VerboseLevel::On => {
                 let input_preview: String = serde_json::to_string(input)

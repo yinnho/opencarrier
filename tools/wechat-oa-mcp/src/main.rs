@@ -18,7 +18,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use base64::Engine;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::{tool, tool_router, ServiceExt, transport::stdio as stdio_transport};
+use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use wechat::WeChatClient;
@@ -125,12 +125,18 @@ struct WeChatOaServer {
 impl WeChatOaServer {
     // ---- Token ----
 
-    #[tool(description = "Get WeChat OA access token for a specific account (auto-refreshed, cached ~2h)")]
+    #[tool(
+        description = "Get WeChat OA access token for a specific account (auto-refreshed, cached ~2h)"
+    )]
     async fn get_access_token(
         &self,
         Parameters(params): Parameters<GetAccessTokenParams>,
     ) -> String {
-        match self.client.get_token(&params.app_id, &params.app_secret).await {
+        match self
+            .client
+            .get_token(&params.app_id, &params.app_secret)
+            .await
+        {
             Ok(token) => serde_json::json!({ "access_token": token }).to_string(),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -138,18 +144,23 @@ impl WeChatOaServer {
 
     // ---- Media ----
 
-    #[tool(description = "Upload image/media to a WeChat OA account's permanent material library. Returns media_id and url.")]
-    async fn upload_media(
-        &self,
-        Parameters(params): Parameters<UploadMediaParams>,
-    ) -> String {
+    #[tool(
+        description = "Upload image/media to a WeChat OA account's permanent material library. Returns media_id and url."
+    )]
+    async fn upload_media(&self, Parameters(params): Parameters<UploadMediaParams>) -> String {
         let data = match base64::engine::general_purpose::STANDARD.decode(&params.data_base64) {
             Ok(d) => d,
             Err(e) => return format!("{{\"error\": \"invalid base64: {}\"}}", e),
         };
         match self
             .client
-            .upload_media(&params.app_id, &params.app_secret, &params.media_type, &params.filename, &data)
+            .upload_media(
+                &params.app_id,
+                &params.app_secret,
+                &params.media_type,
+                &params.filename,
+                &data,
+            )
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -160,10 +171,7 @@ impl WeChatOaServer {
     // ---- Drafts ----
 
     #[tool(description = "Create a new draft article. Returns media_id of the draft.")]
-    async fn create_draft(
-        &self,
-        Parameters(params): Parameters<CreateDraftParams>,
-    ) -> String {
+    async fn create_draft(&self, Parameters(params): Parameters<CreateDraftParams>) -> String {
         let mut article = serde_json::json!({
             "title": params.title,
             "content": params.content,
@@ -179,47 +187,74 @@ impl WeChatOaServer {
             }
         }
         let body = serde_json::json!({ "articles": [article] });
-        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/add", &body).await {
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/draft/add",
+                &body,
+            )
+            .await
+        {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
     #[tool(description = "Get full draft content by media_id")]
-    async fn get_draft(
-        &self,
-        Parameters(params): Parameters<GetDraftParams>,
-    ) -> String {
+    async fn get_draft(&self, Parameters(params): Parameters<GetDraftParams>) -> String {
         let body = serde_json::json!({ "media_id": params.media_id });
-        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/get", &body).await {
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/draft/get",
+                &body,
+            )
+            .await
+        {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
     #[tool(description = "List drafts in the WeChat OA draft box")]
-    async fn list_drafts(
-        &self,
-        Parameters(params): Parameters<ListDraftsParams>,
-    ) -> String {
+    async fn list_drafts(&self, Parameters(params): Parameters<ListDraftsParams>) -> String {
         let body = serde_json::json!({
             "offset": params.offset.unwrap_or(0),
             "count": params.count.unwrap_or(20),
             "no_content": params.no_content.unwrap_or(0),
         });
-        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/batchget", &body).await {
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/draft/batchget",
+                &body,
+            )
+            .await
+        {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
     #[tool(description = "Delete a draft by media_id")]
-    async fn delete_draft(
-        &self,
-        Parameters(params): Parameters<DeleteDraftParams>,
-    ) -> String {
+    async fn delete_draft(&self, Parameters(params): Parameters<DeleteDraftParams>) -> String {
         let body = serde_json::json!({ "media_id": params.media_id });
-        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/draft/delete", &body).await {
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/draft/delete",
+                &body,
+            )
+            .await
+        {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -228,14 +263,16 @@ impl WeChatOaServer {
     // ---- Publishing ----
 
     #[tool(description = "Submit a draft for publishing. Returns publish_id for status tracking.")]
-    async fn publish_draft(
-        &self,
-        Parameters(params): Parameters<PublishDraftParams>,
-    ) -> String {
+    async fn publish_draft(&self, Parameters(params): Parameters<PublishDraftParams>) -> String {
         let body = serde_json::json!({ "media_id": params.media_id });
         match self
             .client
-            .api_post(&params.app_id, &params.app_secret, "/cgi-bin/freepublish/submit", &body)
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/freepublish/submit",
+                &body,
+            )
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -249,7 +286,16 @@ impl WeChatOaServer {
         Parameters(params): Parameters<GetPublishStatusParams>,
     ) -> String {
         let body = serde_json::json!({ "publish_id": params.publish_id });
-        match self.client.api_post(&params.app_id, &params.app_secret, "/cgi-bin/freepublish/get", &body).await {
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/freepublish/get",
+                &body,
+            )
+            .await
+        {
             Ok(resp) => json_to_string(&resp),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -258,10 +304,7 @@ impl WeChatOaServer {
     // ---- Materials ----
 
     #[tool(description = "List permanent materials in the WeChat OA library")]
-    async fn list_materials(
-        &self,
-        Parameters(params): Parameters<ListMaterialsParams>,
-    ) -> String {
+    async fn list_materials(&self, Parameters(params): Parameters<ListMaterialsParams>) -> String {
         let body = serde_json::json!({
             "type": params.r#type,
             "offset": params.offset.unwrap_or(0),
@@ -269,7 +312,12 @@ impl WeChatOaServer {
         });
         match self
             .client
-            .api_post(&params.app_id, &params.app_secret, "/cgi-bin/material/batchget_material", &body)
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/material/batchget_material",
+                &body,
+            )
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -285,7 +333,12 @@ impl WeChatOaServer {
         let body = serde_json::json!({ "media_id": params.media_id });
         match self
             .client
-            .api_post(&params.app_id, &params.app_secret, "/cgi-bin/material/del_material", &body)
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/material/del_material",
+                &body,
+            )
             .await
         {
             Ok(resp) => json_to_string(&resp),

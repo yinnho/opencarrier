@@ -3,10 +3,10 @@
 //! When a daemon is running (`opencarrier start`), the CLI talks to it over HTTP.
 //! Otherwise, commands boot an in-process kernel (single-shot mode).
 
+mod acp;
 mod mcp;
 pub mod serve;
 mod setup;
-mod acp;
 mod templates;
 mod tui;
 mod ui;
@@ -59,7 +59,10 @@ fn install_ctrlc_handler() {
 
 /// Print a JSON value as pretty-printed output.
 fn print_json(value: &serde_json::Value) {
-    println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).unwrap_or_default()
+    );
 }
 
 /// Default config.toml content written to ~/.opencarrier/config.toml when missing.
@@ -173,7 +176,7 @@ enum Commands {
     /// Browse models, aliases, and providers [*].
     #[command(subcommand)]
     Models(ModelsCommands),
-        /// Manage scheduled jobs (list, create, delete, enable, disable) [*].
+    /// Manage scheduled jobs (list, create, delete, enable, disable) [*].
     #[command(subcommand)]
     Cron(CronCommands),
     /// List conversation sessions.
@@ -451,7 +454,6 @@ enum MemoryCommands {
     },
 }
 
-
 fn config_log_level() -> String {
     let config_path = if let Ok(home) = std::env::var("OPENCARRIER_HOME") {
         std::path::PathBuf::from(home).join("config.toml")
@@ -574,7 +576,12 @@ fn main() {
             ConfigCommands::Unset { key } => cmd_config_unset(&key),
             ConfigCommands::Providers => cmd_providers(),
         },
-        Commands::Chat { agent, message, file, json } => {
+        Commands::Chat {
+            agent,
+            message,
+            file,
+            json,
+        } => {
             if message.is_some() || !file.is_empty() {
                 let msg = message.unwrap_or_default();
                 cmd_chat_once(cli.config, &agent, &msg, &file, json)
@@ -1368,7 +1375,9 @@ fn cmd_agent_spawn(config: Option<PathBuf>, manifest_path: PathBuf) {
             std::process::exit(1);
         });
         let kernel = boot_kernel(config);
-        let spawn_tid = kernel.memory.tenant()
+        let spawn_tid = kernel
+            .memory
+            .tenant()
             .get_tenant_by_name(&kernel.config.auth.username)
             .ok()
             .flatten()
@@ -1735,7 +1744,9 @@ fn spawn_template_agent(config: Option<PathBuf>, template: &templates::AgentTemp
             std::process::exit(1);
         });
         let kernel = boot_kernel(config);
-        let spawn_tid = kernel.memory.tenant()
+        let spawn_tid = kernel
+            .memory
+            .tenant()
             .get_tenant_by_name(&kernel.config.auth.username)
             .ok()
             .flatten()
@@ -2368,9 +2379,7 @@ fn cmd_doctor(json: bool, repair: bool) {
         if !json {
             ui::check_ok(&format!("Skills loaded: {skill_count}"));
         }
-        checks.push(
-            serde_json::json!({"check": "skills", "status": "ok", "count": skill_count}),
-        );
+        checks.push(serde_json::json!({"check": "skills", "status": "ok", "count": skill_count}));
 
         // Check workspace skills if home dir available
         if skills_dir.exists() {
@@ -2945,8 +2954,8 @@ fn cmd_providers() {
         std::process::exit(1);
     });
 
-    let brain: opencarrier_types::brain::BrainConfig =
-        serde_json::from_str(&brain_content).unwrap_or_else(|e| {
+    let brain: opencarrier_types::brain::BrainConfig = serde_json::from_str(&brain_content)
+        .unwrap_or_else(|e| {
             ui::error(&format!("Failed to parse brain.json: {e}"));
             std::process::exit(1);
         });
@@ -2972,12 +2981,17 @@ fn cmd_providers() {
     loop {
         println!();
         println!("{}", "  Providers".bold().bright_cyan());
-        println!("{}", "  ──────────────────────────────────────────────────".bright_black());
+        println!(
+            "{}",
+            "  ──────────────────────────────────────────────────".bright_black()
+        );
 
         let mut any_missing = false;
         for (i, provider) in provider_names.iter().enumerate() {
             let env_var = provider_to_env_var(provider);
-            let key_set = std::env::var(&env_var).map(|v| !v.is_empty()).unwrap_or(false);
+            let key_set = std::env::var(&env_var)
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
 
             // Also check brain provider config for providers that don't need keys
             let no_key_needed = brain
@@ -3015,8 +3029,7 @@ fn cmd_providers() {
         if any_missing {
             println!(
                 "{}",
-                "\n  ⚠  Some providers need API keys. Select a number to set it."
-                    .bright_yellow()
+                "\n  ⚠  Some providers need API keys. Select a number to set it.".bright_yellow()
             );
         }
 
@@ -3530,11 +3543,7 @@ fn cmd_models_list(provider_filter: Option<&str>, json: bool) {
                     continue;
                 }
             }
-            println!(
-                "{:<40} {:<16}",
-                m.id,
-                m.provider,
-            );
+            println!("{:<40} {:<16}", m.id, m.provider,);
         }
     }
 }
@@ -3873,7 +3882,6 @@ fn cmd_logs(lines: usize, follow: bool) {
     }
 }
 
-
 fn cmd_security_status(json: bool) {
     let base = require_daemon("security status");
     let client = daemon_client();
@@ -4136,7 +4144,11 @@ async fn cmd_hub(cmd: HubCommands) {
             .await
             {
                 Ok(clone_name) => {
-                    println!("分身 '{}' 已安装到: {}", clone_name, workspace_dir.display());
+                    println!(
+                        "分身 '{}' 已安装到: {}",
+                        clone_name,
+                        workspace_dir.display()
+                    );
                     println!("运行 'opencarrier agent spawn {}' 启动分身", clone_name);
                 }
                 Err(e) => eprintln!("安装失败: {e}"),
@@ -4179,7 +4191,11 @@ async fn cmd_plugin(cmd: PluginCommands) {
                                 let loaded = p["loaded"].as_bool().unwrap_or(false);
                                 println!(
                                     "  {} {} {} ({} tools)",
-                                    if loaded { "●".green() } else { "○".yellow() },
+                                    if loaded {
+                                        "●".green()
+                                    } else {
+                                        "○".yellow()
+                                    },
                                     name.bold(),
                                     version.dimmed(),
                                     tools
@@ -4257,7 +4273,10 @@ async fn cmd_plugin(cmd: PluginCommands) {
             {
                 Ok(installed_name) => {
                     println!("插件 '{}' 安装成功!", installed_name.green());
-                    println!("重启 daemon 以加载插件: {}", "opencarrier stop && opencarrier start".cyan());
+                    println!(
+                        "重启 daemon 以加载插件: {}",
+                        "opencarrier stop && opencarrier start".cyan()
+                    );
                 }
                 Err(e) => eprintln!("安装失败: {e}"),
             }
@@ -4276,7 +4295,10 @@ async fn cmd_plugin(cmd: PluginCommands) {
             match std::fs::remove_dir_all(&plugin_dir) {
                 Ok(_) => {
                     println!("插件 '{}' 已删除", name.green());
-                    println!("重启 daemon 以卸载插件: {}", "opencarrier stop && opencarrier start".cyan());
+                    println!(
+                        "重启 daemon 以卸载插件: {}",
+                        "opencarrier stop && opencarrier start".cyan()
+                    );
                 }
                 Err(e) => eprintln!("删除失败: {e}"),
             }

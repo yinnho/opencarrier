@@ -60,15 +60,23 @@ pub struct HealthReport {
 
 impl HealthReport {
     pub fn warnings(&self) -> Vec<&HealthIssue> {
-        self.issues.iter().filter(|i| i.severity == IssueSeverity::Warning).collect()
+        self.issues
+            .iter()
+            .filter(|i| i.severity == IssueSeverity::Warning)
+            .collect()
     }
 
     pub fn errors(&self) -> Vec<&HealthIssue> {
-        self.issues.iter().filter(|i| i.severity == IssueSeverity::Error).collect()
+        self.issues
+            .iter()
+            .filter(|i| i.severity == IssueSeverity::Error)
+            .collect()
     }
 
     pub fn is_healthy(&self) -> bool {
-        self.issues.iter().all(|i| i.severity == IssueSeverity::Warning)
+        self.issues
+            .iter()
+            .all(|i| i.severity == IssueSeverity::Warning)
     }
 }
 
@@ -123,7 +131,10 @@ pub fn check_health(workspace: &Path) -> HealthReport {
                     filename: filename.clone(),
                     severity: IssueSeverity::Warning,
                     kind: IssueKind::OversizedFile,
-                    message: format!("File is {:.1} KB (max recommended: 50 KB)", meta.len() as f64 / 1024.0),
+                    message: format!(
+                        "File is {:.1} KB (max recommended: 50 KB)",
+                        meta.len() as f64 / 1024.0
+                    ),
                 });
                 is_healthy = false;
             }
@@ -231,7 +242,9 @@ pub fn check_health(workspace: &Path) -> HealthReport {
                     filename: filename.clone(),
                     severity: IssueSeverity::Warning,
                     kind: IssueKind::MissingDescription,
-                    message: "Frontmatter missing 'description' field — compile can auto-generate this".to_string(),
+                    message:
+                        "Frontmatter missing 'description' field — compile can auto-generate this"
+                            .to_string(),
                 });
             }
         }
@@ -243,7 +256,10 @@ pub fn check_health(workspace: &Path) -> HealthReport {
                     let after_frontmatter = &rest[fm_end + 3..];
                     // Should have a second `---` separator after the body section
                     let body_and_timeline = after_frontmatter.trim();
-                    if !body_and_timeline.is_empty() && !body_and_timeline.contains("\n---\n") && !body_and_timeline.contains("\n---") {
+                    if !body_and_timeline.is_empty()
+                        && !body_and_timeline.contains("\n---\n")
+                        && !body_and_timeline.contains("\n---")
+                    {
                         report.issues.push(HealthIssue {
                             filename: filename.clone(),
                             severity: IssueSeverity::Warning,
@@ -288,7 +304,10 @@ pub fn check_health(workspace: &Path) -> HealthReport {
                             filename: ref_filename.to_string(),
                             severity: IssueSeverity::Error,
                             kind: IssueKind::BrokenReference,
-                            message: format!("MEMORY.md references '{}' but file does not exist", ref_filename),
+                            message: format!(
+                                "MEMORY.md references '{}' but file does not exist",
+                                ref_filename
+                            ),
                         });
                     }
                 }
@@ -322,8 +341,12 @@ pub fn auto_fix(workspace: &Path, report: &HealthReport) -> usize {
                 if path.exists() {
                     if let Ok(content) = fs::read_to_string(&path) {
                         let _ = crate::version::record_version(
-                            workspace, "health-delete", &issue.filename,
-                            Some(&content), None, "health",
+                            workspace,
+                            "health-delete",
+                            &issue.filename,
+                            Some(&content),
+                            None,
+                            "health",
                         );
                     }
                     let _ = fs::remove_file(&path);
@@ -399,7 +422,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        fs::write(ws.join("data/knowledge/empty.md"), "---\nname: empty\n---\n\n").unwrap();
+        fs::write(
+            ws.join("data/knowledge/empty.md"),
+            "---\nname: empty\n---\n\n",
+        )
+        .unwrap();
 
         let report = check_health(&ws);
         assert!(report.issues.iter().any(|i| i.kind == IssueKind::EmptyFile));
@@ -410,10 +437,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        fs::write(ws.join("data/knowledge/no-fm.md"), "Just content without frontmatter").unwrap();
+        fs::write(
+            ws.join("data/knowledge/no-fm.md"),
+            "Just content without frontmatter",
+        )
+        .unwrap();
 
         let report = check_health(&ws);
-        assert!(report.issues.iter().any(|i| i.kind == IssueKind::MissingFrontmatter));
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.kind == IssueKind::MissingFrontmatter));
     }
 
     #[test]
@@ -421,10 +455,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        fs::write(ws.join("data/knowledge/bad.md"), "---\nname: test\n\nNo closing marker").unwrap();
+        fs::write(
+            ws.join("data/knowledge/bad.md"),
+            "---\nname: test\n\nNo closing marker",
+        )
+        .unwrap();
 
         let report = check_health(&ws);
-        assert!(report.issues.iter().any(|i| i.kind == IssueKind::MalformedFrontmatter));
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.kind == IssueKind::MalformedFrontmatter));
     }
 
     #[test]
@@ -435,10 +476,14 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/expired.md"),
             "---\nname: old\nstatus: expired\n---\n\nOld content",
-        ).unwrap();
+        )
+        .unwrap();
 
         let report = check_health(&ws);
-        assert!(report.issues.iter().any(|i| i.kind == IssueKind::ExpiredStatus));
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.kind == IssueKind::ExpiredStatus));
     }
 
     #[test]
@@ -449,10 +494,14 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/noname.md"),
             "---\nsource: evolution\n---\n\nContent",
-        ).unwrap();
+        )
+        .unwrap();
 
         let report = check_health(&ws);
-        assert!(report.issues.iter().any(|i| i.kind == IssueKind::MissingName));
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.kind == IssueKind::MissingName));
     }
 
     #[test]
@@ -464,7 +513,8 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/good.md"),
             "---\nname: Good\n---\n\nContent",
-        ).unwrap();
+        )
+        .unwrap();
 
         // MEMORY.md references non-existent file
         fs::write(
@@ -473,7 +523,10 @@ mod tests {
         ).unwrap();
 
         let report = check_health(&ws);
-        assert!(report.issues.iter().any(|i| i.kind == IssueKind::BrokenReference));
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.kind == IssueKind::BrokenReference));
     }
 
     #[test]
@@ -481,7 +534,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        fs::write(ws.join("data/knowledge/empty.md"), "---\nname: empty\n---\n\n").unwrap();
+        fs::write(
+            ws.join("data/knowledge/empty.md"),
+            "---\nname: empty\n---\n\n",
+        )
+        .unwrap();
 
         let report = check_health(&ws);
         let fixed = auto_fix(&ws, &report);
@@ -497,7 +554,8 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/old.md"),
             "---\nname: old\nstatus: expired\n---\n\nOld content",
-        ).unwrap();
+        )
+        .unwrap();
 
         let report = check_health(&ws);
         let fixed = auto_fix(&ws, &report);
@@ -514,11 +572,15 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/no-sep.md"),
             "---\nname: test\n---\n\nSome content without dual-layer separator",
-        ).unwrap();
+        )
+        .unwrap();
 
         let report = check_health(&ws);
         assert!(
-            report.issues.iter().any(|i| i.kind == IssueKind::MissingDualLayerSeparator),
+            report
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::MissingDualLayerSeparator),
             "Should detect missing dual-layer separator"
         );
     }
@@ -532,11 +594,15 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/with-sep.md"),
             "---\nname: test\nsource: manual\n---\n\nSome content\n\n---\n\n- 2025-01-01: created",
-        ).unwrap();
+        )
+        .unwrap();
 
         let report = check_health(&ws);
         assert!(
-            !report.issues.iter().any(|i| i.kind == IssueKind::MissingDualLayerSeparator),
+            !report
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::MissingDualLayerSeparator),
             "Should NOT flag file with dual-layer separator"
         );
     }
@@ -549,11 +615,15 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/no-source.md"),
             "---\nname: test\n---\n\nContent\n\n---\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let report = check_health(&ws);
         assert!(
-            report.issues.iter().any(|i| i.kind == IssueKind::MissingSourceField),
+            report
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::MissingSourceField),
             "Should detect missing source field"
         );
     }
@@ -566,11 +636,15 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/no-desc.md"),
             "---\nname: test\nsource: manual\n---\n\nContent\n\n---\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let report = check_health(&ws);
         assert!(
-            report.issues.iter().any(|i| i.kind == IssueKind::MissingDescription),
+            report
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::MissingDescription),
             "Should detect missing description field"
         );
     }
@@ -586,13 +660,22 @@ mod tests {
         ).unwrap();
 
         let report = check_health(&ws);
-        assert_eq!(report.healthy_files, 1, "File with complete schema should be healthy");
+        assert_eq!(
+            report.healthy_files, 1,
+            "File with complete schema should be healthy"
+        );
         assert!(
-            !report.issues.iter().any(|i| i.kind == IssueKind::MissingSourceField),
+            !report
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::MissingSourceField),
             "Should NOT flag file with source"
         );
         assert!(
-            !report.issues.iter().any(|i| i.kind == IssueKind::MissingDescription),
+            !report
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::MissingDescription),
             "Should NOT flag file with description"
         );
     }

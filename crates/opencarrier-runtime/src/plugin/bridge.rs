@@ -7,8 +7,8 @@ use opencarrier_types::plugin::PluginMessage;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::kernel_handle::KernelHandle;
 use super::loader::LoadedPlugin;
+use crate::kernel_handle::KernelHandle;
 
 // ---------------------------------------------------------------------------
 // Bridge manager
@@ -50,12 +50,7 @@ impl PluginBridgeManager {
     }
 
     /// Bind a specific (channel_type, tenant_id) to an agent.
-    pub fn bind_channel(
-        &mut self,
-        channel_type: String,
-        tenant_id: String,
-        agent_id: String,
-    ) {
+    pub fn bind_channel(&mut self, channel_type: String, tenant_id: String, agent_id: String) {
         info!(
             channel = %channel_type,
             tenant = %tenant_id,
@@ -114,14 +109,18 @@ impl PluginBridgeManager {
             "Routing plugin message to agent"
         );
 
-        match self.kernel.send_to_agent(
-            &agent_id,
-            &text,
-            Some(&msg.sender_id),
-            Some(&msg.sender_name),
-            None,
-            Some(&msg.tenant_id),
-        ).await {
+        match self
+            .kernel
+            .send_to_agent(
+                &agent_id,
+                &text,
+                Some(&msg.sender_id),
+                Some(&msg.sender_name),
+                None,
+                Some(&msg.tenant_id),
+            )
+            .await
+        {
             Ok(response) => {
                 self.send_response(&msg, &response);
             }
@@ -152,10 +151,7 @@ impl PluginBridgeManager {
                 url,
                 duration_seconds,
             } => {
-                format!(
-                    "[用户发送了一段{}秒的语音]: {}",
-                    duration_seconds, url
-                )
+                format!("[用户发送了一段{}秒的语音]: {}", duration_seconds, url)
             }
             PluginContent::Location { lat, lon } => {
                 format!("[用户发送了位置]: 经度 {}, 纬度 {}", lon, lat)

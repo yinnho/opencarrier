@@ -70,59 +70,58 @@ pub fn spawn_watcher(
     let llm_call_clone = llm_call.clone();
     let on_compile_clone = on_compile.clone();
 
-    let mut watcher =
-        notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-            let event = match res {
-                Ok(e) => e,
-                Err(e) => {
-                    warn!(error = %e, "Watcher error");
-                    return;
-                }
-            };
-
-            // Only react to file modifications, creations, and removals
-            match event.kind {
-                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {}
-                _ => return,
-            }
-
-            // Only react to .md files in knowledge dir
-            let relevant = event
-                .paths
-                .iter()
-                .any(|p| p.extension().map(|e| e == "md").unwrap_or(false));
-            if !relevant {
+    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        let event = match res {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(error = %e, "Watcher error");
                 return;
             }
+        };
 
-            // Debounce: skip if triggered too recently
-            {
-                let mut last = last_trigger.lock().unwrap();
-                let now = Instant::now();
-                if now.duration_since(*last) < Duration::from_secs(DEBOUNCE_SECS) {
-                    debug!("Debouncing watcher event");
-                    return;
-                }
-                *last = now;
+        // Only react to file modifications, creations, and removals
+        match event.kind {
+            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {}
+            _ => return,
+        }
+
+        // Only react to .md files in knowledge dir
+        let relevant = event
+            .paths
+            .iter()
+            .any(|p| p.extension().map(|e| e == "md").unwrap_or(false));
+        if !relevant {
+            return;
+        }
+
+        // Debounce: skip if triggered too recently
+        {
+            let mut last = last_trigger.lock().unwrap();
+            let now = Instant::now();
+            if now.duration_since(*last) < Duration::from_secs(DEBOUNCE_SECS) {
+                debug!("Debouncing watcher event");
+                return;
             }
+            *last = now;
+        }
 
-            debug!("Knowledge change detected, triggering compile");
+        debug!("Knowledge change detected, triggering compile");
 
-            let result = run_compile(&workspace_clone, &config_clone, &*llm_call_clone);
+        let result = run_compile(&workspace_clone, &config_clone, &*llm_call_clone);
 
-            info!(
-                metadata = result.metadata_generated,
-                merged = result.files_merged,
-                compressed = result.files_compressed,
-                errors = result.errors.len(),
-                "Watcher-triggered compile complete"
-            );
+        info!(
+            metadata = result.metadata_generated,
+            merged = result.files_merged,
+            compressed = result.files_compressed,
+            errors = result.errors.len(),
+            "Watcher-triggered compile complete"
+        );
 
-            if let Some(cb) = &on_compile_clone {
-                cb(&result);
-            }
-        })
-        .map_err(|e| format!("Failed to create watcher: {e}"))?;
+        if let Some(cb) = &on_compile_clone {
+            cb(&result);
+        }
+    })
+    .map_err(|e| format!("Failed to create watcher: {e}"))?;
 
     watcher
         .watch(&knowledge_dir, RecursiveMode::Recursive)

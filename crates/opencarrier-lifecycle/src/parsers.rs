@@ -42,7 +42,10 @@ pub struct ParseResult {
 impl ParseResult {
     /// Whether the caller should consider invoking Tier 2 (LLM-assisted parsing).
     pub fn needs_tier2(&self) -> bool {
-        matches!(self.quality, ParseQuality::Uncertain | ParseQuality::Fallback)
+        matches!(
+            self.quality,
+            ParseQuality::Uncertain | ParseQuality::Fallback
+        )
     }
 }
 
@@ -89,10 +92,15 @@ pub fn build_tier2_prompt(raw_content: &str, data_type: &str) -> (String, String
 2. 标题简短，能作文件名
 3. 内容要完整准确，保留关键细节
 4. 过滤掉无意义的闲聊和重复内容
-5. 只返回 JSON，不要其他文字"#.to_string();
+5. 只返回 JSON，不要其他文字"#
+        .to_string();
 
     let preview = if raw_content.len() > 6000 {
-        format!("{}...(共 {} 字符)", &raw_content[..raw_content.ceil_char_boundary(6000)], raw_content.len())
+        format!(
+            "{}...(共 {} 字符)",
+            &raw_content[..raw_content.ceil_char_boundary(6000)],
+            raw_content.len()
+        )
     } else {
         raw_content.to_string()
     };
@@ -108,11 +116,14 @@ pub fn parse_tier2_response(text: &str) -> Result<Vec<KnowledgeEntry>> {
     let parsed: Vec<KnowledgeCandidate> = serde_json::from_str(&json_text)
         .map_err(|e| anyhow::anyhow!("Tier 2 JSON parse failed: {}", e))?;
 
-    Ok(parsed.into_iter().map(|c| KnowledgeEntry {
-        title: c.title,
-        content: c.content,
-        source: Some("import-tier2".to_string()),
-    }).collect())
+    Ok(parsed
+        .into_iter()
+        .map(|c| KnowledgeEntry {
+            title: c.title,
+            content: c.content,
+            source: Some("import-tier2".to_string()),
+        })
+        .collect())
 }
 
 /// Assess the quality of Tier 1 parsing results.
@@ -127,7 +138,10 @@ fn assess_quality(entries: &[KnowledgeEntry], raw_content: &str) -> ParseQuality
 
     // Multiple structured entries with distinct titles = good signal
     if entries.len() >= 2 {
-        let distinct_titles = entries.iter().map(|e| &e.title).collect::<std::collections::HashSet<_>>();
+        let distinct_titles = entries
+            .iter()
+            .map(|e| &e.title)
+            .collect::<std::collections::HashSet<_>>();
         if distinct_titles.len() == entries.len() {
             return ParseQuality::Good;
         }
@@ -237,7 +251,10 @@ fn parse_json_chat(json: &serde_json::Value) -> Result<Vec<KnowledgeEntry>> {
                 .or_else(|| json.get("roomid"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("群聊");
-            entries.extend(parse_message_array(msgs, &format!("企业微信-{}", room_name))?);
+            entries.extend(parse_message_array(
+                msgs,
+                &format!("企业微信-{}", room_name),
+            )?);
             return Ok(entries);
         }
     }
@@ -557,7 +574,8 @@ mod tests {
 
     #[test]
     fn test_quality_fallback_for_plain_text() {
-        let content = "This is a plain text chat log that isn't JSON at all, so it should be a fallback.";
+        let content =
+            "This is a plain text chat log that isn't JSON at all, so it should be a fallback.";
         let result = parse_import_data(content, "chat").unwrap();
         assert_eq!(result.quality, ParseQuality::Fallback);
         assert!(result.needs_tier2());

@@ -82,7 +82,13 @@ impl TenantStore {
             .map_err(|e| format!("Prepare error: {e}"))?;
         let rows = stmt
             .query_map([], |row| {
-                row_to_entry(row).map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(std::io::Error::other(e))))
+                row_to_entry(row).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::other(e)),
+                    )
+                })
             })
             .map_err(|e| format!("Query error: {e}"))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -129,7 +135,9 @@ fn row_to_entry(row: &rusqlite::Row) -> Result<TenantEntry, String> {
         id: row.get(0).map_err(|e| format!("id: {e}"))?,
         name: row.get(1).map_err(|e| format!("name: {e}"))?,
         password_hash: row.get(2).map_err(|e| format!("password_hash: {e}"))?,
-        role: TenantRole::from_role_str(&row.get::<_, String>(3).map_err(|e| format!("role: {e}"))?),
+        role: TenantRole::from_role_str(
+            &row.get::<_, String>(3).map_err(|e| format!("role: {e}"))?,
+        ),
         enabled: row.get::<_, i32>(4).map_err(|e| format!("enabled: {e}"))? != 0,
         created_at: row.get(5).map_err(|e| format!("created_at: {e}"))?,
         updated_at: row.get(6).map_err(|e| format!("updated_at: {e}"))?,

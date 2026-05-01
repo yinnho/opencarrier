@@ -7,7 +7,9 @@ use crate::auth_cooldown::{CooldownVerdict, ProviderCooldown};
 use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, ContextBudget};
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::kernel_handle::KernelHandle;
-use crate::llm_driver::{Brain, CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use crate::llm_driver::{
+    Brain, CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent,
+};
 use crate::llm_errors;
 use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::mcp::McpConnection;
@@ -303,9 +305,8 @@ pub async fn run_agent_loop(
         } else {
             &manifest.model.modality
         };
-        let mut response = call_with_fallback(
-            brain.as_ref(), &*driver, modality, request, None,
-        ).await?;
+        let mut response =
+            call_with_fallback(brain.as_ref(), &*driver, modality, request, None).await?;
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
@@ -820,8 +821,7 @@ async fn call_with_retry(
             CooldownVerdict::AllowProbe => {
                 debug!(
                     provider,
-                    is_stream,
-                    "Allowing probe request through circuit breaker"
+                    is_stream, "Allowing probe request through circuit breaker"
                 );
             }
             CooldownVerdict::Allow => {}
@@ -976,9 +976,7 @@ async fn call_with_fallback(
     }
 
     Err(last_error.unwrap_or_else(|| {
-        OpenCarrierError::LlmDriver(format!(
-            "All endpoints exhausted for modality '{modality}'"
-        ))
+        OpenCarrierError::LlmDriver(format!("All endpoints exhausted for modality '{modality}'"))
     }))
 }
 
@@ -1199,8 +1197,13 @@ pub async fn run_agent_loop_streaming(
             &manifest.model.modality
         };
         let mut response = call_with_fallback(
-            brain.as_ref(), &*driver, modality, request, Some(stream_tx.clone()),
-        ).await?;
+            brain.as_ref(),
+            &*driver,
+            modality,
+            request,
+            Some(stream_tx.clone()),
+        )
+        .await?;
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
@@ -3052,7 +3055,6 @@ mod tests {
             None,
             None,
             None,
-
             None,
             None,
             None,
@@ -3102,7 +3104,6 @@ mod tests {
             None,
             None,
             None,
-
             None,
             None,
             None,
@@ -4119,7 +4120,6 @@ mod tests {
             None,
             None,
             None,
-
             None,
             None,
             None,

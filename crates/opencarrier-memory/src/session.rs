@@ -150,7 +150,10 @@ impl SessionStore {
     /// List all sessions with metadata (session_id, agent_id, message_count, created_at).
     ///
     /// If `tenant_id` is provided, only sessions belonging to that tenant are returned.
-    pub fn list_sessions(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<serde_json::Value>> {
+    pub fn list_sessions(
+        &self,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<Vec<serde_json::Value>> {
         let conn = self
             .conn
             .lock()
@@ -166,17 +169,13 @@ impl SessionStore {
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
         let row_data: Vec<rusqlite::Result<serde_json::Value>> = if let Some(tid) = tenant_id {
-            stmt.query_map(rusqlite::params![tid], |row| {
-                Self::session_row_to_json(row)
-            })
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-            .collect()
+            stmt.query_map(rusqlite::params![tid], |row| Self::session_row_to_json(row))
+                .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+                .collect()
         } else {
-            stmt.query_map([], |row| {
-                Self::session_row_to_json(row)
-            })
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-            .collect()
+            stmt.query_map([], |row| Self::session_row_to_json(row))
+                .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+                .collect()
         };
 
         let mut sessions = Vec::new();
@@ -211,7 +210,11 @@ impl SessionStore {
     }
 
     /// Create a new empty session for an agent with a tenant ID.
-    pub fn create_session_with_tenant(&self, agent_id: AgentId, tenant_id: String) -> OpenCarrierResult<Session> {
+    pub fn create_session_with_tenant(
+        &self,
+        agent_id: AgentId,
+        tenant_id: String,
+    ) -> OpenCarrierResult<Session> {
         let session = Session {
             id: SessionId::new(),
             agent_id,
@@ -589,10 +592,7 @@ impl SessionStore {
 
         // Count existing lines to find what's already written
         let existing_lines = if path.exists() {
-            std::io::BufRead::lines(std::io::BufReader::new(
-                std::fs::File::open(&path)?,
-            ))
-            .count()
+            std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(&path)?)).count()
         } else {
             0
         };
@@ -865,7 +865,9 @@ mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let sessions_dir = dir.path().join("sessions");
-        store.write_jsonl_mirror(&session, &sessions_dir, None).unwrap();
+        store
+            .write_jsonl_mirror(&session, &sessions_dir, None)
+            .unwrap();
 
         let jsonl_path = sessions_dir.join(format!("{}.jsonl", session.id.0));
         assert!(jsonl_path.exists());

@@ -1,7 +1,7 @@
 //! Agent communication (comms) endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -360,10 +360,16 @@ pub async fn comms_send(
     };
     if let Some(from_entry) = state.kernel.registry.get(from_id) {
         if !can_access(&ctx, from_entry.tenant_id.as_str()) {
-            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied to source agent"})));
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Access denied to source agent"})),
+            );
         }
     } else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Source agent not found"})));
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Source agent not found"})),
+        );
     }
 
     // Validate to agent exists and tenant can access it
@@ -373,10 +379,16 @@ pub async fn comms_send(
     };
     if let Some(to_entry) = state.kernel.registry.get(to_id) {
         if !can_access(&ctx, &to_entry.tenant_id) {
-            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied to target agent"})));
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Access denied to target agent"})),
+            );
         }
     } else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Target agent not found"})));
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Target agent not found"})),
+        );
     }
 
     // SECURITY: Limit message size
@@ -411,7 +423,10 @@ pub async fn comms_task(
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
     if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin only"})),
+        );
     }
     if req.title.is_empty() {
         return (
@@ -446,13 +461,15 @@ pub async fn comms_task(
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/comms/events", routing::get(comms_events))
-        .route("/api/comms/events/stream", routing::get(comms_events_stream))
+    axum::Router::new()
+        .route("/api/comms/events", routing::get(comms_events))
+        .route(
+            "/api/comms/events/stream",
+            routing::get(comms_events_stream),
+        )
         .route("/api/comms/send", routing::post(comms_send))
         .route("/api/comms/task", routing::post(comms_task))
         .route("/api/comms/topology", routing::get(comms_topology))

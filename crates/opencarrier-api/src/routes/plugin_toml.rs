@@ -41,7 +41,10 @@ pub fn channel_sanitize_name(name: &str) -> Option<String> {
     if trimmed.is_empty() || trimmed.len() > 64 {
         return None;
     }
-    if trimmed.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if trimmed
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         Some(trimmed.to_string())
     } else {
         None
@@ -64,8 +67,8 @@ where
             .map_err(|_| "Failed to create plugin directory".to_string())?;
     }
 
-    let lock_file = std::fs::File::create(&lock_path)
-        .map_err(|_| "Failed to create lock file".to_string())?;
+    let lock_file =
+        std::fs::File::create(&lock_path).map_err(|_| "Failed to create lock file".to_string())?;
     lock_file
         .lock_exclusive()
         .map_err(|_| "Failed to acquire config lock".to_string())?;
@@ -93,7 +96,7 @@ pub fn read_toml(path: &std::path::Path) -> Result<toml::Value, String> {
 
 /// Serialize a TOML value and write it atomically.
 pub fn write_toml(path: &std::path::Path, doc: &toml::Value) -> Result<(), String> {
-    let content = toml::to_string_pretty(doc)
-        .map_err(|_| "Failed to serialize plugin config".to_string())?;
+    let content =
+        toml::to_string_pretty(doc).map_err(|_| "Failed to serialize plugin config".to_string())?;
     atomic_write(path, &content).map_err(|_| "Failed to write plugin config".to_string())
 }

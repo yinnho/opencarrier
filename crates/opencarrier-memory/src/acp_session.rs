@@ -174,11 +174,7 @@ impl AcpSessionStore {
     }
 
     /// Append an assistant message to the session JSONL.
-    pub fn append_assistant_message(
-        &self,
-        session_id: &str,
-        content: &str,
-    ) -> Result<(), String> {
+    pub fn append_assistant_message(&self, session_id: &str, content: &str) -> Result<(), String> {
         let (jsonl_path, meta_path, cwd_val) = {
             let (jsonl, meta) = self
                 .find_session_paths(session_id)
@@ -265,8 +261,7 @@ impl AcpSessionStore {
                     }
                 }
                 Some("assistant") => {
-                    if let Some(msg_content) = event.get("message").and_then(|m| m.get("content"))
-                    {
+                    if let Some(msg_content) = event.get("message").and_then(|m| m.get("content")) {
                         let text = if let Some(t) = msg_content.get("text").and_then(|t| t.as_str())
                         {
                             t.to_string()
@@ -311,8 +306,7 @@ impl AcpSessionStore {
     }
 
     fn session_dir(&self, _session_id: &str, cwd: &str) -> PathBuf {
-        self.base_dir
-            .join(Self::workspace_basename(cwd))
+        self.base_dir.join(Self::workspace_basename(cwd))
     }
 
     fn jsonl_path(&self, session_id: &str, cwd: &str) -> PathBuf {
@@ -388,7 +382,12 @@ mod tests {
 
         let ids: Vec<String> = sessions
             .iter()
-            .map(|s| s.get("sessionId").and_then(|v| v.as_str()).unwrap().to_string())
+            .map(|s| {
+                s.get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap()
+                    .to_string()
+            })
             .collect();
         assert!(ids.contains(&"sess_001".to_string()));
         assert!(ids.contains(&"sess_002".to_string()));
@@ -422,9 +421,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = AcpSessionStore::new(dir.path());
 
-        store
-            .create_session("sess_004", "agent_c", "/tmp")
-            .unwrap();
+        store.create_session("sess_004", "agent_c", "/tmp").unwrap();
         assert!(store.delete_session("sess_004").unwrap());
         assert!(!store.delete_session("sess_004").unwrap());
     }
@@ -434,9 +431,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = AcpSessionStore::new(dir.path());
 
-        store
-            .create_session("sess_005", "agent_d", "/tmp")
-            .unwrap();
+        store.create_session("sess_005", "agent_d", "/tmp").unwrap();
         let long_msg = "a".repeat(200);
         store
             .append_user_message("sess_005", &long_msg, Some("/tmp"))

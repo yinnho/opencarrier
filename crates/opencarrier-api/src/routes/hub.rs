@@ -1,7 +1,7 @@
 //! Hub template marketplace endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -15,21 +15,23 @@ pub async fn list_hub_templates(State(state): State<Arc<AppState>>) -> impl Into
     let hub_url = state.kernel.config.hub.url.clone();
     // SECURITY: Validate hub URL before fetching
     if let Err(e) = opencarrier_clone::hub::validate_hub_url(&hub_url) {
-        return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()})));
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        );
     }
-    let hub_api_key = match
-        opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
-    {
-        Ok(k) => k,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": format!("Hub API key not configured: {e}")
-                })),
-            );
-        }
-    };
+    let hub_api_key =
+        match opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
+            Ok(k) => k,
+            Err(e) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": format!("Hub API key not configured: {e}")
+                    })),
+                );
+            }
+        };
 
     let url = format!("{}/api/templates?limit=50", hub_url.trim_end_matches('/'));
 
@@ -75,7 +77,8 @@ pub async fn install_hub_template(
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
     let target_tenant: Option<String> = if ctx.is_admin() {
-        body.get("tenant_id").and_then(|v| v.as_str().map(String::from))
+        body.get("tenant_id")
+            .and_then(|v| v.as_str().map(String::from))
             .or_else(|| ctx.tenant_id.clone())
     } else {
         ctx.tenant_id.clone()
@@ -83,11 +86,14 @@ pub async fn install_hub_template(
     let hub_url = state.kernel.config.hub.url.clone();
     // SECURITY: Validate hub URL before fetching
     if let Err(e) = opencarrier_clone::hub::validate_hub_url(&hub_url) {
-        return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()})));
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        );
     }
-    let hub_api_key = match
-        opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
-    {
+    let hub_api_key = match opencarrier_clone::hub::read_api_key(
+        &state.kernel.config.hub.api_key_env,
+    ) {
         Ok(k) => {
             tracing::info!(key_env = %state.kernel.config.hub.api_key_env, key_prefix = &k[..8.min(k.len())], "Hub API key loaded");
             k
@@ -136,7 +142,9 @@ pub async fn install_hub_template(
         tracing::warn!(%status, %body, key_prefix = &hub_api_key[..8.min(hub_api_key.len())], "Hub download failed");
         return (
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": format!("Hub download failed: {} — {}", status, body)})),
+            Json(
+                serde_json::json!({"error": format!("Hub download failed: {} — {}", status, body)}),
+            ),
         );
     }
 
@@ -150,7 +158,11 @@ pub async fn install_hub_template(
         }
     };
 
-    match state.kernel.clone_install(&name, &agx_bytes, target_tenant.as_deref().unwrap_or("")).await {
+    match state
+        .kernel
+        .clone_install(&name, &agx_bytes, target_tenant.as_deref().unwrap_or(""))
+        .await
+    {
         Ok((agent_id, agent_name)) => (
             StatusCode::CREATED,
             Json(serde_json::json!({
@@ -166,11 +178,13 @@ pub async fn install_hub_template(
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/hub/templates", routing::get(list_hub_templates))
-        .route("/api/hub/templates/{name}/install", routing::post(install_hub_template))
+    axum::Router::new()
+        .route("/api/hub/templates", routing::get(list_hub_templates))
+        .route(
+            "/api/hub/templates/{name}/install",
+            routing::post(install_hub_template),
+        )
 }

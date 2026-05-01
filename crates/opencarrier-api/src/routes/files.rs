@@ -1,7 +1,7 @@
 //! File upload and agent file management endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -21,10 +21,11 @@ pub async fn list_agent_files(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_agent_id, entry) =
+        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
@@ -74,7 +75,10 @@ pub async fn get_agent_file(
         );
     }
 
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
+    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
 
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
@@ -158,7 +162,10 @@ pub async fn set_agent_file(
 
     // Immutable files: cannot be overwritten once created
     if IMMUTABLE_IDENTITY_FILES.contains(&filename.as_str()) {
-        let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
+        let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) {
+            Ok(e) => e,
+            Err(r) => return r,
+        };
         if let Some(ref workspace) = entry.manifest.workspace {
             let file_path = workspace.join(&*filename);
             if file_path.exists() {
@@ -182,7 +189,10 @@ pub async fn set_agent_file(
         );
     }
 
-    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
+    let entry = match get_agent_or_404(&state.kernel.registry, &agent_id) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
 
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
@@ -566,13 +576,15 @@ pub async fn serve_upload(
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/agents/{id}/files", routing::get(list_agent_files))
-        .route("/api/agents/{id}/files/{filename}", routing::put(set_agent_file).get(get_agent_file))
+    axum::Router::new()
+        .route("/api/agents/{id}/files", routing::get(list_agent_files))
+        .route(
+            "/api/agents/{id}/files/{filename}",
+            routing::put(set_agent_file).get(get_agent_file),
+        )
         .route("/api/agents/{id}/upload", routing::post(upload_file))
         .route("/api/uploads/{file_id}", routing::get(serve_upload))
 }

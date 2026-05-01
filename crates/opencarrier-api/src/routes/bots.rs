@@ -11,8 +11,8 @@ use opencarrier_kernel::KernelHandle;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::routes::state::AppState;
 use crate::routes::plugin_toml::*;
+use crate::routes::state::AppState;
 
 /// Detect platform from plugin's [[channels]] declarations.
 fn detect_platform(doc: &toml::Value) -> Vec<&str> {
@@ -70,7 +70,11 @@ fn platform_label(platform: &str) -> &str {
 }
 
 /// Scan a plugin directory for bot.toml files in subdirectories.
-fn scan_bots(plugin_dir: &std::path::Path, dir_name: &str, platform: &str) -> Vec<serde_json::Value> {
+fn scan_bots(
+    plugin_dir: &std::path::Path,
+    dir_name: &str,
+    platform: &str,
+) -> Vec<serde_json::Value> {
     let mut bots = Vec::new();
     let entries = match std::fs::read_dir(plugin_dir) {
         Ok(e) => e,
@@ -91,10 +95,17 @@ fn scan_bots(plugin_dir: &std::path::Path, dir_name: &str, platform: &str) -> Ve
             None => continue,
         };
 
-        let Ok(content) = std::fs::read_to_string(&bot_toml) else { continue };
-        let Ok(doc) = content.parse::<toml::Value>() else { continue };
+        let Ok(content) = std::fs::read_to_string(&bot_toml) else {
+            continue;
+        };
+        let Ok(doc) = content.parse::<toml::Value>() else {
+            continue;
+        };
 
-        let tenant_name = doc.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let tenant_name = doc
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let bind_agent = doc.get("bind_agent").and_then(|v| v.as_str()).unwrap_or("");
 
         let mut bot = serde_json::json!({
@@ -110,25 +121,55 @@ fn scan_bots(plugin_dir: &std::path::Path, dir_name: &str, platform: &str) -> Ve
         let obj = bot.as_object_mut().unwrap();
         match platform {
             "wecom" => {
-                obj.insert("bot_id".into(), serde_json::Value::String(
-                    doc.get("bot_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                ));
-                obj.insert("corp_id".into(), serde_json::Value::String(
-                    doc.get("corp_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                ));
+                obj.insert(
+                    "bot_id".into(),
+                    serde_json::Value::String(
+                        doc.get("bot_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                );
+                obj.insert(
+                    "corp_id".into(),
+                    serde_json::Value::String(
+                        doc.get("corp_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                );
             }
             "feishu" => {
-                obj.insert("app_id".into(), serde_json::Value::String(
-                    doc.get("app_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                ));
-                obj.insert("brand".into(), serde_json::Value::String(
-                    doc.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu").to_string(),
-                ));
+                obj.insert(
+                    "app_id".into(),
+                    serde_json::Value::String(
+                        doc.get("app_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                );
+                obj.insert(
+                    "brand".into(),
+                    serde_json::Value::String(
+                        doc.get("brand")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("feishu")
+                            .to_string(),
+                    ),
+                );
             }
             "dingtalk" => {
-                obj.insert("app_key".into(), serde_json::Value::String(
-                    doc.get("app_key").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                ));
+                obj.insert(
+                    "app_key".into(),
+                    serde_json::Value::String(
+                        doc.get("app_key")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                );
             }
             _ => {}
         }
@@ -143,9 +184,7 @@ fn scan_bots(plugin_dir: &std::path::Path, dir_name: &str, platform: &str) -> Ve
 // GET /api/bots — list all bots
 // ---------------------------------------------------------------------------
 
-pub async fn list_bots(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let home = &state.kernel.config.home_dir;
     let plugins_dir = home.join("plugins");
     let mut bots: Vec<serde_json::Value> = Vec::new();
@@ -165,8 +204,12 @@ pub async fn list_bots(
                 continue;
             }
 
-            let Ok(content) = std::fs::read_to_string(&toml_path) else { continue };
-            let Ok(doc) = content.parse::<toml::Value>() else { continue };
+            let Ok(content) = std::fs::read_to_string(&toml_path) else {
+                continue;
+            };
+            let Ok(doc) = content.parse::<toml::Value>() else {
+                continue;
+            };
 
             let platforms = detect_platform(&doc);
             let platform = platforms
@@ -277,22 +320,20 @@ pub async fn wecom_smartbot_poll(Query(query): Query<PollQuery>) -> impl IntoRes
 
                     if status == "success" {
                         if let Some(bot_info) = inner.get("bot_info") {
-                            let bot_id = bot_info
-                                .get("botid")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let bot_id =
+                                bot_info.get("botid").and_then(|v| v.as_str()).unwrap_or("");
                             let secret = bot_info
                                 .get("secret")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
-                            result
-                                .as_object_mut()
-                                .unwrap()
-                                .insert("bot_id".into(), serde_json::Value::String(bot_id.to_string()));
-                            result
-                                .as_object_mut()
-                                .unwrap()
-                                .insert("secret".into(), serde_json::Value::String(secret.to_string()));
+                            result.as_object_mut().unwrap().insert(
+                                "bot_id".into(),
+                                serde_json::Value::String(bot_id.to_string()),
+                            );
+                            result.as_object_mut().unwrap().insert(
+                                "secret".into(),
+                                serde_json::Value::String(secret.to_string()),
+                            );
                         }
                     }
 
@@ -329,7 +370,9 @@ pub async fn create_bot(
             None => {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "名称无效：仅支持字母、数字、连字符、下划线（最多64字符）" })),
+                    Json(
+                        serde_json::json!({ "error": "名称无效：仅支持字母、数字、连字符、下划线（最多64字符）" }),
+                    ),
                 );
             }
         },
@@ -341,10 +384,7 @@ pub async fn create_bot(
         }
     };
 
-    let platform = body
-        .get("platform")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let platform = body.get("platform").and_then(|v| v.as_str()).unwrap_or("");
     let plugin_dir_name = match platform_plugin_dir(platform) {
         Some(d) => d,
         None => {
@@ -398,7 +438,9 @@ pub async fn create_bot(
                 if !v.is_empty() {
                     bot_fields.insert(
                         "app_id".into(),
-                        toml::Value::String(channel_validate_field(v, "app_id").unwrap_or_default()),
+                        toml::Value::String(
+                            channel_validate_field(v, "app_id").unwrap_or_default(),
+                        ),
                     );
                 }
             }
@@ -514,14 +556,18 @@ pub async fn create_bot(
 
     if !has_dylib {
         let dylib_name = format!("libopencarrier_plugin_{platform}");
-        let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
+        let ext = if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
         let candidates = [
-            std::env::var("OPENCARRIER_BUILD_DIR").ok().map(|d| {
-                std::path::PathBuf::from(d).join(format!("{dylib_name}.{ext}"))
-            }),
-            std::env::current_exe().ok().and_then(|exe| {
-                exe.parent().map(|p| p.join(format!("{dylib_name}.{ext}")))
-            }),
+            std::env::var("OPENCARRIER_BUILD_DIR")
+                .ok()
+                .map(|d| std::path::PathBuf::from(d).join(format!("{dylib_name}.{ext}"))),
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|p| p.join(format!("{dylib_name}.{ext}")))),
             std::env::current_exe().ok().and_then(|exe| {
                 exe.parent()
                     .and_then(|p| p.parent())
@@ -757,8 +803,7 @@ fn update_bot_toml(
     path: &std::path::Path,
     f: impl FnOnce(&mut toml::value::Table),
 ) -> Result<(), String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("读取失败: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("读取失败: {e}"))?;
     let mut doc = content
         .parse::<toml::Value>()
         .map_err(|e| format!("解析失败: {e}"))?;
@@ -769,10 +814,8 @@ fn update_bot_toml(
 
     f(table);
 
-    let new_content = toml::to_string_pretty(&doc)
-        .map_err(|e| format!("序列化失败: {e}"))?;
-    atomic_write(path, &new_content)
-        .map_err(|e| format!("写入失败: {e}"))?;
+    let new_content = toml::to_string_pretty(&doc).map_err(|e| format!("序列化失败: {e}"))?;
+    atomic_write(path, &new_content).map_err(|e| format!("写入失败: {e}"))?;
 
     Ok(())
 }

@@ -214,7 +214,9 @@ impl ModelCatalog {
         // Register aliases from the entry
         for alias in &entry.aliases {
             let lower = alias.to_lowercase();
-            self.aliases.entry(lower).or_insert_with(|| entry.id.clone());
+            self.aliases
+                .entry(lower)
+                .or_insert_with(|| entry.id.clone());
         }
         self.models.push(entry);
 
@@ -261,8 +263,7 @@ impl ModelCatalog {
     pub fn save_custom_models(&self, path: &std::path::Path) -> Result<(), String> {
         let json = serde_json::to_string_pretty(&self.models)
             .map_err(|e| format!("Failed to serialize models: {e}"))?;
-        std::fs::write(path, json)
-            .map_err(|e| format!("Failed to write models file: {e}"))?;
+        std::fs::write(path, json).map_err(|e| format!("Failed to write models file: {e}"))?;
         Ok(())
     }
 }
@@ -446,7 +447,10 @@ mod tests {
     fn test_apply_url_overrides() {
         let mut catalog = ModelCatalog::new();
         let mut overrides = HashMap::new();
-        overrides.insert("ollama".to_string(), "http://192.168.1.100:11434/v1".to_string());
+        overrides.insert(
+            "ollama".to_string(),
+            "http://192.168.1.100:11434/v1".to_string(),
+        );
         catalog.apply_url_overrides(&overrides);
         let provider = catalog.get_provider("ollama").unwrap();
         assert_eq!(provider.base_url, "http://192.168.1.100:11434/v1");

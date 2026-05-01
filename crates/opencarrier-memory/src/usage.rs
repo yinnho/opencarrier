@@ -101,7 +101,11 @@ impl UsageStore {
     }
 
     /// Query usage summary, optionally filtered by agent and/or tenant.
-    pub fn query_summary(&self, agent_id: Option<AgentId>, tenant_id: Option<&str>) -> OpenCarrierResult<UsageSummary> {
+    pub fn query_summary(
+        &self,
+        agent_id: Option<AgentId>,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<UsageSummary> {
         let conn = self
             .conn
             .lock()
@@ -192,7 +196,11 @@ impl UsageStore {
     }
 
     /// Query daily usage breakdown for the last N days, optionally filtered by tenant.
-    pub fn query_daily_breakdown(&self, days: u32, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<DailyBreakdown>> {
+    pub fn query_daily_breakdown(
+        &self,
+        days: u32,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<Vec<DailyBreakdown>> {
         let conn = self
             .conn
             .lock()
@@ -200,39 +208,41 @@ impl UsageStore {
 
         // SECURITY: Use parameterized query for tenant_id to prevent SQL injection.
         // `days` is u32, safe to format directly as it produces only digits.
-        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(tid) = tenant_id {
-            (
-                format!(
-                    "SELECT date(timestamp) as day,
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            if let Some(tid) = tenant_id {
+                (
+                    format!(
+                        "SELECT date(timestamp) as day,
                             COALESCE(SUM(input_tokens) + SUM(output_tokens), 0),
                             COUNT(*)
                      FROM usage_events
                      WHERE timestamp > datetime('now', '-{days} days') AND tenant_id = ?1
                      GROUP BY day
                      ORDER BY day ASC"
-                ),
-                vec![Box::new(tid.to_string())],
-            )
-        } else {
-            (
-                format!(
-                    "SELECT date(timestamp) as day,
+                    ),
+                    vec![Box::new(tid.to_string())],
+                )
+            } else {
+                (
+                    format!(
+                        "SELECT date(timestamp) as day,
                             COALESCE(SUM(input_tokens) + SUM(output_tokens), 0),
                             COUNT(*)
                      FROM usage_events
                      WHERE timestamp > datetime('now', '-{days} days')
                      GROUP BY day
                      ORDER BY day ASC"
-                ),
-                vec![],
-            )
-        };
+                    ),
+                    vec![],
+                )
+            };
 
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
         let row_data: Vec<rusqlite::Result<DailyBreakdown>> = stmt
             .query_map(param_refs.as_slice(), |row| {
                 Ok(DailyBreakdown {

@@ -3,11 +3,11 @@
 //! Abstracts over multiple LLM providers (Anthropic, OpenAI, Ollama, etc.).
 
 use async_trait::async_trait;
-use std::sync::Arc;
 use opencarrier_types::brain::{ApiFormat, AuthHeaderType};
 use opencarrier_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use opencarrier_types::tool::{ToolCall, ToolDefinition};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use thiserror::Error;
 
 /// Error type for LLM driver operations.
@@ -182,10 +182,7 @@ pub trait Brain: Send + Sync {
     /// Get the ordered list of resolved endpoints for a modality.
     /// Returns primary first, then fallbacks in order.
     /// Returns an empty Vec if the modality is unknown.
-    fn endpoints_for(
-        &self,
-        _modality: &str,
-    ) -> Vec<opencarrier_types::brain::ResolvedEndpoint> {
+    fn endpoints_for(&self, _modality: &str) -> Vec<opencarrier_types::brain::ResolvedEndpoint> {
         vec![]
     }
 

@@ -19,7 +19,10 @@ pub fn validate_hub_url(url: &str) -> Result<()> {
         .trim_start_matches("http://");
     let host = if no_scheme.starts_with('[') {
         // IPv6 bracket notation
-        no_scheme.find(']').map(|i| &no_scheme[..=i]).unwrap_or(no_scheme)
+        no_scheme
+            .find(']')
+            .map(|i| &no_scheme[..=i])
+            .unwrap_or(no_scheme)
     } else {
         no_scheme.split(&['/', ':'][..]).next().unwrap_or(no_scheme)
     }
@@ -41,21 +44,32 @@ pub fn validate_hub_url(url: &str) -> Result<()> {
     ];
     for b in &blocked {
         if host == *b {
-            bail!("Hub URL blocked: internal/metadata address '{}' is not allowed", host);
+            bail!(
+                "Hub URL blocked: internal/metadata address '{}' is not allowed",
+                host
+            );
         }
     }
 
     // Block RFC1918 private IPs (10.x, 172.16-31.x, 192.168.x)
     let parts: Vec<&str> = host.split('.').collect();
     if parts.len() == 4 {
-        if parts[0] == "10" { bail!("Hub URL blocked: private IP '{}'", host); }
+        if parts[0] == "10" {
+            bail!("Hub URL blocked: private IP '{}'", host);
+        }
         if parts[0] == "172" {
             if let Ok(second) = parts[1].parse::<u8>() {
-                if (16..=31).contains(&second) { bail!("Hub URL blocked: private IP '{}'", host); }
+                if (16..=31).contains(&second) {
+                    bail!("Hub URL blocked: private IP '{}'", host);
+                }
             }
         }
-        if parts[0] == "192" && parts[1] == "168" { bail!("Hub URL blocked: private IP '{}'", host); }
-        if parts[0] == "127" { bail!("Hub URL blocked: loopback IP '{}'", host); }
+        if parts[0] == "192" && parts[1] == "168" {
+            bail!("Hub URL blocked: private IP '{}'", host);
+        }
+        if parts[0] == "127" {
+            bail!("Hub URL blocked: loopback IP '{}'", host);
+        }
     }
 
     Ok(())
@@ -85,7 +99,11 @@ pub async fn search(hub_url: &str, api_key: &str, query: &str) -> Result<String>
     let url = if query.is_empty() {
         format!("{}/api/templates?limit=20", base)
     } else {
-        format!("{}/api/templates?q={}&limit=20", base, urlencoding::encode(query))
+        format!(
+            "{}/api/templates?q={}&limit=20",
+            base,
+            urlencoding::encode(query)
+        )
     };
 
     let resp = hub_get(&url, api_key)
@@ -104,7 +122,10 @@ pub async fn search(hub_url: &str, api_key: &str, query: &str) -> Result<String>
     }
 
     let mut out = format!("找到 {} 个模版:\n\n", data.total);
-    out.push_str(&format!("{:<25} {:<12} {:<8} {:<6} {}\n", "名称", "版本", "下载", "评分", "描述"));
+    out.push_str(&format!(
+        "{:<25} {:<12} {:<8} {:<6} {}\n",
+        "名称", "版本", "下载", "评分", "描述"
+    ));
     out.push_str(&format!("{}\n", "-".repeat(80)));
 
     for t in &data.templates {
@@ -136,9 +157,18 @@ pub async fn install(
     validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
     let url = if let Some(v) = version {
-        format!("{}/api/templates/{}/download/{}", base, urlencoding::encode(name), urlencoding::encode(v))
+        format!(
+            "{}/api/templates/{}/download/{}",
+            base,
+            urlencoding::encode(name),
+            urlencoding::encode(v)
+        )
     } else {
-        format!("{}/api/templates/{}/download", base, urlencoding::encode(name))
+        format!(
+            "{}/api/templates/{}/download",
+            base,
+            urlencoding::encode(name)
+        )
     };
 
     tracing::info!("正在从 Hub 下载 {} ...", name);
@@ -188,7 +218,8 @@ pub fn get_or_create_device_id(opencarrier_dir: &Path) -> Result<String> {
     let id = {
         use std::fmt::Write;
         let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("Failed to generate random device ID: {e}"))?;
+        getrandom::fill(&mut bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to generate random device ID: {e}"))?;
         let mut hex = String::with_capacity(32);
         for b in &bytes {
             write!(&mut hex, "{:02x}", b).unwrap();
@@ -239,7 +270,9 @@ pub fn read_api_key(env_var: &str) -> Result<String> {
 pub fn resolve_device_id() -> String {
     let opencarrier_dir = std::env::var("OPENCARRIER_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".opencarrier")));
+        .or_else(|_| {
+            std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".opencarrier"))
+        });
     match opencarrier_dir {
         Ok(dir) => get_or_create_device_id(&dir).unwrap_or_else(|_| "unknown".to_string()),
         Err(_) => "unknown".to_string(),
@@ -288,7 +321,11 @@ pub async fn publish(
         payload["visibility"] = serde_json::Value::String(vis.to_string());
     }
 
-    tracing::info!("正在发布到 Hub ({} bytes / {:.1} KB)...", agx_bytes.len(), agx_bytes.len() as f64 / 1024.0);
+    tracing::info!(
+        "正在发布到 Hub ({} bytes / {:.1} KB)...",
+        agx_bytes.len(),
+        agx_bytes.len() as f64 / 1024.0
+    );
 
     let resp = hub_post(&url, api_key)
         .json(&payload)
@@ -319,13 +356,21 @@ fn format_stars(avg: f64) -> String {
 }
 
 /// Search plugins on Hub. Returns the raw JSON value so callers can format as needed.
-pub async fn search_plugins(hub_url: &str, api_key: &str, query: &str) -> Result<serde_json::Value> {
+pub async fn search_plugins(
+    hub_url: &str,
+    api_key: &str,
+    query: &str,
+) -> Result<serde_json::Value> {
     validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
     let url = if query.is_empty() {
         format!("{}/api/plugins?limit=20", base)
     } else {
-        format!("{}/api/plugins?q={}&limit=20", base, urlencoding::encode(query))
+        format!(
+            "{}/api/plugins?q={}&limit=20",
+            base,
+            urlencoding::encode(query)
+        )
     };
 
     let resp = hub_get(&url, api_key)
@@ -343,13 +388,22 @@ pub async fn search_plugins(hub_url: &str, api_key: &str, query: &str) -> Result
 
 /// Detect the current platform string for plugin downloads.
 pub fn current_platform() -> String {
-    let os = if cfg!(target_os = "linux") { "linux" }
-        else if cfg!(target_os = "macos") { "macos" }
-        else if cfg!(target_os = "windows") { "windows" }
-        else { "unknown" };
-    let arch = if cfg!(target_arch = "x86_64") { "x86_64" }
-        else if cfg!(target_arch = "aarch64") { "aarch64" }
-        else { "unknown" };
+    let os = if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "unknown"
+    };
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "unknown"
+    };
     format!("{os}-{arch}")
 }
 
@@ -366,9 +420,20 @@ pub async fn install_plugin(
     let base = hub_url.trim_end_matches('/');
     let platform = current_platform();
     let url = if let Some(v) = version {
-        format!("{}/api/plugins/{}/download/{}?platform={}", base, urlencoding::encode(name), urlencoding::encode(v), platform)
+        format!(
+            "{}/api/plugins/{}/download/{}?platform={}",
+            base,
+            urlencoding::encode(name),
+            urlencoding::encode(v),
+            platform
+        )
     } else {
-        format!("{}/api/plugins/{}/download?platform={}", base, urlencoding::encode(name), platform)
+        format!(
+            "{}/api/plugins/{}/download?platform={}",
+            base,
+            urlencoding::encode(name),
+            platform
+        )
     };
 
     tracing::info!("正在从 Hub 下载插件 {} (platform={})...", name, platform);
@@ -396,7 +461,8 @@ pub async fn install_plugin(
     let cursor = std::io::Cursor::new(&bytes[..]);
     let gz = flate2::read::GzDecoder::new(cursor);
     let mut archive = tar::Archive::new(gz);
-    archive.unpack(&plugin_dir)
+    archive
+        .unpack(&plugin_dir)
         .with_context(|| format!("解压插件失败: {}", plugin_dir.display()))?;
 
     tracing::info!("插件 '{}' 安装完成 → {}", name, plugin_dir.display());

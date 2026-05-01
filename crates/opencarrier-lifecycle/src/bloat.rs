@@ -104,7 +104,8 @@ pub fn check_bloat(workspace: &Path, config: &EvolutionConfig) -> Result<BloatRe
 
     let total_files = metas.len();
     let max_total_bytes = (config.knowledge_capacity_mb as u64) * 1024 * 1024;
-    let needs_pruning = total_files > config.max_knowledge_files || total_size_bytes > max_total_bytes;
+    let needs_pruning =
+        total_files > config.max_knowledge_files || total_size_bytes > max_total_bytes;
 
     // Tag overlap candidates (Jaccard ≥ 0.7)
     let mut should_merge_candidates = Vec::new();
@@ -245,7 +246,11 @@ pub fn apply_bloat_cleanup(workspace: &Path, config: &EvolutionConfig) -> Result
         if let Err(e) = crate::evolution::update_memory_index(workspace) {
             warn!(error = %e, "Bloat: failed to rebuild MEMORY.md");
         }
-        info!(stale = stale_marked, deleted = expired_deleted, "Bloat cleanup complete");
+        info!(
+            stale = stale_marked,
+            deleted = expired_deleted,
+            "Bloat cleanup complete"
+        );
     }
 
     Ok((stale_marked, expired_deleted))
@@ -307,13 +312,11 @@ pub fn scan_knowledge(workspace: &Path) -> Result<Vec<KnowledgeMeta>> {
 // ---------------------------------------------------------------------------
 
 /// Build (system_prompt, user_prompt) for checking if two files overlap.
-pub fn build_overlap_check_prompts(
-    content_a: &str,
-    content_b: &str,
-) -> (String, String) {
+pub fn build_overlap_check_prompts(content_a: &str, content_b: &str) -> (String, String) {
     let system = r#"判断以下两个知识文件是否在讲同一件事。
 返回 true（重叠）或 false（不重叠）。
-只返回 true 或 false，不要其他内容。"#.to_string();
+只返回 true 或 false，不要其他内容。"#
+        .to_string();
 
     let preview_a = safe_truncate(content_a, 400);
     let preview_b = safe_truncate(content_b, 400);
@@ -328,13 +331,11 @@ pub fn parse_overlap_check_response(text: &str) -> bool {
 }
 
 /// Build (system_prompt, user_prompt) for merging two knowledge files.
-pub fn build_merge_prompts(
-    content_a: &str,
-    content_b: &str,
-) -> (String, String) {
+pub fn build_merge_prompts(content_a: &str, content_b: &str) -> (String, String) {
     let system = r#"将以下两个知识文件合并为一个更完整的文件。
 保留两个文件中的所有有用信息，去除重复内容。
-只输出合并后的文件内容（纯 markdown，不含 frontmatter）。"#.to_string();
+只输出合并后的文件内容（纯 markdown，不含 frontmatter）。"#
+        .to_string();
 
     let preview_a = safe_truncate(content_a, 600);
     let preview_b = safe_truncate(content_b, 600);
@@ -401,7 +402,8 @@ pub fn build_metadata_prompt(body: &str) -> (String, String) {
 2. tags: 3-5 个分类标签
 返回严格 JSON 格式：
 {"description": "描述", "tags": ["标签1", "标签2", "标签3"]}
-只返回 JSON，不要其他内容。"#.to_string();
+只返回 JSON，不要其他内容。"#
+        .to_string();
 
     let preview = safe_truncate(body, 800);
     (system, preview.to_string())
@@ -410,8 +412,8 @@ pub fn build_metadata_prompt(body: &str) -> (String, String) {
 /// Parse the LLM metadata generation response.
 pub fn parse_metadata_response(text: &str) -> Result<(String, Vec<String>)> {
     let json_str = extract_json(text);
-    let v: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| anyhow::anyhow!("JSON parse failed: {}", e))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&json_str).map_err(|e| anyhow::anyhow!("JSON parse failed: {}", e))?;
     let desc = v["description"].as_str().unwrap_or("").to_string();
     let tags = v["tags"]
         .as_array()
@@ -444,18 +446,15 @@ pub fn build_compress_prompt(body: &str) -> (String, String) {
     let system = r#"将以下知识内容压缩为精华版本。
 保留所有关键事实、规则和流程，去除冗余描述、重复说明和废话。
 目标：将内容缩短到原来的一半左右，同时不丢失任何有用信息。
-只输出压缩后的内容（纯 markdown），不要其他文字。"#.to_string();
+只输出压缩后的内容（纯 markdown），不要其他文字。"#
+        .to_string();
 
     let preview = safe_truncate(body, 2000);
     (system, preview.to_string())
 }
 
 /// Apply compression result to a knowledge file.
-pub fn apply_compress(
-    workspace: &Path,
-    filename: &str,
-    compressed_body: &str,
-) -> Result<()> {
+pub fn apply_compress(workspace: &Path, filename: &str, compressed_body: &str) -> Result<()> {
     let knowledge_dir = workspace.join("data/knowledge");
     let path = knowledge_dir.join(filename);
     let original = fs::read_to_string(&path)?;
@@ -558,7 +557,11 @@ fn parse_frontmatter_tags_status(content: &str) -> (Vec<String>, Option<String>)
 
         // Multi-line array item: - "tag"
         if in_tags_array && line.starts_with('-') {
-            let item = line.trim_start_matches('-').trim().trim_matches('"').trim_matches('\'');
+            let item = line
+                .trim_start_matches('-')
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
             if !item.is_empty() {
                 tags.push(item.to_string());
             }
@@ -614,11 +617,7 @@ fn set_frontmatter_field(content: &str, key: &str, value: &str) -> String {
         new_lines.push(format!("{}: {}", key, value));
     }
 
-    format!(
-        "---\n{}\n---\n{}",
-        new_lines.join("\n"),
-        body
-    )
+    format!("---\n{}\n---\n{}", new_lines.join("\n"), body)
 }
 
 /// Update frontmatter with description and tags.
@@ -649,11 +648,7 @@ fn update_frontmatter_fields(content: &str, description: &str, tags: &[String]) 
         lines.push(format!("tags: {}", tags_yaml));
     }
 
-    format!(
-        "---\n{}\n---\n{}",
-        lines.join("\n"),
-        body
-    )
+    format!("---\n{}\n---\n{}", lines.join("\n"), body)
 }
 
 /// Split content into (frontmatter_text, body).
@@ -717,7 +712,6 @@ fn extract_json(text: &str) -> String {
     }
     text.to_string()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -841,7 +835,10 @@ mod tests {
         fs::write(dir.join("file1.md"), content).unwrap();
         fs::write(dir.join("file2.md"), content).unwrap();
 
-        let marked = mark_stale_files(tmp.path(), &["file1.md".to_string(), "file2.md".to_string()]);
+        let marked = mark_stale_files(
+            tmp.path(),
+            &["file1.md".to_string(), "file2.md".to_string()],
+        );
         assert_eq!(marked, 2);
 
         let updated = fs::read_to_string(dir.join("file1.md")).unwrap();
@@ -957,7 +954,11 @@ mod tests {
         let dir = tmp.path().join("data/knowledge");
         fs::create_dir_all(&dir).unwrap();
 
-        fs::write(dir.join("a.md"), "---\nname: A\ntags: [\"x\"]\n---\n\nA content").unwrap();
+        fs::write(
+            dir.join("a.md"),
+            "---\nname: A\ntags: [\"x\"]\n---\n\nA content",
+        )
+        .unwrap();
         fs::write(dir.join("b.md"), "---\nname: B\n---\n\nB content").unwrap();
         fs::write(dir.join("c.txt"), "Not markdown").unwrap();
 

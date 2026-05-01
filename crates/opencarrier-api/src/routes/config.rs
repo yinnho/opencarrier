@@ -1,7 +1,7 @@
 //! System configuration endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -42,8 +42,19 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
 /// Reads the config file, diffs against current config, validates the new config,
 /// and applies hot-reloadable actions (approval policy, cron limits, etc.).
 /// Returns the reload plan showing what changed and what was applied.
-pub async fn config_reload(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> impl IntoResponse {
-    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
+pub async fn config_reload(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> impl IntoResponse {
+    {
+        let ctx = get_tenant_ctx(&extensions);
+        if !ctx.is_admin() {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Admin only"})),
+            );
+        }
+    }
     // SECURITY: Record config reload in audit trail
     state.kernel.audit_log.record(
         "system",
@@ -83,7 +94,10 @@ pub async fn config_reload(State(state): State<Arc<AppState>>, extensions: axum:
 // ---------------------------------------------------------------------------
 
 /// GET /api/config/schema — Return a simplified JSON description of the config structure.
-pub async fn config_schema(State(state): State<Arc<AppState>>, _extensions: axum::http::Extensions) -> impl IntoResponse {
+pub async fn config_schema(
+    State(state): State<Arc<AppState>>,
+    _extensions: axum::http::Extensions,
+) -> impl IntoResponse {
     // NOTE: admin check requires middleware-level enforcement (mixed return types)
     // Build modality options from Brain config (or legacy model catalog)
     let modalities: Vec<String> = state
@@ -157,7 +171,11 @@ pub async fn config_set(
 ) -> axum::response::Response {
     let ctx = get_tenant_ctx(&extensions);
     if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin only"})),
+        )
+            .into_response();
     }
     let path = match body.get("path").and_then(|v| v.as_str()) {
         Some(p) => p.to_string(),
@@ -165,7 +183,8 @@ pub async fn config_set(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"status": "error", "error": "missing 'path' field"})),
-            ).into_response();
+            )
+                .into_response();
         }
     };
     let value = match body.get("value") {
@@ -174,17 +193,13 @@ pub async fn config_set(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"status": "error", "error": "missing 'value' field"})),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
     // Block sensitive keys that should not be changed via API
-    const BLOCKED_KEYS: &[&str] = &[
-        "api_key",
-        "auth",
-        "exec_policy",
-        "docker",
-    ];
+    const BLOCKED_KEYS: &[&str] = &["api_key", "auth", "exec_policy", "docker"];
     let lower = path.to_lowercase();
     for blocked in BLOCKED_KEYS {
         if lower.starts_with(blocked) || lower.contains(&format!(".{blocked}")) {
@@ -246,7 +261,8 @@ pub async fn config_set(
                 Json(
                     serde_json::json!({"status": "error", "error": "path too deep (max 3 levels)"}),
                 ),
-            ).into_response();
+            )
+                .into_response();
         }
     }
 
@@ -266,7 +282,8 @@ pub async fn config_set(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"status": "error", "error": format!("write failed: {e}")})),
-        ).into_response();
+        )
+            .into_response();
     }
 
     // Trigger reload
@@ -291,7 +308,8 @@ pub async fn config_set(
     (
         StatusCode::OK,
         Json(serde_json::json!({"status": reload_status, "path": path})),
-    ).into_response()
+    )
+        .into_response()
 }
 
 /// Convert a serde_json::Value to a toml::Value.
@@ -314,12 +332,11 @@ fn json_to_toml_value(value: &serde_json::Value) -> toml::Value {
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/config", routing::get(get_config).put(config_set))
+    axum::Router::new()
+        .route("/api/config", routing::get(get_config).put(config_set))
         .route("/api/config/reload", routing::post(config_reload))
         .route("/api/config/schema", routing::get(config_schema))
 }

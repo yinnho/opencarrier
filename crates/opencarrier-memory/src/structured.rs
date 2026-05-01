@@ -149,9 +149,13 @@ impl StructuredStore {
 
         let mut history = Vec::new();
         for row in rows {
-            let (blob, version, archived_at) = row.map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-            let value: serde_json::Value = serde_json::from_slice(&blob)
-                .unwrap_or_else(|_| String::from_utf8(blob).map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+            let (blob, version, archived_at) =
+                row.map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+            let value: serde_json::Value = serde_json::from_slice(&blob).unwrap_or_else(|_| {
+                String::from_utf8(blob)
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null)
+            });
             history.push((value, version, archived_at));
         }
         Ok(history)
@@ -295,7 +299,15 @@ impl StructuredStore {
         });
 
         match result {
-            Ok((name, manifest_blob, state_str, created_str, session_id_str, identity_str, tenant_id_str)) => {
+            Ok((
+                name,
+                manifest_blob,
+                state_str,
+                created_str,
+                session_id_str,
+                identity_str,
+                tenant_id_str,
+            )) => {
                 let manifest = rmp_serde::from_slice(&manifest_blob)
                     .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
                 let state = serde_json::from_str(&state_str)
@@ -392,18 +404,27 @@ impl StructuredStore {
         let col_count = stmt.column_count();
 
         #[allow(clippy::type_complexity)]
-        let row_data: Vec<rusqlite::Result<(String, String, Vec<u8>, String, String, Option<String>, Option<String>, Option<String>)>> = if let Some(tid) = tenant_id {
+        let row_data: Vec<
+            rusqlite::Result<(
+                String,
+                String,
+                Vec<u8>,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            )>,
+        > = if let Some(tid) = tenant_id {
             stmt.query_map(rusqlite::params![tid], |row| {
                 Self::row_to_agent_parts(row, col_count)
             })
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
             .collect()
         } else {
-            stmt.query_map([], |row| {
-                Self::row_to_agent_parts(row, col_count)
-            })
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-            .collect()
+            stmt.query_map([], |row| Self::row_to_agent_parts(row, col_count))
+                .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+                .collect()
         };
 
         let mut agents = Vec::new();
@@ -411,14 +432,22 @@ impl StructuredStore {
         let mut repair_queue: Vec<(String, Vec<u8>, String)> = Vec::new();
 
         for row in row_data {
-            let (id_str, name, manifest_blob, state_str, created_str, session_id_str, identity_str, tid_str) =
-                match row {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::warn!("Skipping agent row with read error: {e}");
-                        continue;
-                    }
-                };
+            let (
+                id_str,
+                name,
+                manifest_blob,
+                state_str,
+                created_str,
+                session_id_str,
+                identity_str,
+                tid_str,
+            ) = match row {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Skipping agent row with read error: {e}");
+                    continue;
+                }
+            };
 
             // Deduplicate: skip agents with names we've already seen
             let name_lower = name.to_lowercase();
@@ -520,7 +549,16 @@ impl StructuredStore {
     fn row_to_agent_parts(
         row: &rusqlite::Row,
         col_count: usize,
-    ) -> rusqlite::Result<(String, String, Vec<u8>, String, String, Option<String>, Option<String>, Option<String>)> {
+    ) -> rusqlite::Result<(
+        String,
+        String,
+        Vec<u8>,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> {
         let id_str: String = row.get(0)?;
         let name: String = row.get(1)?;
         let manifest_blob: Vec<u8> = row.get(2)?;
@@ -541,13 +579,25 @@ impl StructuredStore {
         } else {
             None
         };
-        Ok((id_str, name, manifest_blob, state_str, created_str, session_id_str, identity_str, tenant_id_str))
+        Ok((
+            id_str,
+            name,
+            manifest_blob,
+            state_str,
+            created_str,
+            session_id_str,
+            identity_str,
+            tenant_id_str,
+        ))
     }
 
     /// List all agents in the database.
     ///
     /// If `tenant_id` is provided, only agents belonging to that tenant are listed.
-    pub fn list_agents(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<(String, String, String)>> {
+    pub fn list_agents(
+        &self,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<Vec<(String, String, String)>> {
         let conn = self
             .conn
             .lock()
@@ -562,7 +612,8 @@ impl StructuredStore {
             .prepare(sql)
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-        let row_data: Vec<rusqlite::Result<(String, String, String)>> = if let Some(tid) = tenant_id {
+        let row_data: Vec<rusqlite::Result<(String, String, String)>> = if let Some(tid) = tenant_id
+        {
             stmt.query_map(rusqlite::params![tid], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -666,7 +717,9 @@ mod tests {
     fn test_kv_delete_preserves_history() {
         let store = setup();
         let agent_id = AgentId::new();
-        store.set(agent_id, "key", serde_json::json!("important")).unwrap();
+        store
+            .set(agent_id, "key", serde_json::json!("important"))
+            .unwrap();
         store.delete(agent_id, "key").unwrap();
 
         // Value is gone from main store

@@ -3,8 +3,8 @@
 //! The kernel manages agent lifecycles, memory, permissions, scheduling,
 //! and inter-agent communication.
 
-pub mod brain;
 pub mod background;
+pub mod brain;
 pub mod capabilities;
 pub mod config;
 pub mod config_reload;

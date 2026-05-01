@@ -1,7 +1,7 @@
 //! Message sending endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use crate::types::*;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -276,11 +276,13 @@ pub async fn send_message_stream(
         .into_response()
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/agents/{id}/message", routing::post(send_message))
-        .route("/api/agents/{id}/message/stream", routing::post(send_message_stream))
+    axum::Router::new()
+        .route("/api/agents/{id}/message", routing::post(send_message))
+        .route(
+            "/api/agents/{id}/message/stream",
+            routing::post(send_message_stream),
+        )
 }

@@ -2,7 +2,7 @@
 
 use axum::http::StatusCode;
 use axum::Json;
-use opencarrier_types::agent::{AgentId, AgentEntry};
+use opencarrier_types::agent::{AgentEntry, AgentId};
 
 /// Parse a path-parameter agent ID, returning BAD_REQUEST on failure.
 pub fn parse_agent_id(id: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
@@ -82,7 +82,9 @@ pub fn resolve_agent_id_with_tenant(
         if !can_access(ctx, &entry.tenant_id) {
             return Err((
                 StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Access denied: resource belongs to another tenant"})),
+                Json(
+                    serde_json::json!({"error": "Access denied: resource belongs to another tenant"}),
+                ),
             ));
         }
         return Ok((id, entry));
@@ -92,13 +94,19 @@ pub fn resolve_agent_id_with_tenant(
         registry.find_by_name(id_or_name)
     } else {
         let tid = ctx.tenant_id.as_deref().ok_or_else(|| {
-            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Authentication required"})))
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "Authentication required"})),
+            )
         })?;
         registry.find_by_name_and_tenant(id_or_name, tid)
-    }.ok_or_else(|| (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({"error": format!("Agent not found: {id_or_name}")})),
-    ))?;
+    }
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Agent not found: {id_or_name}")})),
+        )
+    })?;
     if !can_access(ctx, &entry.tenant_id) {
         return Err((
             StatusCode::FORBIDDEN,
@@ -141,13 +149,19 @@ pub fn get_clone_workspace_with_tenant(
         registry.find_by_name(name)
     } else {
         let tid = ctx.tenant_id.as_deref().ok_or_else(|| {
-            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Authentication required"})))
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "Authentication required"})),
+            )
         })?;
         registry.find_by_name_and_tenant(name, tid)
-    }.ok_or_else(|| (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
-    ))?;
+    }
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Clone '{name}' not found")})),
+        )
+    })?;
     if !can_access(ctx, &entry.tenant_id) {
         return Err((
             StatusCode::FORBIDDEN,
@@ -164,7 +178,9 @@ pub fn get_clone_workspace_with_tenant(
 }
 
 /// Helper: extract TenantContext from request extensions, defaulting to deny_all.
-pub fn get_tenant_ctx(extensions: &axum::http::Extensions) -> opencarrier_types::tenant::TenantContext {
+pub fn get_tenant_ctx(
+    extensions: &axum::http::Extensions,
+) -> opencarrier_types::tenant::TenantContext {
     extensions
         .get::<opencarrier_types::tenant::TenantContext>()
         .cloned()
@@ -173,7 +189,10 @@ pub fn get_tenant_ctx(extensions: &axum::http::Extensions) -> opencarrier_types:
 
 /// Helper: check if the requester can access a resource owned by `resource_tenant_id`.
 /// Admin can access everything. Tenants can only access their own resources.
-pub fn can_access(ctx: &opencarrier_types::tenant::TenantContext, resource_tenant_id: &str) -> bool {
+pub fn can_access(
+    ctx: &opencarrier_types::tenant::TenantContext,
+    resource_tenant_id: &str,
+) -> bool {
     if ctx.is_admin() {
         return true;
     }
@@ -204,9 +223,7 @@ pub static UPLOAD_REGISTRY: LazyLock<DashMap<String, UploadMeta>> = LazyLock::ne
 // ---------------------------------------------------------------------------
 
 /// Immutable identity files — can be created but never overwritten via the API.
-pub const IMMUTABLE_IDENTITY_FILES: &[&str] = &[
-    "SOUL.md",
-];
+pub const IMMUTABLE_IDENTITY_FILES: &[&str] = &["SOUL.md"];
 
 /// Whitelisted workspace identity files that can be read/written via API.
 pub const KNOWN_IDENTITY_FILES: &[&str] = &[

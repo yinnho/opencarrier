@@ -90,15 +90,13 @@ pub fn run_acp_mode(config_path: Option<std::path::PathBuf>) {
     };
 
     // Create tokio runtime for async operations
-    let rt: Arc<tokio::runtime::Runtime> = Arc::new(
-        match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                eprintln!("[acp] Failed to create runtime: {e}");
-                std::process::exit(1);
-            }
-        },
-    );
+    let rt: Arc<tokio::runtime::Runtime> = Arc::new(match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("[acp] Failed to create runtime: {e}");
+            std::process::exit(1);
+        }
+    });
 
     // Initialize ACP session store for conversation persistence
     let acp_store = init_acp_session_store(&kernel);
@@ -142,14 +140,7 @@ pub fn run_acp_mode(config_path: Option<std::path::PathBuf>) {
         let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
             Ok(req) => {
                 if acp::is_acp_method(&req.method) {
-                    acp::handle_acp_request(
-                        &kernel,
-                        &rt,
-                        &req,
-                        &mut acp_state,
-                        &writer,
-                        &acp_store,
-                    )
+                    acp::handle_acp_request(&kernel, &rt, &req, &mut acp_state, &writer, &acp_store)
                 } else {
                     Some(jsonrpc_error(
                         req.id.clone(),
@@ -239,10 +230,7 @@ fn init_acp_session_store(_kernel: &OpenCarrierKernel) -> AcpSessionStore {
         error!("[acp] Failed to create sessions directory: {e}");
     }
 
-    info!(
-        "[acp] ACP session store initialized at {:?}",
-        sessions_dir
-    );
+    info!("[acp] ACP session store initialized at {:?}", sessions_dir);
     AcpSessionStore::new(&sessions_dir)
 }
 
@@ -257,7 +245,8 @@ mod tests {
 
     #[test]
     fn test_jsonrpc_request_parsing() {
-        let json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}"#;
         let req: JsonRpcRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.jsonrpc, "2.0");
         assert_eq!(req.id, Some(Value::Number(1.into())));

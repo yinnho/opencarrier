@@ -40,9 +40,7 @@ pub enum AcpContentBlock {
     #[serde(rename = "audio")]
     Audio { data: String, mime_type: String },
     #[serde(rename = "resource")]
-    Resource {
-        resource: AcpResource,
-    },
+    Resource { resource: AcpResource },
     #[serde(rename = "resource_link")]
     ResourceLink { uri: String, name: String },
 }
@@ -198,7 +196,10 @@ fn acp_initialize(req: &JsonRpcRequest, state: &mut AcpConnectionState) -> Optio
 
     let client_info = params.and_then(|p| p.get("clientInfo"));
     if let Some(info) = client_info {
-        let name = info.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let name = info
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let ver = info.get("version").and_then(|v| v.as_str()).unwrap_or("?");
         info!("[acp] initialize from {} v{}", name, ver);
     }
@@ -313,7 +314,13 @@ fn acp_session_prompt(
 ) -> Option<Response> {
     let params = match req.params.as_ref() {
         Some(p) => p,
-        None => return Some(jsonrpc_error(req.id.clone(), INVALID_PARAMS, "Missing params")),
+        None => {
+            return Some(jsonrpc_error(
+                req.id.clone(),
+                INVALID_PARAMS,
+                "Missing params",
+            ))
+        }
     };
     let session_id = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(id) => id,
@@ -407,9 +414,13 @@ fn acp_session_prompt(
         let kernel_handle = kernel.get_kernel_handle();
 
         let result = rt.block_on(async {
-            let (mut rx, handle) = match kernel
-                .send_message_streaming(agent_id, &message, kernel_handle, None, None)
-            {
+            let (mut rx, handle) = match kernel.send_message_streaming(
+                agent_id,
+                &message,
+                kernel_handle,
+                None,
+                None,
+            ) {
                 Ok(r) => r,
                 Err(e) => return Err(format!("Failed to start streaming: {e}")),
             };
@@ -611,10 +622,7 @@ fn acp_session_load(
 ///
 /// Sets the cancelled flag so the prompt worker thread stops streaming
 /// and returns `{"stopReason": "cancelled"}`.
-fn acp_session_cancel(
-    req: &JsonRpcRequest,
-    state: &mut AcpConnectionState,
-) -> Option<Response> {
+fn acp_session_cancel(req: &JsonRpcRequest, state: &mut AcpConnectionState) -> Option<Response> {
     let session_id = req
         .params
         .as_ref()
@@ -634,10 +642,7 @@ fn acp_session_cancel(
 }
 
 /// session/list — list all persisted sessions.
-fn acp_session_list(
-    req: &JsonRpcRequest,
-    store: &AcpSessionStore,
-) -> Option<Response> {
+fn acp_session_list(req: &JsonRpcRequest, store: &AcpSessionStore) -> Option<Response> {
     match store.list_sessions() {
         Ok(sessions) => Some(jsonrpc_success(
             req.id.clone(),
@@ -683,17 +688,11 @@ fn acp_aginx_list_agents(
         })
         .collect();
 
-    Some(jsonrpc_success(
-        req.id.clone(),
-        json!({ "agents": agents }),
-    ))
+    Some(jsonrpc_success(req.id.clone(), json!({ "agents": agents })))
 }
 
 /// _aginx/listConversations — list conversations from persisted sessions.
-fn acp_aginx_list_conversations(
-    req: &JsonRpcRequest,
-    store: &AcpSessionStore,
-) -> Option<Response> {
+fn acp_aginx_list_conversations(req: &JsonRpcRequest, store: &AcpSessionStore) -> Option<Response> {
     match store.list_sessions() {
         Ok(sessions) => {
             let conversations: Vec<Value> = sessions
@@ -721,10 +720,7 @@ fn acp_aginx_list_conversations(
 }
 
 /// _aginx/getMessages — get messages for a conversation (session).
-fn acp_aginx_get_messages(
-    req: &JsonRpcRequest,
-    store: &AcpSessionStore,
-) -> Option<Response> {
+fn acp_aginx_get_messages(req: &JsonRpcRequest, store: &AcpSessionStore) -> Option<Response> {
     let params = req.params.as_ref();
     let conversation_id = params
         .and_then(|p| p.get("conversationId"))
@@ -753,10 +749,7 @@ fn acp_aginx_get_messages(
         )),
         Err(e) => {
             error!("[acp] getMessages error for session {}: {e}", session_id);
-            Some(jsonrpc_success(
-                req.id.clone(),
-                json!({ "messages": [] }),
-            ))
+            Some(jsonrpc_success(req.id.clone(), json!({ "messages": [] })))
         }
     }
 }
@@ -884,10 +877,7 @@ fn map_stream_event_to_acp(
 
 /// Resolve agent ID from session/new params.
 /// Requires _meta.aginx/agentId; returns an error if missing or unknown.
-fn resolve_agent_id(
-    kernel: &OpenCarrierKernel,
-    params: Option<&Value>,
-) -> Result<AgentId, String> {
+fn resolve_agent_id(kernel: &OpenCarrierKernel, params: Option<&Value>) -> Result<AgentId, String> {
     let explicit = params
         .and_then(|p| p.get("_meta"))
         .and_then(|m| m.get("aginx/agentId"))
@@ -1025,7 +1015,8 @@ mod tests {
 
     #[test]
     fn test_acp_content_block_resource() {
-        let json = r#"{"type":"resource","resource":{"uri":"file:///test.rs","text":"fn main() {}"}}"#;
+        let json =
+            r#"{"type":"resource","resource":{"uri":"file:///test.rs","text":"fn main() {}"}}"#;
         let block: AcpContentBlock = serde_json::from_str(json).unwrap();
         match block {
             AcpContentBlock::Resource { resource } => {

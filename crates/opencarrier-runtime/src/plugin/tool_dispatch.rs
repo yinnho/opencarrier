@@ -98,7 +98,9 @@ impl PluginToolDispatcher {
         let context_json =
             serde_json::to_string(context).map_err(|e| format!("Context serialization: {}", e))?;
 
-        entry.plugin.tool_execute(tool_name, &args_json, &context_json)
+        entry
+            .plugin
+            .tool_execute(tool_name, &args_json, &context_json)
     }
 }
 

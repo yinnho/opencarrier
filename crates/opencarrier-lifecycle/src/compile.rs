@@ -17,9 +17,10 @@ use std::path::Path;
 use tracing::{info, warn};
 
 use crate::bloat::{
-    apply_compress, apply_merge, apply_metadata, check_bloat, delete_expired_files,
-    find_compress_candidates, mark_stale_files, parse_metadata_response, parse_overlap_check_response,
-    build_merge_prompts, build_metadata_prompt, build_overlap_check_prompts, build_compress_prompt,
+    apply_compress, apply_merge, apply_metadata, build_compress_prompt, build_merge_prompts,
+    build_metadata_prompt, build_overlap_check_prompts, check_bloat, delete_expired_files,
+    find_compress_candidates, mark_stale_files, parse_metadata_response,
+    parse_overlap_check_response,
 };
 use crate::evolution_config::EvolutionConfig;
 
@@ -88,13 +89,11 @@ fn needs_metadata(content: &str) -> bool {
     };
 
     let has_desc = fm.lines().any(|line| {
-        line.trim().starts_with("description:")
-            && line.trim().len() > "description:".len() + 2
+        line.trim().starts_with("description:") && line.trim().len() > "description:".len() + 2
     });
-    let has_tags = fm.lines().any(|line| {
-        line.trim().starts_with("tags:")
-            && (line.contains("[") || line.contains("-"))
-    });
+    let has_tags = fm
+        .lines()
+        .any(|line| line.trim().starts_with("tags:") && (line.contains("[") || line.contains("-")));
 
     !has_desc || !has_tags
 }
@@ -202,11 +201,7 @@ pub fn find_changed_files(
 ///
 /// The `llm_call` closure receives (system_prompt, user_prompt, max_tokens)
 /// and returns the LLM response text. This keeps the lifecycle crate LLM-free.
-pub fn run_compile<F>(
-    workspace: &Path,
-    config: &EvolutionConfig,
-    llm_call: &F,
-) -> CompileResult
+pub fn run_compile<F>(workspace: &Path, config: &EvolutionConfig, llm_call: &F) -> CompileResult
 where
     F: Fn(&str, &str, u32) -> Result<String> + ?Sized,
 {
@@ -224,7 +219,10 @@ where
     manifest.retain(|name, _| current_files.contains(name));
     let removed_from_manifest = before - manifest.len();
     if removed_from_manifest > 0 {
-        info!(removed = removed_from_manifest, "Cleaned stale manifest entries");
+        info!(
+            removed = removed_from_manifest,
+            "Cleaned stale manifest entries"
+        );
     }
 
     // Phase 1: Generate metadata for files that need it (only changed files)
@@ -232,7 +230,8 @@ where
         Ok(files) => {
             for file in files {
                 // Skip files unchanged since last compile
-                if !changed_files.contains(&file.filename) && manifest.contains_key(&file.filename) {
+                if !changed_files.contains(&file.filename) && manifest.contains_key(&file.filename)
+                {
                     result.skipped_by_manifest += 1;
                     continue;
                 }
@@ -245,12 +244,18 @@ where
                     Ok(response) => {
                         match parse_metadata_response(&response) {
                             Ok((desc, tags)) => {
-                                if let Err(e) = apply_metadata(workspace, &file.filename, &desc, &tags) {
-                                    result.errors.push(format!("metadata {}: {}", file.filename, e));
+                                if let Err(e) =
+                                    apply_metadata(workspace, &file.filename, &desc, &tags)
+                                {
+                                    result
+                                        .errors
+                                        .push(format!("metadata {}: {}", file.filename, e));
                                 } else {
                                     // Check if content actually changed
                                     let hash_after = content_hash(&file_path);
-                                    if hash_before.as_deref() == hash_after.as_deref() && hash_before.is_some() {
+                                    if hash_before.as_deref() == hash_after.as_deref()
+                                        && hash_before.is_some()
+                                    {
                                         result.skipped_unchanged += 1;
                                     } else {
                                         result.metadata_generated += 1;
@@ -258,21 +263,28 @@ where
                                 }
                             }
                             Err(e) => {
-                                result.errors.push(format!("parse metadata {}: {}", file.filename, e));
+                                result
+                                    .errors
+                                    .push(format!("parse metadata {}: {}", file.filename, e));
                             }
                         }
                     }
                     Err(e) => {
-                        result.errors.push(format!("llm metadata {}: {}", file.filename, e));
+                        result
+                            .errors
+                            .push(format!("llm metadata {}: {}", file.filename, e));
                     }
                 }
 
                 // Update manifest entry for this file
                 if let Some(hash) = content_hash(&file_path) {
-                    manifest.insert(file.filename.clone(), ManifestEntry {
-                        hash,
-                        compiled_at: now.clone(),
-                    });
+                    manifest.insert(
+                        file.filename.clone(),
+                        ManifestEntry {
+                            hash,
+                            compiled_at: now.clone(),
+                        },
+                    );
                 }
             }
         }
@@ -298,11 +310,15 @@ where
                 match llm_call(&sys, &user, 128) {
                     Ok(resp) => {
                         if parse_overlap_check_response(&resp) {
-                            let (merge_sys, merge_user) = build_merge_prompts(&content_a, &content_b);
+                            let (merge_sys, merge_user) =
+                                build_merge_prompts(&content_a, &content_b);
                             match llm_call(&merge_sys, &merge_user, 2048) {
                                 Ok(merged) => {
-                                    if let Err(e) = apply_merge(workspace, file_a, file_b, &merged) {
-                                        result.errors.push(format!("merge {} + {}: {}", file_a, file_b, e));
+                                    if let Err(e) = apply_merge(workspace, file_a, file_b, &merged)
+                                    {
+                                        result
+                                            .errors
+                                            .push(format!("merge {} + {}: {}", file_a, file_b, e));
                                     } else {
                                         result.files_merged += 1;
                                     }
@@ -341,7 +357,9 @@ where
                                     result.errors.push(format!("compress {}: {}", filename, e));
                                 } else {
                                     let hash_after = content_hash(&path);
-                                    if hash_before.as_deref() == hash_after.as_deref() && hash_before.is_some() {
+                                    if hash_before.as_deref() == hash_after.as_deref()
+                                        && hash_before.is_some()
+                                    {
                                         result.skipped_unchanged += 1;
                                     } else {
                                         result.files_compressed += 1;
@@ -349,7 +367,9 @@ where
                                 }
                             }
                             Err(e) => {
-                                result.errors.push(format!("compress llm {}: {}", filename, e));
+                                result
+                                    .errors
+                                    .push(format!("compress llm {}: {}", filename, e));
                             }
                         }
                     }
@@ -432,19 +452,18 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/no-meta.md"),
             "---\nname: test\n---\n\nSome content",
-        ).unwrap();
+        )
+        .unwrap();
 
         // File with metadata
         fs::write(
             ws.join("data/knowledge/with-meta.md"),
             "---\ndescription: test\ntags: [\"a\"]\n---\n\nContent",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Empty body file
-        fs::write(
-            ws.join("data/knowledge/empty.md"),
-            "---\n---\n\n",
-        ).unwrap();
+        fs::write(ws.join("data/knowledge/empty.md"), "---\n---\n\n").unwrap();
 
         let files = find_files_needing_metadata(&ws).unwrap();
         assert_eq!(files.len(), 1);
@@ -490,14 +509,20 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         let mut manifest = std::collections::HashMap::new();
-        manifest.insert("test.md".to_string(), ManifestEntry {
-            hash: "abc123".to_string(),
-            compiled_at: "2025-01-01T00:00:00Z".to_string(),
-        });
-        manifest.insert("other.md".to_string(), ManifestEntry {
-            hash: "def456".to_string(),
-            compiled_at: "2025-01-02T00:00:00Z".to_string(),
-        });
+        manifest.insert(
+            "test.md".to_string(),
+            ManifestEntry {
+                hash: "abc123".to_string(),
+                compiled_at: "2025-01-01T00:00:00Z".to_string(),
+            },
+        );
+        manifest.insert(
+            "other.md".to_string(),
+            ManifestEntry {
+                hash: "def456".to_string(),
+                compiled_at: "2025-01-02T00:00:00Z".to_string(),
+            },
+        );
 
         save_manifest(&ws, &manifest).unwrap();
         let loaded = load_manifest(&ws);
@@ -529,20 +554,32 @@ mod tests {
 
         // Manifest only has a.md
         let mut manifest = std::collections::HashMap::new();
-        manifest.insert("a.md".to_string(), ManifestEntry {
-            hash: hash_a,
-            compiled_at: "2025-01-01T00:00:00Z".to_string(),
-        });
+        manifest.insert(
+            "a.md".to_string(),
+            ManifestEntry {
+                hash: hash_a,
+                compiled_at: "2025-01-01T00:00:00Z".to_string(),
+            },
+        );
 
         let (changed, current) = find_changed_files(&ws, &manifest);
-        assert!(changed.contains(&"b.md".to_string()), "b.md is new, should be changed");
-        assert!(!changed.contains(&"a.md".to_string()), "a.md hash matches, should NOT be changed");
+        assert!(
+            changed.contains(&"b.md".to_string()),
+            "b.md is new, should be changed"
+        );
+        assert!(
+            !changed.contains(&"a.md".to_string()),
+            "a.md hash matches, should NOT be changed"
+        );
         assert_eq!(current.len(), 2);
 
         // Modify a.md
         fs::write(ws.join("data/knowledge/a.md"), "modified A").unwrap();
         let (changed2, _) = find_changed_files(&ws, &manifest);
-        assert!(changed2.contains(&"a.md".to_string()), "a.md changed, should be detected");
+        assert!(
+            changed2.contains(&"a.md".to_string()),
+            "a.md changed, should be detected"
+        );
         assert!(changed2.contains(&"b.md".to_string()), "b.md still new");
     }
 
@@ -554,19 +591,31 @@ mod tests {
         fs::write(ws.join("data/knowledge/a.md"), "content A").unwrap();
 
         let mut manifest = std::collections::HashMap::new();
-        manifest.insert("a.md".to_string(), ManifestEntry {
-            hash: "old_hash".to_string(),
-            compiled_at: "2025-01-01T00:00:00Z".to_string(),
-        });
-        manifest.insert("deleted.md".to_string(), ManifestEntry {
-            hash: "dead".to_string(),
-            compiled_at: "2025-01-01T00:00:00Z".to_string(),
-        });
+        manifest.insert(
+            "a.md".to_string(),
+            ManifestEntry {
+                hash: "old_hash".to_string(),
+                compiled_at: "2025-01-01T00:00:00Z".to_string(),
+            },
+        );
+        manifest.insert(
+            "deleted.md".to_string(),
+            ManifestEntry {
+                hash: "dead".to_string(),
+                compiled_at: "2025-01-01T00:00:00Z".to_string(),
+            },
+        );
 
         let (changed, current) = find_changed_files(&ws, &manifest);
         assert_eq!(current.len(), 1, "Only a.md exists on disk");
-        assert!(!current.contains(&"deleted.md".to_string()), "deleted.md not on disk");
-        assert!(changed.contains(&"a.md".to_string()), "a.md hash differs from manifest");
+        assert!(
+            !current.contains(&"deleted.md".to_string()),
+            "deleted.md not on disk"
+        );
+        assert!(
+            changed.contains(&"a.md".to_string()),
+            "a.md hash differs from manifest"
+        );
     }
 
     #[test]
@@ -578,7 +627,8 @@ mod tests {
         fs::write(
             ws.join("data/knowledge/test.md"),
             "---\nname: test\n---\n\nThis is a test knowledge file about refunds.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = EvolutionConfig {
             max_knowledge_files: 200,

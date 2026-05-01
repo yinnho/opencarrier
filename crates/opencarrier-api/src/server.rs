@@ -50,8 +50,12 @@ pub async fn build_router(
         ];
         for p in [3000u16, 8080] {
             if p != port {
-                if let Ok(v) = format!("http://127.0.0.1:{p}").parse() { origins.push(v); }
-                if let Ok(v) = format!("http://localhost:{p}").parse() { origins.push(v); }
+                if let Ok(v) = format!("http://127.0.0.1:{p}").parse() {
+                    origins.push(v);
+                }
+                if let Ok(v) = format!("http://localhost:{p}").parse() {
+                    origins.push(v);
+                }
             }
         }
         CorsLayer::new()
@@ -67,8 +71,12 @@ pub async fn build_router(
             "http://127.0.0.1:8080".parse().unwrap(),
         ];
         if listen_addr.port() != 4200 && listen_addr.port() != 8080 {
-            if let Ok(v) = format!("http://localhost:{}", listen_addr.port()).parse() { origins.push(v); }
-            if let Ok(v) = format!("http://127.0.0.1:{}", listen_addr.port()).parse() { origins.push(v); }
+            if let Ok(v) = format!("http://localhost:{}", listen_addr.port()).parse() {
+                origins.push(v);
+            }
+            if let Ok(v) = format!("http://127.0.0.1:{}", listen_addr.port()).parse() {
+                origins.push(v);
+            }
         }
         CorsLayer::new()
             .allow_origin(origins)
@@ -96,7 +104,10 @@ pub async fn build_router(
         .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
         .route("/sw.js", axum::routing::get(webchat::sw_js))
-        .route("/katex-fonts/{name}", axum::routing::get(webchat::katex_font))
+        .route(
+            "/katex-fonts/{name}",
+            axum::routing::get(webchat::katex_font),
+        )
         .merge(routes::agents::router())
         .merge(routes::auth::router())
         .merge(routes::bindings::router())
@@ -124,9 +135,15 @@ pub async fn build_router(
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .route("/api/status", axum::routing::get(routes::status))
         .route("/api/version", axum::routing::get(routes::version))
-        .layer(axum::middleware::from_fn_with_state(auth_state, middleware::auth))
+        .layer(axum::middleware::from_fn_with_state(
+            auth_state,
+            middleware::auth,
+        ))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(axum::middleware::from_fn_with_state(gcra_limiter, rate_limiter::gcra_rate_limit))
+        .layer(axum::middleware::from_fn_with_state(
+            gcra_limiter,
+            rate_limiter::gcra_rate_limit,
+        ))
         .layer(axum::middleware::from_fn(middleware::security_headers))
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(CompressionLayer::new())
@@ -157,7 +174,8 @@ pub async fn run_daemon(
             kernel.config.home_dir.join(plugins_dir)
         };
         if resolved.exists() {
-            let kernel_handle: Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle> = kernel.clone();
+            let kernel_handle: Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle> =
+                kernel.clone();
             let mut pm = PluginManager::new(kernel_handle);
             pm.load_all(&resolved);
             pm.start(&resolved).await;
@@ -173,7 +191,10 @@ pub async fn run_daemon(
             info!("Plugins loaded: {} tools available", tool_count);
             Some(pm)
         } else {
-            info!("Plugin directory does not exist, skipping: {}", resolved.display());
+            info!(
+                "Plugin directory does not exist, skipping: {}",
+                resolved.display()
+            );
             None
         }
     } else {

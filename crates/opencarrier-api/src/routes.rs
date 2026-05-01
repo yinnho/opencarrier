@@ -1,29 +1,29 @@
 //! Route handlers for the OpenCarrier API.
 
-pub mod common;
-pub mod state;
-pub mod auth;
-pub mod messaging;
-pub mod sessions;
 pub mod agents;
-pub mod files;
-pub mod observability;
-pub mod tools_skills;
-pub mod config;
-pub mod providers;
-pub mod webhooks;
+pub mod auth;
 pub mod bindings;
-pub mod comms;
-pub mod kv;
-pub mod brain;
-pub mod plugin_toml;
 pub mod bots;
-pub mod weixin;
-pub mod cron;
-pub mod tenants;
+pub mod brain;
 pub mod clones;
+pub mod common;
+pub mod comms;
+pub mod config;
+pub mod cron;
+pub mod files;
 pub mod hub;
+pub mod kv;
+pub mod messaging;
+pub mod observability;
+pub mod plugin_toml;
 pub mod plugins;
+pub mod providers;
+pub mod sessions;
+pub mod state;
+pub mod tenants;
+pub mod tools_skills;
+pub mod webhooks;
+pub mod weixin;
 
 pub use common::*;
 pub use messaging::{inject_attachments_into_session, resolve_attachments};
@@ -37,7 +37,7 @@ pub use observability::{health, prometheus_metrics, usage_stats};
 pub use sessions::{create_agent_session, get_agent_session, list_agent_sessions, reset_session};
 pub use tools_skills::list_tools;
 
-use axum::extract::{State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -57,7 +57,10 @@ pub async fn status(
     let agents_owned = if ctx.is_admin() {
         all_agents
     } else {
-        all_agents.into_iter().filter(|e| can_access(&ctx, e.tenant_id.as_str())).collect()
+        all_agents
+            .into_iter()
+            .filter(|e| can_access(&ctx, e.tenant_id.as_str()))
+            .collect()
     };
     let agents: Vec<serde_json::Value> = agents_owned
         .into_iter()
@@ -95,10 +98,17 @@ pub async fn status(
 }
 
 /// POST /api/shutdown — Graceful shutdown.
-pub async fn shutdown(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> axum::response::Response {
+pub async fn shutdown(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+) -> axum::response::Response {
     let ctx = get_tenant_ctx(&extensions);
     if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin only"})),
+        )
+            .into_response();
     }
     tracing::info!("Shutdown requested via API");
     state.kernel.audit_log.record(
@@ -158,9 +168,7 @@ pub async fn list_commands(State(state): State<Arc<AppState>>) -> impl IntoRespo
 }
 
 /// GET /api/plugins — list loaded plugin tool status.
-pub async fn plugins_list(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn plugins_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let plugin_statuses = if let Some(ref pm) = state.plugin_manager {
         let pm = pm.lock().await;
         let statuses = pm.status();

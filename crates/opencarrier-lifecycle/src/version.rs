@@ -136,17 +136,38 @@ pub fn rollback_file(workspace: &Path, filename: &str) -> Result<()> {
     match (&current, previous) {
         (Some(cur), Some(prev)) => {
             fs::write(&file_path, &prev)?;
-            record_version(workspace, "rollback", filename, Some(cur.as_str()), Some(&prev), "rollback")?;
+            record_version(
+                workspace,
+                "rollback",
+                filename,
+                Some(cur.as_str()),
+                Some(&prev),
+                "rollback",
+            )?;
         }
         (Some(cur), None) => {
             let cur_content = cur.clone();
             fs::remove_file(&file_path)?;
-            record_version(workspace, "rollback", filename, Some(cur_content.as_str()), None, "rollback")?;
+            record_version(
+                workspace,
+                "rollback",
+                filename,
+                Some(cur_content.as_str()),
+                None,
+                "rollback",
+            )?;
         }
         (None, Some(prev)) => {
             fs::create_dir_all(&knowledge_dir)?;
             fs::write(&file_path, &prev)?;
-            record_version(workspace, "rollback", filename, None, Some(&prev), "rollback")?;
+            record_version(
+                workspace,
+                "rollback",
+                filename,
+                None,
+                Some(&prev),
+                "rollback",
+            )?;
         }
         (None, None) => {
             anyhow::bail!("cannot rollback {}: no history available", filename);
@@ -216,13 +237,17 @@ pub fn upgrade_confidence(content: &str, confidence: &str) -> String {
         let (fm, rest) = content.split_at(fm_end);
         if fm.contains("confidence:") {
             // Replace existing confidence value
-            let updated = fm.lines().map(|line| {
-                if line.starts_with("confidence:") {
-                    format!("confidence: {}", confidence)
-                } else {
-                    line.to_string()
-                }
-            }).collect::<Vec<_>>().join("\n");
+            let updated = fm
+                .lines()
+                .map(|line| {
+                    if line.starts_with("confidence:") {
+                        format!("confidence: {}", confidence)
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
             format!("{}{}", updated, rest)
         } else {
             // Add confidence field before closing ---
@@ -243,8 +268,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path();
 
-        record_version(workspace, "create", "test-knowledge.md", None, Some("content"), "evolution")
-            .unwrap();
+        record_version(
+            workspace,
+            "create",
+            "test-knowledge.md",
+            None,
+            Some("content"),
+            "evolution",
+        )
+        .unwrap();
 
         let history = get_file_history(workspace, "test-knowledge.md").unwrap();
         assert_eq!(history.len(), 1);
@@ -261,7 +293,15 @@ mod tests {
         let workspace = tmp.path();
 
         record_version(workspace, "create", "a.md", None, Some("v1"), "evolution").unwrap();
-        record_version(workspace, "update", "a.md", Some("v1"), Some("v2"), "evolution").unwrap();
+        record_version(
+            workspace,
+            "update",
+            "a.md",
+            Some("v1"),
+            Some("v2"),
+            "evolution",
+        )
+        .unwrap();
         record_version(workspace, "create", "b.md", None, Some("other"), "user").unwrap();
 
         let all = get_all_versions(workspace).unwrap();
@@ -305,10 +345,26 @@ mod tests {
         fs::create_dir_all(&knowledge_dir).unwrap();
 
         // Create → update
-        record_version(workspace, "create", "test.md", None, Some("v1"), "evolution").unwrap();
+        record_version(
+            workspace,
+            "create",
+            "test.md",
+            None,
+            Some("v1"),
+            "evolution",
+        )
+        .unwrap();
         fs::write(knowledge_dir.join("test.md"), "v1").unwrap();
 
-        record_version(workspace, "update", "test.md", Some("v1"), Some("v2"), "evolution").unwrap();
+        record_version(
+            workspace,
+            "update",
+            "test.md",
+            Some("v1"),
+            Some("v2"),
+            "evolution",
+        )
+        .unwrap();
         fs::write(knowledge_dir.join("test.md"), "v2").unwrap();
 
         // Rollback: v2 → v1
@@ -333,7 +389,15 @@ mod tests {
         fs::create_dir_all(&knowledge_dir).unwrap();
 
         // Create only (no previous version)
-        record_version(workspace, "create", "new.md", None, Some("content"), "evolution").unwrap();
+        record_version(
+            workspace,
+            "create",
+            "new.md",
+            None,
+            Some("content"),
+            "evolution",
+        )
+        .unwrap();
         fs::write(knowledge_dir.join("new.md"), "content").unwrap();
 
         // Rollback: delete the new file
@@ -354,8 +418,24 @@ mod tests {
         fs::create_dir_all(&knowledge_dir).unwrap();
 
         // Create then delete
-        record_version(workspace, "create", "x.md", None, Some("original"), "evolution").unwrap();
-        record_version(workspace, "delete", "x.md", Some("original"), None, "evolution").unwrap();
+        record_version(
+            workspace,
+            "create",
+            "x.md",
+            None,
+            Some("original"),
+            "evolution",
+        )
+        .unwrap();
+        record_version(
+            workspace,
+            "delete",
+            "x.md",
+            Some("original"),
+            None,
+            "evolution",
+        )
+        .unwrap();
 
         // File is deleted
         assert!(!knowledge_dir.join("x.md").exists());

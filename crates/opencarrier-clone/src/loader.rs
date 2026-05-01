@@ -114,7 +114,8 @@ pub fn load_agx(path: &Path) -> Result<CloneData> {
         // Normalize: strip leading "./"
         let name = name.strip_prefix("./").unwrap_or(&name).to_string();
         // Skip macOS Apple Double files (._*)
-        if Path::new(&name).file_name()
+        if Path::new(&name)
+            .file_name()
             .and_then(|n| n.to_str())
             .map(|n| n.starts_with("._"))
             .unwrap_or(false)
@@ -129,7 +130,8 @@ pub fn load_agx(path: &Path) -> Result<CloneData> {
     info!("Loaded .agx archive: {} files", files.len());
 
     // Parse template.json
-    let manifest = files.get("template.json")
+    let manifest = files
+        .get("template.json")
         .and_then(|bytes| String::from_utf8_lossy(bytes).into_owned().into())
         .and_then(|s| serde_json::from_str::<TemplateManifest>(&s).ok());
 
@@ -181,14 +183,23 @@ pub fn load_agx(path: &Path) -> Result<CloneData> {
 
     // Security scan
     let mut security_warnings = Vec::new();
-    scan_security(&soul, &system_prompt, &knowledge, &skills, &mut security_warnings);
+    scan_security(
+        &soul,
+        &system_prompt,
+        &knowledge,
+        &skills,
+        &mut security_warnings,
+    );
 
     debug!(
         "Parsed clone '{}': soul={} bytes, system_prompt={} bytes, knowledge={} files, skills={}, agents={}, style={}, evolution={} bytes, memory_index={} bytes",
         name, soul.len(), system_prompt.len(), knowledge.len(), skills.len(), agents.len(), style.len(), evolution.len(), memory_index.len()
     );
 
-    let plugins = manifest.as_ref().map(|m| m.plugins.clone()).unwrap_or_default();
+    let plugins = manifest
+        .as_ref()
+        .map(|m| m.plugins.clone())
+        .unwrap_or_default();
 
     Ok(CloneData {
         manifest,
@@ -210,7 +221,8 @@ pub fn load_agx(path: &Path) -> Result<CloneData> {
 
 /// Get a text file from the archive, or empty string.
 fn get_file_text(files: &HashMap<String, Vec<u8>>, name: &str) -> String {
-    files.get(name)
+    files
+        .get(name)
         .map(|bytes| String::from_utf8_lossy(bytes).to_string())
         .unwrap_or_default()
 }
@@ -222,7 +234,10 @@ fn parse_profile(profile: &str, agx_path: &Path) -> (String, String) {
 
     // Parse YAML frontmatter
     if profile.starts_with("---") {
-        if let Some(end) = profile.strip_prefix("---").and_then(|rest| rest.find("---")) {
+        if let Some(end) = profile
+            .strip_prefix("---")
+            .and_then(|rest| rest.find("---"))
+        {
             let frontmatter = &profile[3..3 + end];
             for line in frontmatter.lines() {
                 let line = line.trim();
@@ -252,13 +267,15 @@ fn parse_skills(files: &HashMap<String, Vec<u8>>) -> Vec<SkillData> {
     let mut skills = Vec::new();
 
     // Collect skill file paths
-    let mut skill_files: Vec<String> = files.keys()
+    let mut skill_files: Vec<String> = files
+        .keys()
         .filter(|n| n.starts_with("skills/") && n.ends_with(".md"))
         .cloned()
         .collect();
 
     // Also handle directory-based skills: skills/<name>/SKILL.md
-    let dir_skills: Vec<String> = files.keys()
+    let dir_skills: Vec<String> = files
+        .keys()
         .filter(|n| {
             let parts: Vec<&str> = n.split('/').collect();
             parts.len() == 3 && parts[0] == "skills" && parts[2] == "SKILL.md"
@@ -275,25 +292,29 @@ fn parse_skills(files: &HashMap<String, Vec<u8>>) -> Vec<SkillData> {
         };
 
         let (frontmatter, body) = parse_frontmatter(&content);
-        let name = frontmatter.get("name")
-            .cloned()
-            .unwrap_or_else(|| {
-                skill_path.split('/').nth(1).unwrap_or("unknown").to_string()
-            });
-        let when_to_use = frontmatter.get("when_to_use")
-            .cloned()
-            .unwrap_or_default();
-        let allowed_tools = frontmatter.get("allowed_tools")
+        let name = frontmatter.get("name").cloned().unwrap_or_else(|| {
+            skill_path
+                .split('/')
+                .nth(1)
+                .unwrap_or("unknown")
+                .to_string()
+        });
+        let when_to_use = frontmatter.get("when_to_use").cloned().unwrap_or_default();
+        let allowed_tools = frontmatter
+            .get("allowed_tools")
             .map(|s| parse_string_array(s))
             .unwrap_or_default();
 
         // Find scripts for directory-based skills
         let skill_dir = format!("skills/{}/", name);
-        let scripts = files.keys()
+        let scripts = files
+            .keys()
             .filter(|n| n.starts_with(&skill_dir) && n.ends_with(".toml"))
             .filter_map(|script_path| {
                 let toml_content = String::from_utf8_lossy(files.get(script_path)?).to_string();
-                let script_name = script_path.split('/').next_back()?
+                let script_name = script_path
+                    .split('/')
+                    .next_back()?
                     .strip_suffix(".toml")?
                     .to_string();
                 let desc = parse_toml_description(&toml_content);
@@ -320,26 +341,23 @@ fn parse_skills(files: &HashMap<String, Vec<u8>>) -> Vec<SkillData> {
 /// Parse an agents/*.md file from the archive.
 fn parse_agent_file(path: &str, content: &str) -> Option<AgentData> {
     let (frontmatter, body) = parse_frontmatter(content);
-    let name = frontmatter.get("name")
-        .cloned()
-        .unwrap_or_else(|| {
-            path.strip_prefix("agents/")
-                .unwrap_or(path)
-                .strip_suffix(".md")
-                .unwrap_or("unknown")
-                .to_string()
-        });
-    let description = frontmatter.get("description")
-        .cloned()
-        .unwrap_or_default();
-    let tools = frontmatter.get("tools")
+    let name = frontmatter.get("name").cloned().unwrap_or_else(|| {
+        path.strip_prefix("agents/")
+            .unwrap_or(path)
+            .strip_suffix(".md")
+            .unwrap_or("unknown")
+            .to_string()
+    });
+    let description = frontmatter.get("description").cloned().unwrap_or_default();
+    let tools = frontmatter
+        .get("tools")
         .map(|s| parse_string_array(s))
         .unwrap_or_default();
-    let model = frontmatter.get("model")
+    let model = frontmatter
+        .get("model")
         .cloned()
         .unwrap_or_else(|| "sonnet".to_string());
-    let color = frontmatter.get("color")
-        .cloned();
+    let color = frontmatter.get("color").cloned();
     let prompt = body.trim().to_string();
 
     Some(AgentData {
@@ -431,7 +449,11 @@ pub fn pack_agx(data: &CloneData) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn append_file<W: std::io::Write>(tar: &mut tar::Builder<W>, path: &str, data: &[u8]) -> Result<()> {
+fn append_file<W: std::io::Write>(
+    tar: &mut tar::Builder<W>,
+    path: &str,
+    data: &[u8],
+) -> Result<()> {
     let mut header = tar::Header::new_gnu();
     header.set_size(data.len() as u64);
     header.set_mode(0o644);
@@ -446,7 +468,10 @@ fn format_skill_md(skill: &SkillData) -> String {
     buf.push_str(&format!("name: {}\n", skill.name));
     buf.push_str(&format!("when_to_use: {}\n", skill.when_to_use));
     if !skill.allowed_tools.is_empty() {
-        buf.push_str(&format!("allowed_tools: {}\n", format_string_array(&skill.allowed_tools)));
+        buf.push_str(&format!(
+            "allowed_tools: {}\n",
+            format_string_array(&skill.allowed_tools)
+        ));
     }
     buf.push_str("---\n\n");
     buf.push_str(&skill.prompt);
@@ -474,7 +499,10 @@ fn format_agent_md(agent: &AgentData) -> String {
 
 /// Format a string slice as `["a", "b"]` — safe for YAML frontmatter.
 pub fn format_string_array(items: &[String]) -> String {
-    let quoted: Vec<String> = items.iter().map(|s| format!("\"{}\"", s.replace('"', "\\\""))).collect();
+    let quoted: Vec<String> = items
+        .iter()
+        .map(|s| format!("\"{}\"", s.replace('"', "\\\"")))
+        .collect();
     format!("[{}]", quoted.join(", "))
 }
 
@@ -509,7 +537,12 @@ pub fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
                 array_val.push_str(trimmed);
                 array_val.push(' ');
             }
-            if trimmed.ends_with(']') || (!trimmed.starts_with('-') && !trimmed.starts_with('"') && !trimmed.starts_with('[') && !trimmed.starts_with(' ')) {
+            if trimmed.ends_with(']')
+                || (!trimmed.starts_with('-')
+                    && !trimmed.starts_with('"')
+                    && !trimmed.starts_with('[')
+                    && !trimmed.starts_with(' '))
+            {
                 map.insert(current_key.clone(), array_val.trim().to_string());
                 in_array = false;
             }
@@ -592,19 +625,27 @@ fn scan_security(
 
     // File size checks
     if system_prompt.len() > 1_000_000 {
-        warnings.push(format!("system_prompt.md is very large: {} bytes", system_prompt.len()));
+        warnings.push(format!(
+            "system_prompt.md is very large: {} bytes",
+            system_prompt.len()
+        ));
     }
     if soul.len() > 500_000 {
         warnings.push(format!("SOUL.md is very large: {} bytes", soul.len()));
     }
     for (name, content) in knowledge {
         if content.len() > 1_000_000 {
-            warnings.push(format!("knowledge/{} is very large: {} bytes", name, content.len()));
+            warnings.push(format!(
+                "knowledge/{} is very large: {} bytes",
+                name,
+                content.len()
+            ));
         }
     }
     for skill in skills {
         for script in &skill.scripts {
-            if script.toml_content.contains("http://") && !script.toml_content.contains("localhost") {
+            if script.toml_content.contains("http://") && !script.toml_content.contains("localhost")
+            {
                 warnings.push(format!(
                     "Skill '{}' script '{}' uses non-HTTPS URL",
                     skill.name, script.name

@@ -24,13 +24,34 @@ pub async fn execute_skill_tool(
 
     match manifest.runtime.runtime_type {
         SkillRuntime::Python => {
-            execute_python(skill_dir, &manifest.runtime.entry, tool_name, input, credentials).await
+            execute_python(
+                skill_dir,
+                &manifest.runtime.entry,
+                tool_name,
+                input,
+                credentials,
+            )
+            .await
         }
         SkillRuntime::Node => {
-            execute_node(skill_dir, &manifest.runtime.entry, tool_name, input, credentials).await
+            execute_node(
+                skill_dir,
+                &manifest.runtime.entry,
+                tool_name,
+                input,
+                credentials,
+            )
+            .await
         }
         SkillRuntime::Shell => {
-            execute_shell(skill_dir, &manifest.runtime.entry, tool_name, input, credentials).await
+            execute_shell(
+                skill_dir,
+                &manifest.runtime.entry,
+                tool_name,
+                input,
+                credentials,
+            )
+            .await
         }
         SkillRuntime::Wasm => Err(SkillError::RuntimeNotAvailable(
             "WASM skill runtime not yet implemented".to_string(),
@@ -470,9 +491,15 @@ mod tests {
             source: None,
         };
 
-        let result = execute_skill_tool(&manifest, dir.path(), "test_tool", &serde_json::json!({}), &[])
-            .await
-            .unwrap();
+        let result = execute_skill_tool(
+            &manifest,
+            dir.path(),
+            "test_tool",
+            &serde_json::json!({}),
+            &[],
+        )
+        .await
+        .unwrap();
         assert!(!result.is_error);
         let note = result.output["note"].as_str().unwrap();
         assert!(note.contains("system prompt"));

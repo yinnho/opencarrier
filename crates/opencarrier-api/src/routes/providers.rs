@@ -1,7 +1,7 @@
 //! Provider API key management endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -27,12 +27,16 @@ pub async fn list_provider_keys(State(state): State<Arc<AppState>>) -> impl Into
 
             let has_key = if pc.auth_type == "jwt" {
                 // JWT auth: check that all param env vars are set
-                pc.params.values().all(|env_name| opencarrier_kernel::dotenv::has_env_key(env_name))
+                pc.params
+                    .values()
+                    .all(|env_name| opencarrier_kernel::dotenv::has_env_key(env_name))
             } else {
                 opencarrier_kernel::dotenv::has_env_key(&pc.api_key_env)
             };
 
-            let params_status: Vec<serde_json::Value> = pc.params.iter()
+            let params_status: Vec<serde_json::Value> = pc
+                .params
+                .iter()
                 .map(|(logical_name, env_name)| {
                     serde_json::json!({
                         "name": logical_name,
@@ -65,7 +69,15 @@ pub async fn set_provider_key(
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
+    {
+        let ctx = get_tenant_ctx(&extensions);
+        if !ctx.is_admin() {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Admin only"})),
+            );
+        }
+    }
     let brain = state.kernel.brain_info();
     let config = brain.config();
 
@@ -130,16 +142,19 @@ pub async fn set_provider_key(
         "system",
         opencarrier_runtime::audit::AuditAction::ConfigChange,
         format!("API key set for provider '{}'", name),
-        if reload_result.is_ok() { "ok" } else { "reload_failed" },
+        if reload_result.is_ok() {
+            "ok"
+        } else {
+            "reload_failed"
+        },
     );
     match reload_result {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "ok"})),
-        ),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))),
         Err(e) => (
             StatusCode::OK,
-            Json(serde_json::json!({"status": "ok", "warning": format!("Key saved but brain reload failed: {}", e)})),
+            Json(
+                serde_json::json!({"status": "ok", "warning": format!("Key saved but brain reload failed: {}", e)}),
+            ),
         ),
     }
 }
@@ -149,7 +164,15 @@ pub async fn delete_provider_key(
     extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
+    {
+        let ctx = get_tenant_ctx(&extensions);
+        if !ctx.is_admin() {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Admin only"})),
+            );
+        }
+    }
     let brain = state.kernel.brain_info();
     let config = brain.config();
 
@@ -179,17 +202,16 @@ pub async fn delete_provider_key(
         format!("API key removed for provider '{}'", name),
         "ok",
     );
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "ok"})),
-    )
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
-
-
 
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/providers/keys", routing::get(list_provider_keys))
-        .route("/api/providers/{name}/key", routing::delete(delete_provider_key).post(set_provider_key))
+    axum::Router::new()
+        .route("/api/providers/keys", routing::get(list_provider_keys))
+        .route(
+            "/api/providers/{name}/key",
+            routing::delete(delete_provider_key).post(set_provider_key),
+        )
 }

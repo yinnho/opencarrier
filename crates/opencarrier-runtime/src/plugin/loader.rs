@@ -13,8 +13,7 @@ use uuid::Uuid;
 
 use libloading::Library;
 use opencarrier_types::plugin::{
-    BotConfig, ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginToolDef,
-    PLUGIN_ABI_VERSION,
+    BotConfig, ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginToolDef, PLUGIN_ABI_VERSION,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -35,12 +34,9 @@ type FnPluginInit = unsafe extern "C" fn(
     user_data: *mut std::os::raw::c_void,
 ) -> *mut std::os::raw::c_void;
 type FnPluginStop = unsafe extern "C" fn(handle: *mut std::os::raw::c_void);
-type FnPluginChannels =
-    unsafe extern "C" fn(handle: *mut std::os::raw::c_void) -> *const c_char;
-type FnPluginTools =
-    unsafe extern "C" fn(handle: *mut std::os::raw::c_void) -> *const c_char;
-type FnChannelStart =
-    unsafe extern "C" fn(channel_handle: *mut std::os::raw::c_void) -> i32;
+type FnPluginChannels = unsafe extern "C" fn(handle: *mut std::os::raw::c_void) -> *const c_char;
+type FnPluginTools = unsafe extern "C" fn(handle: *mut std::os::raw::c_void) -> *const c_char;
+type FnChannelStart = unsafe extern "C" fn(channel_handle: *mut std::os::raw::c_void) -> i32;
 type FnChannelSend = unsafe extern "C" fn(
     channel_handle: *mut std::os::raw::c_void,
     message_json: *const c_char,
@@ -132,9 +128,8 @@ impl LoadedPlugin {
                 "user_id": user_id,
                 "text": text,
             });
-            let c_msg =
-                CString::new(serde_json::to_string(&msg).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
+            let c_msg = CString::new(serde_json::to_string(&msg).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
             let ret = unsafe { fn_send(channel.handle, c_msg.as_ptr()) };
             if ret != 0 {
                 return Err(format!(
@@ -285,13 +280,8 @@ impl PluginLoader {
     ) -> Result<LoadedPlugin, String> {
         // 1. Read plugin.toml
         let config_path = plugin_dir.join("plugin.toml");
-        let config_content = std::fs::read_to_string(&config_path).map_err(|e| {
-            format!(
-                "Failed to read {}: {}",
-                config_path.display(),
-                e
-            )
-        })?;
+        let config_content = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read {}: {}", config_path.display(), e))?;
         let mut config: PluginConfig =
             toml::from_str(&config_content).map_err(|e| format!("Invalid plugin.toml: {}", e))?;
 
@@ -323,12 +313,8 @@ impl PluginLoader {
         }
 
         // 3. Find shared library
-        let lib_path = Self::find_shared_library(plugin_dir).ok_or_else(|| {
-            format!(
-                "No shared library found in {}",
-                plugin_dir.display()
-            )
-        })?;
+        let lib_path = Self::find_shared_library(plugin_dir)
+            .ok_or_else(|| format!("No shared library found in {}", plugin_dir.display()))?;
 
         // 4. dlopen
         let library = unsafe { Library::new(&lib_path) }
@@ -345,32 +331,25 @@ impl PluginLoader {
                 .get(b"oc_plugin_version\0")
                 .map_err(|e| format!("Missing oc_plugin_version: {}", e))?
         };
-        let fn_abi: Option<FnPluginAbiVersion> = unsafe {
-            library.get(b"oc_plugin_abi_version\0").ok().map(|s| *s)
-        };
+        let fn_abi: Option<FnPluginAbiVersion> =
+            unsafe { library.get(b"oc_plugin_abi_version\0").ok().map(|s| *s) };
         let fn_init: FnPluginInit = unsafe {
             *library
                 .get(b"oc_plugin_init\0")
                 .map_err(|e| format!("Missing oc_plugin_init: {}", e))?
         };
-        let fn_stop: Option<FnPluginStop> = unsafe {
-            library.get(b"oc_plugin_stop\0").ok().map(|s| *s)
-        };
-        let fn_channels: Option<FnPluginChannels> = unsafe {
-            library.get(b"oc_plugin_channels\0").ok().map(|s| *s)
-        };
-        let fn_tools: Option<FnPluginTools> = unsafe {
-            library.get(b"oc_plugin_tools\0").ok().map(|s| *s)
-        };
-        let fn_channel_start: Option<FnChannelStart> = unsafe {
-            library.get(b"oc_channel_start\0").ok().map(|s| *s)
-        };
-        let fn_channel_send: Option<FnChannelSend> = unsafe {
-            library.get(b"oc_channel_send\0").ok().map(|s| *s)
-        };
-        let fn_tool_execute: Option<FnToolExecute> = unsafe {
-            library.get(b"oc_plugin_tool_execute\0").ok().map(|s| *s)
-        };
+        let fn_stop: Option<FnPluginStop> =
+            unsafe { library.get(b"oc_plugin_stop\0").ok().map(|s| *s) };
+        let fn_channels: Option<FnPluginChannels> =
+            unsafe { library.get(b"oc_plugin_channels\0").ok().map(|s| *s) };
+        let fn_tools: Option<FnPluginTools> =
+            unsafe { library.get(b"oc_plugin_tools\0").ok().map(|s| *s) };
+        let fn_channel_start: Option<FnChannelStart> =
+            unsafe { library.get(b"oc_channel_start\0").ok().map(|s| *s) };
+        let fn_channel_send: Option<FnChannelSend> =
+            unsafe { library.get(b"oc_channel_send\0").ok().map(|s| *s) };
+        let fn_tool_execute: Option<FnToolExecute> =
+            unsafe { library.get(b"oc_plugin_tool_execute\0").ok().map(|s| *s) };
 
         // 6. Verify ABI version via exported function
         if let Some(fn_abi) = fn_abi {
@@ -502,7 +481,10 @@ impl PluginLoader {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        let ns = Uuid::new_v5(&Uuid::NAMESPACE_DNS, format!("opencarrier:{plugin_name}").as_bytes());
+        let ns = Uuid::new_v5(
+            &Uuid::NAMESPACE_DNS,
+            format!("opencarrier:{plugin_name}").as_bytes(),
+        );
 
         let mut migrated = 0;
         for tenant in &tenants {
@@ -592,7 +574,8 @@ impl PluginLoader {
                 return Vec::new();
             }
         };
-        descs.into_iter()
+        descs
+            .into_iter()
             .enumerate()
             .map(|(i, desc)| LoadedChannel {
                 channel_type: desc.channel_type,
@@ -627,10 +610,7 @@ impl PluginLoader {
 /// The `user_data` pointer is a `Box<mpsc::Sender<PluginMessage>>` that we
 /// leaked in `load_plugin`. This function parses the JSON C string into a
 /// `PluginMessage` and sends it through the channel.
-unsafe extern "C" fn message_callback(
-    user_data: *mut std::os::raw::c_void,
-    json: *const c_char,
-) {
+unsafe extern "C" fn message_callback(user_data: *mut std::os::raw::c_void, json: *const c_char) {
     if user_data.is_null() || json.is_null() {
         return;
     }

@@ -58,10 +58,16 @@ pub trait KernelHandle: Send + Sync {
     fn kill_agent(&self, agent_id: &str) -> Result<(), String>;
 
     /// Store a key-value pair in the agent's own memory namespace.
-    fn memory_store(&self, agent_id: &str, key: &str, value: serde_json::Value) -> Result<(), String>;
+    fn memory_store(
+        &self,
+        agent_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), String>;
 
     /// Recall a value from the agent's own memory namespace.
-    fn memory_recall(&self, agent_id: &str, key: &str) -> Result<Option<serde_json::Value>, String>;
+    fn memory_recall(&self, agent_id: &str, key: &str)
+        -> Result<Option<serde_json::Value>, String>;
 
     /// List all keys in the agent's own memory namespace.
     fn memory_list(&self, agent_id: &str) -> Result<Vec<(String, serde_json::Value)>, String>;
@@ -80,13 +86,26 @@ pub trait KernelHandle: Send + Sync {
     ) -> Result<String, String>;
 
     /// Claim the next available task scoped to the caller's tenant.
-    async fn task_claim(&self, agent_id: &str, tenant_id: &str) -> Result<Option<serde_json::Value>, String>;
+    async fn task_claim(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+    ) -> Result<Option<serde_json::Value>, String>;
 
     /// Mark a task as completed with a result string.
-    async fn task_complete(&self, task_id: &str, result: &str, tenant_id: &str) -> Result<(), String>;
+    async fn task_complete(
+        &self,
+        task_id: &str,
+        result: &str,
+        tenant_id: &str,
+    ) -> Result<(), String>;
 
     /// List tasks, optionally filtered by status, scoped to tenant.
-    async fn task_list(&self, status: Option<&str>, tenant_id: &str) -> Result<Vec<serde_json::Value>, String>;
+    async fn task_list(
+        &self,
+        status: Option<&str>,
+        tenant_id: &str,
+    ) -> Result<Vec<serde_json::Value>, String>;
 
     /// Publish a custom event that can trigger proactive agents.
     async fn publish_event(
@@ -162,7 +181,11 @@ pub trait KernelHandle: Send + Sync {
     /// Resolve an agent's workspace directory by name, scoped to a specific tenant.
     /// Uses `find_by_name_and_tenant` to avoid cross-tenant name collisions.
     /// Returns the absolute path string, or None if no agent with that name exists under the tenant.
-    fn resolve_agent_workspace_in_tenant(&self, agent_name: &str, tenant_id: &str) -> Option<String> {
+    fn resolve_agent_workspace_in_tenant(
+        &self,
+        agent_name: &str,
+        tenant_id: &str,
+    ) -> Option<String> {
         let _ = (agent_name, tenant_id);
         None
     }
@@ -190,14 +213,22 @@ pub trait KernelHandle: Send + Sync {
     /// Rebuild the available tool list for an agent.
     /// Used after mid-loop skill installations (e.g., train_write) so the
     /// LLM can use newly installed tools in the next iteration.
-    fn refresh_tools(&self, agent_id_str: &str) -> Option<Vec<opencarrier_types::tool::ToolDefinition>> {
+    fn refresh_tools(
+        &self,
+        agent_id_str: &str,
+    ) -> Option<Vec<opencarrier_types::tool::ToolDefinition>> {
         let _ = agent_id_str;
         None
     }
 
     /// Install a clone from raw .agx bytes. Returns (agent_id, agent_name).
     /// `tenant_id` scopes the clone's workspace to a specific tenant.
-    async fn clone_install(&self, name: &str, agx_data: &[u8], tenant_id: &str) -> Result<(String, String), String> {
+    async fn clone_install(
+        &self,
+        name: &str,
+        agx_data: &[u8],
+        tenant_id: &str,
+    ) -> Result<(String, String), String> {
         let _ = (name, agx_data, tenant_id);
         Err("Clone install not available".to_string())
     }
@@ -209,11 +240,7 @@ pub trait KernelHandle: Send + Sync {
     }
 
     /// Publish a clone to Hub. Returns the Hub template ID.
-    async fn clone_publish(
-        &self,
-        name: &str,
-        agx_bytes: &[u8],
-    ) -> Result<String, String> {
+    async fn clone_publish(&self, name: &str, agx_bytes: &[u8]) -> Result<String, String> {
         let _ = (name, agx_bytes);
         Err("Clone publish not available".to_string())
     }

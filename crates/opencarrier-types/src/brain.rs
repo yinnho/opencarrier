@@ -269,7 +269,10 @@ mod tests {
 
         assert_eq!(config.endpoints.len(), 3);
         assert_eq!(config.endpoints["zhipu_anthropic"].model, "glm-5.1");
-        assert_eq!(config.endpoints["zhipu_anthropic"].format, ApiFormat::Anthropic);
+        assert_eq!(
+            config.endpoints["zhipu_anthropic"].format,
+            ApiFormat::Anthropic
+        );
         assert_eq!(config.endpoints["ollama_local"].format, ApiFormat::OpenAI); // default
 
         assert_eq!(config.modalities["chat"].primary, "zhipu_anthropic");
@@ -287,7 +290,8 @@ mod tests {
         assert_eq!(pc.auth_type, "apikey");
 
         // Explicit auth_type
-        let json = r#"{"auth_type": "jwt", "params": {"access_key_env": "AK", "secret_key_env": "SK"}}"#;
+        let json =
+            r#"{"auth_type": "jwt", "params": {"access_key_env": "AK", "secret_key_env": "SK"}}"#;
         let pc: ProviderConfig = serde_json::from_str(json).unwrap();
         assert_eq!(pc.auth_type, "jwt");
         assert_eq!(pc.params["access_key_env"], "AK");
@@ -295,9 +299,18 @@ mod tests {
 
     #[test]
     fn test_api_format_serde() {
-        assert_eq!(serde_json::to_string(&ApiFormat::OpenAI).unwrap(), "\"openai\"");
-        assert_eq!(serde_json::to_string(&ApiFormat::Anthropic).unwrap(), "\"anthropic\"");
-        assert_eq!(serde_json::to_string(&ApiFormat::Gemini).unwrap(), "\"gemini\"");
+        assert_eq!(
+            serde_json::to_string(&ApiFormat::OpenAI).unwrap(),
+            "\"openai\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApiFormat::Anthropic).unwrap(),
+            "\"anthropic\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApiFormat::Gemini).unwrap(),
+            "\"gemini\""
+        );
 
         let f: ApiFormat = serde_json::from_str("\"anthropic\"").unwrap();
         assert_eq!(f, ApiFormat::Anthropic);

@@ -3,9 +3,12 @@
 //! Loads .agx clone archives (from openclone-core) and converts them into
 //! OpenCarrier AgentManifest + workspace files.
 
-mod loader;
 mod converter;
 pub mod hub;
+mod loader;
 
-pub use loader::{CloneData, load_agx, pack_agx, SkillData, SkillScriptData, AgentData, TemplateManifest, format_string_array, parse_frontmatter, parse_string_array, parse_toml_description};
 pub use converter::{convert_to_manifest, install_clone_to_workspace};
+pub use loader::{
+    format_string_array, load_agx, pack_agx, parse_frontmatter, parse_string_array,
+    parse_toml_description, AgentData, CloneData, SkillData, SkillScriptData, TemplateManifest,
+};

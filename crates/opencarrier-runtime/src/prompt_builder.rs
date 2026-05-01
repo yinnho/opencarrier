@@ -120,14 +120,20 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         // skills/ → 技能目录（name + when_to_use，始终注入，很短）
         if let Some(ref catalog) = ctx.clone_skills_catalog {
             if !catalog.trim().is_empty() {
-                sections.push(format!("## 技能目录\n当用户的请求匹配某个技能时，按该技能的流程执行。\n\n{}", catalog));
+                sections.push(format!(
+                    "## 技能目录\n当用户的请求匹配某个技能时，按该技能的流程执行。\n\n{}",
+                    catalog
+                ));
             }
         }
 
         // skills/ → 技能详细说明（完整 body + allowed_tools）
         if let Some(ref prompts) = ctx.clone_skills_prompts {
             if !prompts.trim().is_empty() {
-                sections.push(format!("## 技能详细说明\n{}\n\n严格按照每个技能定义的流程和步骤执行。", prompts));
+                sections.push(format!(
+                    "## 技能详细说明\n{}\n\n严格按照每个技能定义的流程和步骤执行。",
+                    prompts
+                ));
             }
         }
 
@@ -1143,7 +1149,10 @@ mod tests {
         let prompt = build_system_prompt(&ctx);
         // SOUL should appear exactly once (in clone section, not in persona)
         let count = prompt.matches("我是测试分身").count();
-        assert_eq!(count, 1, "SOUL content should appear exactly once, found {count} times");
+        assert_eq!(
+            count, 1,
+            "SOUL content should appear exactly once, found {count} times"
+        );
     }
 
     #[test]

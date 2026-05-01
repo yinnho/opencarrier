@@ -118,14 +118,7 @@ impl WeChatClient {
     ) -> Result<serde_json::Value> {
         let token = self.get_token(app_id, app_secret).await?;
         let url = format!("{}{}?access_token={}", WECHAT_API_BASE, path, token);
-        let json: serde_json::Value = self
-            .http
-            .post(&url)
-            .json(body)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let json: serde_json::Value = self.http.post(&url).json(body).send().await?.json().await?;
         check_error(&json)?;
         Ok(json)
     }

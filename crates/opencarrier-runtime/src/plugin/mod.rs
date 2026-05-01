@@ -7,9 +7,9 @@
 //!
 //! See `docs/PLUGIN-SYSTEM-DESIGN.md` for the full architecture.
 
+pub mod bridge;
 pub mod loader;
 pub mod manager;
-pub mod bridge;
 pub mod tool_dispatch;
 
 pub use loader::LoadedPlugin;

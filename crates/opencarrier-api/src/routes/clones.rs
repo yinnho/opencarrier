@@ -1,7 +1,7 @@
 //! Clone (.agx) lifecycle endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -36,7 +36,7 @@ pub async fn install_clone(
     extensions: axum::http::Extensions,
     Json(req): Json<InstallCloneRequest>,
 ) -> impl IntoResponse {
-    use opencarrier_clone::{load_agx, install_clone_to_workspace, convert_to_manifest};
+    use opencarrier_clone::{convert_to_manifest, install_clone_to_workspace, load_agx};
     let ctx = get_tenant_ctx(&extensions);
 
     // Decode base64 data
@@ -108,10 +108,17 @@ pub async fn install_clone(
             );
         }
     };
-    if state.kernel.registry.find_by_name_and_tenant(&clone_data.name, target_tenant_str).is_some() {
+    if state
+        .kernel
+        .registry
+        .find_by_name_and_tenant(&clone_data.name, target_tenant_str)
+        .is_some()
+    {
         return (
             StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": format!("Agent '{}' already exists in this tenant", clone_data.name)})),
+            Json(
+                serde_json::json!({"error": format!("Agent '{}' already exists in this tenant", clone_data.name)}),
+            ),
         );
     }
 
@@ -119,11 +126,17 @@ pub async fn install_clone(
     // Reuse target_tenant_str from collision check above
 
     // Create workspace directory (tenant-scoped)
-    let workspace_dir = state.kernel.config.tenant_workspaces_dir(target_tenant_str).join(&clone_data.name);
+    let workspace_dir = state
+        .kernel
+        .config
+        .tenant_workspaces_dir(target_tenant_str)
+        .join(&clone_data.name);
     if workspace_dir.exists() {
         return (
             StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": format!("Workspace for '{}' already exists", clone_data.name)})),
+            Json(
+                serde_json::json!({"error": format!("Workspace for '{}' already exists", clone_data.name)}),
+            ),
         );
     }
 
@@ -144,7 +157,10 @@ pub async fn install_clone(
     let name = manifest.name.clone();
     let warnings = clone_data.security_warnings.clone();
 
-    match state.kernel.spawn_agent_with_parent(manifest, None, None, target_tenant_str) {
+    match state
+        .kernel
+        .spawn_agent_with_parent(manifest, None, None, target_tenant_str)
+    {
         Ok(id) => {
             tracing::info!("Clone '{}' installed and spawned: {}", name, id);
             (
@@ -210,24 +226,48 @@ pub async fn start_clone(
         state.kernel.registry.find_by_name(&name)
     } else {
         ctx.tenant_id.as_ref().and_then(|tid| {
-            state.kernel.registry.find_by_name_and_tenant(&name, tid.as_str())
+            state
+                .kernel
+                .registry
+                .find_by_name_and_tenant(&name, tid.as_str())
         })
     };
     let entry = match entry {
         Some(e) => e,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Clone not found"})),
+            )
+        }
     };
     if !can_access(&ctx, entry.tenant_id.as_str()) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Access denied"})),
+        );
     }
 
     if entry.manifest.clone_source.is_none() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Not a clone agent"})),
+        );
     }
 
-    match state.kernel.registry.set_state(entry.id, opencarrier_types::agent::AgentState::Running) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "running"}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))),
+    match state
+        .kernel
+        .registry
+        .set_state(entry.id, opencarrier_types::agent::AgentState::Running)
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "running"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        ),
     }
 }
 /// POST /api/clones/{name}/stop — Stop a running clone.
@@ -241,24 +281,48 @@ pub async fn stop_clone(
         state.kernel.registry.find_by_name(&name)
     } else {
         ctx.tenant_id.as_ref().and_then(|tid| {
-            state.kernel.registry.find_by_name_and_tenant(&name, tid.as_str())
+            state
+                .kernel
+                .registry
+                .find_by_name_and_tenant(&name, tid.as_str())
         })
     };
     let entry = match entry {
         Some(e) => e,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Clone not found"})),
+            )
+        }
     };
     if !can_access(&ctx, entry.tenant_id.as_str()) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Access denied"})),
+        );
     }
 
     if entry.manifest.clone_source.is_none() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Not a clone agent"})),
+        );
     }
 
-    match state.kernel.registry.set_state(entry.id, opencarrier_types::agent::AgentState::Suspended) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "suspended"}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))),
+    match state
+        .kernel
+        .registry
+        .set_state(entry.id, opencarrier_types::agent::AgentState::Suspended)
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "suspended"})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        ),
     }
 }
 /// Run knowledge compile for a clone agent.
@@ -273,10 +337,11 @@ pub async fn clone_compile(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (entry, workspace) =
+        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     // Resolve an LLM driver for compile operations
     let driver = match state.kernel.resolve_driver(&entry.manifest) {
@@ -362,15 +427,13 @@ pub async fn clone_health(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (_entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_entry, workspace) =
+        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
-    let do_fix = params
-        .get("fix")
-        .map(|v| v == "true")
-        .unwrap_or(false);
+    let do_fix = params.get("fix").map(|v| v == "true").unwrap_or(false);
 
     let report = opencarrier_lifecycle::health::check_health(&workspace);
 
@@ -399,10 +462,11 @@ pub async fn clone_feedback_push(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (_entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_entry, workspace) =
+        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     let entries = match opencarrier_lifecycle::feedback::collect_feedback(&workspace) {
         Ok(e) => e,
@@ -422,9 +486,8 @@ pub async fn clone_feedback_push(
     }
 
     let hub_url = state.kernel.config.hub.url.clone();
-    let hub_api_key =
-        opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
-            .unwrap_or_default();
+    let hub_api_key = opencarrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env)
+        .unwrap_or_default();
 
     match opencarrier_lifecycle::feedback::push_feedback_to_hub(&hub_url, &hub_api_key, &entries)
         .await
@@ -465,14 +528,18 @@ pub async fn clone_evaluate(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (entry, workspace) =
+        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     let metrics = opencarrier_lifecycle::evaluate::compute_deterministic_metrics(&workspace);
 
-    let mode = params.get("mode").map(|s| s.as_str()).unwrap_or("deterministic");
+    let mode = params
+        .get("mode")
+        .map(|s| s.as_str())
+        .unwrap_or("deterministic");
 
     if mode == "full" {
         // Full mode: generate test questions from knowledge, ask clone, judge answers.
@@ -484,7 +551,9 @@ pub async fn clone_evaluate(
         if !knowledge_content.is_empty() {
             if let Ok(driver) = state.kernel.resolve_driver(&entry.manifest) {
                 let (sys_prompt, user_prompt) =
-                    opencarrier_lifecycle::evaluate::build_test_questions_prompt(&knowledge_content);
+                    opencarrier_lifecycle::evaluate::build_test_questions_prompt(
+                        &knowledge_content,
+                    );
 
                 // Generate test questions
                 let response_text = match driver
@@ -524,7 +593,9 @@ pub async fn clone_evaluate(
                                 tools: vec![],
                                 max_tokens: 1024,
                                 temperature: 0.3,
-                                system: Some("Answer the following question concisely.".to_string()),
+                                system: Some(
+                                    "Answer the following question concisely.".to_string(),
+                                ),
                                 thinking: None,
                             })
                             .await
@@ -610,10 +681,11 @@ pub async fn clone_rollback(
         }
     };
 
-    let (_entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_entry, workspace) =
+        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     match opencarrier_lifecycle::version::rollback_file(&workspace, &filename) {
         Ok(()) => {
@@ -650,10 +722,11 @@ pub async fn clone_verify(
         }
     };
 
-    let (_entry, workspace) = match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_entry, workspace) =
+        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     match opencarrier_lifecycle::version::verify_version(&workspace, &filename) {
         Ok(()) => (
@@ -677,19 +750,33 @@ pub async fn uninstall_clone(
         state.kernel.registry.find_by_name(&name)
     } else {
         ctx.tenant_id.as_ref().and_then(|tid| {
-            state.kernel.registry.find_by_name_and_tenant(&name, tid.as_str())
+            state
+                .kernel
+                .registry
+                .find_by_name_and_tenant(&name, tid.as_str())
         })
     };
     let entry = match entry {
         Some(e) => e,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Clone not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Clone not found"})),
+            )
+        }
     };
     if !can_access(&ctx, entry.tenant_id.as_str()) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Access denied"})),
+        );
     }
 
     if entry.manifest.clone_source.is_none() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not a clone agent"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Not a clone agent"})),
+        );
     }
 
     let agent_id = entry.id;
@@ -701,26 +788,37 @@ pub async fn uninstall_clone(
                 let _ = std::fs::remove_dir_all(&ws);
             }
             tracing::info!("Clone '{}' uninstalled", name);
-            (StatusCode::OK, Json(serde_json::json!({"status": "uninstalled"})))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "uninstalled"})),
+            )
         }
         Err(e) => {
             tracing::warn!("Failed to kill clone agent: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")})))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("{e}")})),
+            )
         }
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/clones", routing::get(list_clones))
+    axum::Router::new()
+        .route("/api/clones", routing::get(list_clones))
         .route("/api/clones/install", routing::post(install_clone))
         .route("/api/clones/{name}", routing::delete(uninstall_clone))
         .route("/api/clones/{name}/compile", routing::post(clone_compile))
-        .route("/api/clones/{name}/evaluate?mode=deterministic|full", routing::get(clone_evaluate))
-        .route("/api/clones/{name}/feedback/push", routing::post(clone_feedback_push))
+        .route(
+            "/api/clones/{name}/evaluate?mode=deterministic|full",
+            routing::get(clone_evaluate),
+        )
+        .route(
+            "/api/clones/{name}/feedback/push",
+            routing::post(clone_feedback_push),
+        )
         .route("/api/clones/{name}/health", routing::get(clone_health))
         .route("/api/clones/{name}/rollback", routing::post(clone_rollback))
         .route("/api/clones/{name}/start", routing::post(start_clone))

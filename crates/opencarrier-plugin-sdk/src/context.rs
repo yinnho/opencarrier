@@ -25,7 +25,10 @@ impl PluginContext {
     /// Called internally by `declare_plugin!`. Plugin developers should not call this directly.
     #[doc(hidden)]
     pub fn new(callback: FfiJsonCallback, user_data: *mut c_void) -> Self {
-        Self { callback, user_data }
+        Self {
+            callback,
+            user_data,
+        }
     }
 
     /// Create a message sender from this context.

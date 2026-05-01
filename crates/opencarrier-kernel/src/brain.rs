@@ -8,16 +8,19 @@
 //! Drivers are pre-created and cached per endpoint at boot.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dashmap::DashMap;
-use opencarrier_runtime::llm_driver::{Brain as BrainTrait, DriverConfig, LlmDriver};
-use opencarrier_runtime::drivers;
-use opencarrier_types::brain::{BrainConfig, BrainStatus, EndpointConfig, EndpointHealth, EndpointReport, ModalityInfo, ResolvedEndpoint};
-use tracing::{info, warn};
 use async_trait::async_trait;
+use dashmap::DashMap;
+use opencarrier_runtime::drivers;
+use opencarrier_runtime::llm_driver::{Brain as BrainTrait, DriverConfig, LlmDriver};
+use opencarrier_types::brain::{
+    BrainConfig, BrainStatus, EndpointConfig, EndpointHealth, EndpointReport, ModalityInfo,
+    ResolvedEndpoint,
+};
+use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
 // Per-endpoint health tracker (lock-free atomics)
@@ -55,7 +58,8 @@ impl EndpointTracker {
         self.success_count.fetch_add(1, Ordering::Relaxed);
         self.consecutive_failures.store(0, Ordering::Relaxed);
         if latency_ms > 0 {
-            self.total_latency_ms.fetch_add(latency_ms, Ordering::Relaxed);
+            self.total_latency_ms
+                .fetch_add(latency_ms, Ordering::Relaxed);
             self.latency_count.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -64,7 +68,8 @@ impl EndpointTracker {
         self.failure_count.fetch_add(1, Ordering::Relaxed);
         self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
         if latency_ms > 0 {
-            self.total_latency_ms.fetch_add(latency_ms, Ordering::Relaxed);
+            self.total_latency_ms
+                .fetch_add(latency_ms, Ordering::Relaxed);
             self.latency_count.fetch_add(1, Ordering::Relaxed);
         }
         self.last_failure_at.store(now_ms(), Ordering::Relaxed);
@@ -88,10 +93,20 @@ impl EndpointTracker {
         let failure = self.failure_count.load(Ordering::Relaxed);
         let total_lat = self.total_latency_ms.load(Ordering::Relaxed);
         let lat_count = self.latency_count.load(Ordering::Relaxed);
-        let avg = if lat_count > 0 { total_lat / lat_count } else { 0 };
+        let avg = if lat_count > 0 {
+            total_lat / lat_count
+        } else {
+            0
+        };
         let consec = self.consecutive_failures.load(Ordering::Relaxed);
         let circuit_open = consec >= CIRCUIT_BREAKER_THRESHOLD && !self.is_available();
-        EndpointSnapshot { success, failure, avg_latency: avg, consecutive_failures: consec, circuit_open }
+        EndpointSnapshot {
+            success,
+            failure,
+            avg_latency: avg,
+            consecutive_failures: consec,
+            circuit_open,
+        }
     }
 }
 
@@ -137,28 +152,37 @@ impl Brain {
             "Brain initialized"
         );
 
-        Ok(Self { config, drivers: DashMap::new(), health: DashMap::new() })
+        Ok(Self {
+            config,
+            drivers: DashMap::new(),
+            health: DashMap::new(),
+        })
     }
 
     // ── New query interface ─────────────────────────────────────
 
     /// List all available modalities with descriptions.
     pub fn list_modalities(&self) -> Vec<ModalityInfo> {
-        self.config.modalities.iter().map(|(name, mc)| {
-            ModalityInfo {
+        self.config
+            .modalities
+            .iter()
+            .map(|(name, mc)| ModalityInfo {
                 name: name.clone(),
                 description: mc.description.clone(),
                 primary_endpoint: mc.primary.clone(),
                 fallback_count: mc.fallbacks.len(),
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Get the ordered list of resolved endpoints for a modality.
     /// Returns primary first, then fallbacks. Filters out endpoints
     /// with no live driver **or circuit-broken** (too many consecutive failures).
     pub fn endpoints_for(&self, modality: &str) -> Vec<ResolvedEndpoint> {
-        let mod_config = self.config.modalities.get(modality)
+        let mod_config = self
+            .config
+            .modalities
+            .get(modality)
             .or_else(|| self.config.modalities.get(&self.config.default_modality));
 
         let Some(mod_config) = mod_config else {
@@ -168,7 +192,8 @@ impl Brain {
         let mut chain = vec![mod_config.primary.clone()];
         chain.extend(mod_config.fallbacks.iter().cloned());
 
-        chain.into_iter()
+        chain
+            .into_iter()
             .filter_map(|name| {
                 let endpoint = self.config.endpoints.get(&name)?;
                 // Only include endpoints that can produce a driver
@@ -202,7 +227,8 @@ impl Brain {
 
     /// Report the result of an endpoint call. Non-blocking.
     pub fn report(&self, report: EndpointReport) {
-        let tracker = self.health
+        let tracker = self
+            .health
             .entry(report.endpoint_id)
             .or_insert_with(EndpointTracker::new);
 
@@ -217,14 +243,21 @@ impl Brain {
     pub fn status(&self) -> BrainStatus {
         let modalities = self.list_modalities();
 
-        let endpoints: Vec<EndpointHealth> = self.config.endpoints.iter()
+        let endpoints: Vec<EndpointHealth> = self
+            .config
+            .endpoints
+            .iter()
             .map(|(name, ep)| {
-                let snap = self.health
+                let snap = self
+                    .health
                     .get(name)
                     .map(|t| t.snapshot())
                     .unwrap_or_else(|| EndpointSnapshot {
-                        success: 0, failure: 0, avg_latency: 0,
-                        consecutive_failures: 0, circuit_open: false,
+                        success: 0,
+                        failure: 0,
+                        avg_latency: 0,
+                        consecutive_failures: 0,
+                        circuit_open: false,
                     });
 
                 EndpointHealth {
@@ -243,13 +276,20 @@ impl Brain {
 
         let drivers_ready = self.drivers.len();
 
-        BrainStatus { modalities, endpoints, drivers_ready }
+        BrainStatus {
+            modalities,
+            endpoints,
+            drivers_ready,
+        }
     }
 
     /// Resolve credentials for a provider (for skill credential injection).
     /// Reads all env vars declared in the provider config and returns them
     /// as a ProviderCredentials struct ready for injection into skill subprocesses.
-    pub fn credentials_for(&self, provider: &str) -> Option<opencarrier_types::brain::ProviderCredentials> {
+    pub fn credentials_for(
+        &self,
+        provider: &str,
+    ) -> Option<opencarrier_types::brain::ProviderCredentials> {
         let config = self.config.providers.get(provider)?;
         let mut env_vars = HashMap::new();
 
@@ -277,7 +317,10 @@ impl Brain {
 
     /// Get the model name for a given modality's primary endpoint.
     pub fn model_for(&self, modality: &str) -> &str {
-        let mod_config = self.config.modalities.get(modality)
+        let mod_config = self
+            .config
+            .modalities
+            .get(modality)
             .or_else(|| self.config.modalities.get(&self.config.default_modality));
         match mod_config {
             Some(mc) => self.model_for_endpoint(&mc.primary),
@@ -307,14 +350,20 @@ impl Brain {
 
     /// Get the driver for a modality's primary endpoint, creating lazily.
     pub fn driver_for_modality(&self, modality: &str) -> Option<Arc<dyn LlmDriver>> {
-        let mod_config = self.config.modalities.get(modality)
+        let mod_config = self
+            .config
+            .modalities
+            .get(modality)
             .or_else(|| self.config.modalities.get(&self.config.default_modality))?;
         self.get_or_create_driver(&mod_config.primary)
     }
 
     /// Get the endpoint names that have been successfully initialized (have drivers).
     pub fn ready_endpoints(&self) -> Vec<String> {
-        self.drivers.iter().map(|entry| entry.key().clone()).collect()
+        self.drivers
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     // ── Internal helpers ──────────────────────────────────────
@@ -327,7 +376,8 @@ impl Brain {
         let endpoint = self.config.endpoints.get(endpoint_name)?;
         match Self::create_driver(endpoint_name, endpoint, &self.config.providers) {
             Ok(driver) => {
-                self.drivers.insert(endpoint_name.to_string(), driver.clone());
+                self.drivers
+                    .insert(endpoint_name.to_string(), driver.clone());
                 Some(driver)
             }
             Err(e) => {
@@ -342,7 +392,9 @@ impl Brain {
     }
 
     fn model_for_endpoint(&self, endpoint_name: &str) -> &str {
-        self.config.endpoints.get(endpoint_name)
+        self.config
+            .endpoints
+            .get(endpoint_name)
             .map(|e| e.model.as_str())
             .unwrap_or("unknown")
     }
@@ -352,33 +404,39 @@ impl Brain {
         endpoint: &EndpointConfig,
         providers: &HashMap<String, opencarrier_types::brain::ProviderConfig>,
     ) -> Result<Arc<dyn LlmDriver>, BrainError> {
-        let provider_config = providers.get(&endpoint.provider)
-            .ok_or_else(|| BrainError::ProviderNotFound {
-                endpoint: name.to_string(),
-                provider: endpoint.provider.clone(),
-            })?;
+        let provider_config =
+            providers
+                .get(&endpoint.provider)
+                .ok_or_else(|| BrainError::ProviderNotFound {
+                    endpoint: name.to_string(),
+                    provider: endpoint.provider.clone(),
+                })?;
 
         // Resolve API key based on auth_type
         let api_key = match provider_config.auth_type.as_str() {
             "jwt" => {
                 // JWT auth: generate token from access_key + secret_key params
-                let ak_env = provider_config.params.get("access_key_env")
+                let ak_env = provider_config
+                    .params
+                    .get("access_key_env")
                     .ok_or_else(|| BrainError::MissingJwtParam {
                         endpoint: name.to_string(),
                         param: "access_key_env".to_string(),
                     })?;
-                let sk_env = provider_config.params.get("secret_key_env")
+                let sk_env = provider_config
+                    .params
+                    .get("secret_key_env")
                     .ok_or_else(|| BrainError::MissingJwtParam {
                         endpoint: name.to_string(),
                         param: "secret_key_env".to_string(),
                     })?;
-                let access_key = std::env::var(ak_env)
-                    .map_err(|_| BrainError::MissingJwtCredential {
+                let access_key =
+                    std::env::var(ak_env).map_err(|_| BrainError::MissingJwtCredential {
                         endpoint: name.to_string(),
                         env_var: ak_env.clone(),
                     })?;
-                let secret_key = std::env::var(sk_env)
-                    .map_err(|_| BrainError::MissingJwtCredential {
+                let secret_key =
+                    std::env::var(sk_env).map_err(|_| BrainError::MissingJwtCredential {
                         endpoint: name.to_string(),
                         env_var: sk_env.clone(),
                     })?;
@@ -403,11 +461,10 @@ impl Brain {
             auth_header: endpoint.auth_header,
         };
 
-        drivers::create_driver(&driver_config)
-            .map_err(|e| BrainError::DriverCreation {
-                endpoint: name.to_string(),
-                error: e.to_string(),
-            })
+        drivers::create_driver(&driver_config).map_err(|e| BrainError::DriverCreation {
+            endpoint: name.to_string(),
+            error: e.to_string(),
+        })
     }
 }
 
@@ -446,8 +503,8 @@ fn generate_jwt_token(access_key: &str, secret_key: &str) -> String {
     let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&payload).unwrap());
 
     let signing_input = format!("{}.{}", header_b64, payload_b64);
-    let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
-        .expect("HMAC key length is valid");
+    let mut mac =
+        HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC key length is valid");
     mac.update(signing_input.as_bytes());
     let signature = mac.finalize().into_bytes();
     let sig_b64 = URL_SAFE_NO_PAD.encode(signature);
@@ -478,7 +535,10 @@ impl BrainTrait for Brain {
         Brain::status(self)
     }
 
-    fn credentials_for(&self, provider: &str) -> Option<opencarrier_types::brain::ProviderCredentials> {
+    fn credentials_for(
+        &self,
+        provider: &str,
+    ) -> Option<opencarrier_types::brain::ProviderCredentials> {
         Brain::credentials_for(self, provider)
     }
 
@@ -511,16 +571,28 @@ impl std::fmt::Display for BrainError {
         match self {
             BrainError::NoEndpoints => write!(f, "No brain endpoints could be initialized"),
             BrainError::ProviderNotFound { endpoint, provider } => {
-                write!(f, "Endpoint '{}' references unknown provider '{}'", endpoint, provider)
+                write!(
+                    f,
+                    "Endpoint '{}' references unknown provider '{}'",
+                    endpoint, provider
+                )
             }
             BrainError::DriverCreation { endpoint, error } => {
                 write!(f, "Failed to create driver for '{}': {}", endpoint, error)
             }
             BrainError::MissingJwtParam { endpoint, param } => {
-                write!(f, "Endpoint '{}': JWT provider missing param '{}'", endpoint, param)
+                write!(
+                    f,
+                    "Endpoint '{}': JWT provider missing param '{}'",
+                    endpoint, param
+                )
             }
             BrainError::MissingJwtCredential { endpoint, env_var } => {
-                write!(f, "Endpoint '{}': JWT credential '{}' not set in environment", endpoint, env_var)
+                write!(
+                    f,
+                    "Endpoint '{}': JWT credential '{}' not set in environment",
+                    endpoint, env_var
+                )
             }
         }
     }
@@ -542,15 +614,21 @@ mod tests {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
         let header: serde_json::Value = serde_json::from_str(
-            String::from_utf8(URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap().as_str()
-        ).unwrap();
+            String::from_utf8(URL_SAFE_NO_PAD.decode(parts[0]).unwrap())
+                .unwrap()
+                .as_str(),
+        )
+        .unwrap();
         assert_eq!(header["alg"], "HS256");
         assert_eq!(header["typ"], "JWT");
 
         // Decode payload
         let payload: serde_json::Value = serde_json::from_str(
-            String::from_utf8(URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap().as_str()
-        ).unwrap();
+            String::from_utf8(URL_SAFE_NO_PAD.decode(parts[1]).unwrap())
+                .unwrap()
+                .as_str(),
+        )
+        .unwrap();
         assert_eq!(payload["iss"], "test_access_key");
         assert!(payload["exp"].is_number());
         assert!(payload["nbf"].is_number());

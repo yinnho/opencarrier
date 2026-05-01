@@ -309,10 +309,18 @@ pub trait Memory: Send + Sync {
     // -- Knowledge graph operations --
 
     /// Add an entity to the knowledge graph, scoped to tenant.
-    async fn add_entity(&self, entity: Entity, tenant_id: Option<&str>) -> crate::error::OpenCarrierResult<String>;
+    async fn add_entity(
+        &self,
+        entity: Entity,
+        tenant_id: Option<&str>,
+    ) -> crate::error::OpenCarrierResult<String>;
 
     /// Add a relation between entities, scoped to tenant.
-    async fn add_relation(&self, relation: Relation, tenant_id: Option<&str>) -> crate::error::OpenCarrierResult<String>;
+    async fn add_relation(
+        &self,
+        relation: Relation,
+        tenant_id: Option<&str>,
+    ) -> crate::error::OpenCarrierResult<String>;
 
     /// Query the knowledge graph, scoped to tenant.
     async fn query_graph(

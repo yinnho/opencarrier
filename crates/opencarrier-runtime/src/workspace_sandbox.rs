@@ -161,7 +161,8 @@ pub fn resolve_sandbox_path_for_write(
     // Check per-user isolation for users/ paths
     let eff_path = Path::new(&effective_path);
     if eff_path.starts_with("users/") {
-        let components: Vec<&str> = eff_path.components()
+        let components: Vec<&str> = eff_path
+            .components()
             .filter_map(|c| c.as_os_str().to_str())
             .collect();
         // components: ["users", "{sender_id}", ...]
@@ -175,7 +176,10 @@ pub fn resolve_sandbox_path_for_write(
                     ));
                 }
             } else {
-                return Err("Write denied: cannot write to users/ directory without sender context".to_string());
+                return Err(
+                    "Write denied: cannot write to users/ directory without sender context"
+                        .to_string(),
+                );
             }
         }
     }
@@ -240,7 +244,8 @@ pub fn resolve_sandbox_path_for_read(
     // Check per-user isolation for users/ paths
     let eff_path = Path::new(&effective_path);
     if eff_path.starts_with("users/") {
-        let components: Vec<&str> = eff_path.components()
+        let components: Vec<&str> = eff_path
+            .components()
             .filter_map(|c| c.as_os_str().to_str())
             .collect();
         if components.len() >= 2 {

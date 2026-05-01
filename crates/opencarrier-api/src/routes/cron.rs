@@ -1,7 +1,7 @@
 //! Cron job management endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -29,7 +29,9 @@ pub async fn list_cron_jobs(
                 if ctx.is_admin() {
                     jobs
                 } else {
-                    jobs.into_iter().filter(|j| can_access(&ctx, &j.tenant_id)).collect()
+                    jobs.into_iter()
+                        .filter(|j| can_access(&ctx, &j.tenant_id))
+                        .collect()
                 }
             }
             Err(_) => {
@@ -42,7 +44,10 @@ pub async fn list_cron_jobs(
     } else if ctx.is_admin() {
         state.kernel.cron_scheduler.list_all_jobs()
     } else {
-        state.kernel.cron_scheduler.list_all_jobs_by_tenant(ctx.tenant_id.as_deref().unwrap_or(""))
+        state
+            .kernel
+            .cron_scheduler
+            .list_all_jobs_by_tenant(ctx.tenant_id.as_deref().unwrap_or(""))
     };
     let total = jobs.len();
     let jobs_json: Vec<serde_json::Value> = jobs
@@ -66,7 +71,10 @@ pub async fn create_cron_job(
     if let Ok(aid) = agent_id.parse::<AgentId>() {
         if let Some(entry) = state.kernel.registry.get(aid) {
             if !can_access(&ctx, &entry.tenant_id) {
-                return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "Access denied"})),
+                );
             }
         }
     }
@@ -94,7 +102,10 @@ pub async fn delete_cron_job(
             // Tenant ownership check
             if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
                 if !can_access(&ctx, &job.tenant_id) {
-                    return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "Access denied"})),
+                    );
                 }
             }
             match state.kernel.cron_scheduler.remove_job(job_id) {
@@ -132,7 +143,10 @@ pub async fn toggle_cron_job(
             // Tenant ownership check
             if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
                 if !can_access(&ctx, &job.tenant_id) {
-                    return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "Access denied"})),
+                    );
                 }
             }
             match state.kernel.cron_scheduler.set_enabled(job_id, enabled) {
@@ -168,7 +182,10 @@ pub async fn cron_job_status(
             // Tenant ownership check
             if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
                 if !can_access(&ctx, &job.tenant_id) {
-                    return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"})));
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "Access denied"})),
+                    );
                 }
             }
             match state.kernel.cron_scheduler.get_meta(job_id) {
@@ -189,12 +206,14 @@ pub async fn cron_job_status(
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/cron/jobs", routing::post(create_cron_job).get(list_cron_jobs))
+    axum::Router::new()
+        .route(
+            "/api/cron/jobs",
+            routing::post(create_cron_job).get(list_cron_jobs),
+        )
         .route("/api/cron/jobs/{id}", routing::delete(delete_cron_job))
         .route("/api/cron/jobs/{id}/enable", routing::put(toggle_cron_job))
         .route("/api/cron/jobs/{id}/status", routing::get(cron_job_status))

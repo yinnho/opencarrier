@@ -32,7 +32,11 @@ fn test_config() -> KernelConfig {
         },
         "default_modality": "chat"
     });
-    std::fs::write(tmp.join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap()).unwrap();
+    std::fs::write(
+        tmp.join("brain.json"),
+        serde_json::to_string_pretty(&brain_json).unwrap(),
+    )
+    .unwrap();
 
     KernelConfig {
         home_dir: tmp.clone(),

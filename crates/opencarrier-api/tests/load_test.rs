@@ -55,8 +55,11 @@ async fn start_test_server() -> TestServer {
         },
         "default_modality": "chat"
     });
-    std::fs::write(tmp.path().join("brain.json"), serde_json::to_string_pretty(&brain_json).unwrap())
-        .expect("Failed to write brain.json");
+    std::fs::write(
+        tmp.path().join("brain.json"),
+        serde_json::to_string_pretty(&brain_json).unwrap(),
+    )
+    .expect("Failed to write brain.json");
 
     let config = KernelConfig {
         home_dir: tmp.path().to_path_buf(),
@@ -115,7 +118,9 @@ async fn start_test_server() -> TestServer {
         .route("/api/config", axum::routing::get(routes::get_config))
         .layer(axum::middleware::from_fn(middleware::request_logging))
         // Inject admin TenantContext for tests (no auth middleware in test server)
-        .layer(axum::Extension(opencarrier_types::tenant::TenantContext::admin()))
+        .layer(axum::Extension(
+            opencarrier_types::tenant::TenantContext::admin(),
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state.clone());

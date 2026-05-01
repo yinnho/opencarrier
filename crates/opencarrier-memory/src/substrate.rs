@@ -121,7 +121,10 @@ impl MemorySubstrate {
     /// List all saved agents.
     ///
     /// If `tenant_id` is provided, only agents belonging to that tenant are listed.
-    pub fn list_agents(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<(String, String, String)>> {
+    pub fn list_agents(
+        &self,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<Vec<(String, String, String)>> {
         self.structured.list_agents(tenant_id)
     }
 
@@ -183,7 +186,10 @@ impl MemorySubstrate {
     }
 
     /// List all sessions with metadata.
-    pub fn list_sessions(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<serde_json::Value>> {
+    pub fn list_sessions(
+        &self,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<Vec<serde_json::Value>> {
         self.sessions.list_sessions(tenant_id)
     }
 
@@ -273,7 +279,8 @@ impl MemorySubstrate {
         sessions_dir: &Path,
         sender_id: Option<&str>,
     ) -> Result<(), std::io::Error> {
-        self.sessions.write_jsonl_mirror(session, sessions_dir, sender_id)
+        self.sessions
+            .write_jsonl_mirror(session, sessions_dir, sender_id)
     }
 
     /// Append messages to the agent's canonical session for cross-channel persistence.
@@ -407,7 +414,11 @@ impl MemorySubstrate {
     }
 
     /// Claim the next pending task scoped to a tenant. Returns task JSON or None.
-    pub async fn task_claim(&self, agent_id: &str, tenant_id: Option<&str>) -> OpenCarrierResult<Option<serde_json::Value>> {
+    pub async fn task_claim(
+        &self,
+        agent_id: &str,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<Option<serde_json::Value>> {
         let conn = Arc::clone(&self.conn);
         let agent_id = agent_id.to_string();
         let tenant_id = tenant_id.map(|s| s.to_string());
@@ -475,7 +486,12 @@ impl MemorySubstrate {
     }
 
     /// Mark a task as completed with a result string. Validates tenant ownership.
-    pub async fn task_complete(&self, task_id: &str, result: &str, tenant_id: Option<&str>) -> OpenCarrierResult<()> {
+    pub async fn task_complete(
+        &self,
+        task_id: &str,
+        result: &str,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<()> {
         let conn = Arc::clone(&self.conn);
         let task_id = task_id.to_string();
         let result = result.to_string();
@@ -634,7 +650,11 @@ impl Memory for MemorySubstrate {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn add_entity(&self, entity: Entity, tenant_id: Option<&str>) -> OpenCarrierResult<String> {
+    async fn add_entity(
+        &self,
+        entity: Entity,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<String> {
         let store = self.knowledge.clone();
         let tenant_id = tenant_id.map(|s| s.to_string());
         tokio::task::spawn_blocking(move || store.add_entity(entity, tenant_id.as_deref()))
@@ -642,7 +662,11 @@ impl Memory for MemorySubstrate {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn add_relation(&self, relation: Relation, tenant_id: Option<&str>) -> OpenCarrierResult<String> {
+    async fn add_relation(
+        &self,
+        relation: Relation,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<String> {
         let store = self.knowledge.clone();
         let tenant_id = tenant_id.map(|s| s.to_string());
         tokio::task::spawn_blocking(move || store.add_relation(relation, tenant_id.as_deref()))
@@ -650,7 +674,11 @@ impl Memory for MemorySubstrate {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn query_graph(&self, pattern: GraphPattern, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<GraphMatch>> {
+    async fn query_graph(
+        &self,
+        pattern: GraphPattern,
+        tenant_id: Option<&str>,
+    ) -> OpenCarrierResult<Vec<GraphMatch>> {
         let store = self.knowledge.clone();
         let tenant_id = tenant_id.map(|s| s.to_string());
         tokio::task::spawn_blocking(move || store.query_graph(pattern, tenant_id.as_deref()))

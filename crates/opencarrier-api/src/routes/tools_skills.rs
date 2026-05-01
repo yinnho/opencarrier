@@ -1,7 +1,7 @@
 //! Tool, skill, and MCP server endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -200,14 +200,30 @@ pub async fn mcp_http(
 
         // Block inter-agent and tenant-sensitive tools — MCP HTTP has no agent context
         const BLOCKED_TOOLS: &[&str] = &[
-            "agent_send", "agent_spawn", "agent_list", "agent_kill",
-            "train_read", "train_write", "train_list",
-            "train_knowledge_add", "train_knowledge_import", "train_knowledge_list",
-            "train_knowledge_read", "train_knowledge_lint", "train_knowledge_heal",
+            "agent_send",
+            "agent_spawn",
+            "agent_list",
+            "agent_kill",
+            "train_read",
+            "train_write",
+            "train_list",
+            "train_knowledge_add",
+            "train_knowledge_import",
+            "train_knowledge_list",
+            "train_knowledge_read",
+            "train_knowledge_lint",
+            "train_knowledge_heal",
             "train_evaluate",
-            "clone_install", "clone_export", "clone_publish",
-            "memory_store", "memory_recall", "memory_list",
-            "task_post", "task_claim", "task_complete", "task_list",
+            "clone_install",
+            "clone_export",
+            "clone_publish",
+            "memory_store",
+            "memory_recall",
+            "memory_list",
+            "task_post",
+            "task_claim",
+            "task_complete",
+            "task_list",
         ];
         if BLOCKED_TOOLS.contains(&tool_name) {
             return Json(serde_json::json!({
@@ -289,10 +305,11 @@ pub async fn get_agent_tools(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_agent_id, entry) =
+        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -357,10 +374,11 @@ pub async fn get_agent_skills(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_agent_id, entry) =
+        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
     let available = state
         .kernel
         .plugins
@@ -420,10 +438,11 @@ pub async fn get_agent_mcp_servers(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_agent_id, entry) =
+        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
     // Collect known MCP server names from connected tools
     let mut available: Vec<String> = Vec::new();
     if let Ok(mcp_tools) = state.kernel.plugins.mcp_tools.lock() {
@@ -490,7 +509,15 @@ pub async fn create_skill(
     extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    { let ctx = get_tenant_ctx(&extensions); if !ctx.is_admin() { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"}))); } }
+    {
+        let ctx = get_tenant_ctx(&extensions);
+        if !ctx.is_admin() {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Admin only"})),
+            );
+        }
+    }
     let name = match body["name"].as_str() {
         Some(n) if !n.trim().is_empty() => n.trim().to_string(),
         _ => {
@@ -569,14 +596,22 @@ pub async fn create_skill(
     )
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/agents/{id}/mcp_servers", routing::put(set_agent_mcp_servers).get(get_agent_mcp_servers))
-        .route("/api/agents/{id}/skills", routing::put(set_agent_skills).get(get_agent_skills))
-        .route("/api/agents/{id}/tools", routing::put(set_agent_tools).get(get_agent_tools))
+    axum::Router::new()
+        .route(
+            "/api/agents/{id}/mcp_servers",
+            routing::put(set_agent_mcp_servers).get(get_agent_mcp_servers),
+        )
+        .route(
+            "/api/agents/{id}/skills",
+            routing::put(set_agent_skills).get(get_agent_skills),
+        )
+        .route(
+            "/api/agents/{id}/tools",
+            routing::put(set_agent_tools).get(get_agent_tools),
+        )
         .route("/api/mcp/servers", routing::get(list_mcp_servers))
         .route("/api/skills", routing::get(list_skills))
         .route("/api/skills/create", routing::post(create_skill))

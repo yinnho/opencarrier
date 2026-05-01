@@ -23,7 +23,9 @@ fn random_string(len: usize) -> String {
     use rand::Rng;
     let charset = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
-    (0..len).map(|_| charset[rng.gen_range(0..charset.len())] as char).collect()
+    (0..len)
+        .map(|_| charset[rng.gen_range(0..charset.len())] as char)
+        .collect()
 }
 
 /// Generate a random password (alphanumeric, mixed case + digits).
@@ -31,14 +33,23 @@ fn random_password(len: usize) -> String {
     use rand::Rng;
     let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
-    (0..len).map(|_| charset[rng.gen_range(0..charset.len())] as char).collect()
+    (0..len)
+        .map(|_| charset[rng.gen_range(0..charset.len())] as char)
+        .collect()
 }
 
 /// Run the first-run setup flow. Zero interaction — device is identity.
 /// Returns (username, password) if config was written.
-pub fn run_first_time_setup(opencarrier_dir: &Path, hub_url: &str) -> Result<(String, String), String> {
+pub fn run_first_time_setup(
+    opencarrier_dir: &Path,
+    hub_url: &str,
+) -> Result<(String, String), String> {
     println!();
-    println!("  {} {}", ">>".bright_cyan().bold(), "Setting up OpenCarrier".bold());
+    println!(
+        "  {} {}",
+        ">>".bright_cyan().bold(),
+        "Setting up OpenCarrier".bold()
+    );
     println!("  {}", "Registering device with Hub...".dimmed());
     println!();
 
@@ -91,7 +102,10 @@ session_ttl_hours = 168
     // Load .env into current process so the kernel picks it up
     std::env::set_var("OPENCLONE_HUB_KEY", &api_key);
 
-    println!("  {} Device registered and API key saved!", "\u{2714}".bright_green());
+    println!(
+        "  {} Device registered and API key saved!",
+        "\u{2714}".bright_green()
+    );
     println!("  {} Username: {}", "\u{2714}".bright_green(), username);
     println!();
 
@@ -170,7 +184,10 @@ async fn register_and_get_key(
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::CONFLICT {
-            println!("  {} Device already registered, logging in...", "-".bright_yellow());
+            println!(
+                "  {} Device already registered, logging in...",
+                "-".bright_yellow()
+            );
             return login_and_get_key(hub_url, username, password, device_id).await;
         }
         return Err(format!("Registration failed ({}): {}", status, body));
@@ -193,7 +210,10 @@ async fn register_and_get_key(
         return Err(format!("Failed to create API key: {}", body));
     }
 
-    let key_data: KeyResponse = key_resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+    let key_data: KeyResponse = key_resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {e}"))?;
     Ok(key_data.key)
 }
 
@@ -259,7 +279,10 @@ async fn login_and_get_key(
         return Err(format!("Failed to create API key: {}", body));
     }
 
-    let key_data: KeyResponse = key_resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+    let key_data: KeyResponse = key_resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {e}"))?;
     Ok(key_data.key)
 }
 

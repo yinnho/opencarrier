@@ -1,7 +1,7 @@
 //! Agent binding endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -20,18 +20,32 @@ pub async fn list_bindings(
     let filtered: Vec<_> = if ctx.is_admin() {
         bindings
     } else {
-        bindings.into_iter().filter(|b| {
-            // Check if the binding's agent belongs to this tenant
-            if let Ok(uuid) = b.agent.parse::<uuid::Uuid>() {
-                if let Some(entry) = state.kernel.registry.get(opencarrier_types::agent::AgentId(uuid)) {
-                    return can_access(&ctx, entry.tenant_id.as_str());
+        bindings
+            .into_iter()
+            .filter(|b| {
+                // Check if the binding's agent belongs to this tenant
+                if let Ok(uuid) = b.agent.parse::<uuid::Uuid>() {
+                    if let Some(entry) = state
+                        .kernel
+                        .registry
+                        .get(opencarrier_types::agent::AgentId(uuid))
+                    {
+                        return can_access(&ctx, entry.tenant_id.as_str());
+                    }
                 }
-            }
-            // Name lookup scoped to tenant
-            ctx.tenant_id.as_ref().map(|tid| {
-                state.kernel.registry.find_by_name_and_tenant(&b.agent, tid.as_str()).is_some()
-            }).unwrap_or(false)
-        }).collect()
+                // Name lookup scoped to tenant
+                ctx.tenant_id
+                    .as_ref()
+                    .map(|tid| {
+                        state
+                            .kernel
+                            .registry
+                            .find_by_name_and_tenant(&b.agent, tid.as_str())
+                            .is_some()
+                    })
+                    .unwrap_or(false)
+            })
+            .collect()
     };
     (
         StatusCode::OK,
@@ -48,13 +62,23 @@ pub async fn add_binding(
 
     // Tenant check: verify the binding's agent belongs to the caller
     let agent_owned = if let Ok(uuid) = binding.agent.parse::<uuid::Uuid>() {
-        state.kernel.registry.get(opencarrier_types::agent::AgentId(uuid))
+        state
+            .kernel
+            .registry
+            .get(opencarrier_types::agent::AgentId(uuid))
             .map(|e| can_access(&ctx, &e.tenant_id))
             .unwrap_or(false)
     } else {
-        ctx.tenant_id.as_ref().map(|tid| {
-            state.kernel.registry.find_by_name_and_tenant(&binding.agent, tid.as_str()).is_some()
-        }).unwrap_or(false)
+        ctx.tenant_id
+            .as_ref()
+            .map(|tid| {
+                state
+                    .kernel
+                    .registry
+                    .find_by_name_and_tenant(&binding.agent, tid.as_str())
+                    .is_some()
+            })
+            .unwrap_or(false)
     };
     if !agent_owned && !ctx.is_admin() {
         return (
@@ -80,18 +104,30 @@ pub async fn remove_binding(
     let bindings = state.kernel.list_bindings();
     if let Some(binding) = bindings.get(index) {
         let agent_owned = if let Ok(uuid) = binding.agent.parse::<uuid::Uuid>() {
-            state.kernel.registry.get(opencarrier_types::agent::AgentId(uuid))
+            state
+                .kernel
+                .registry
+                .get(opencarrier_types::agent::AgentId(uuid))
                 .map(|e| can_access(&ctx, &e.tenant_id))
                 .unwrap_or(false)
         } else {
-            ctx.tenant_id.as_ref().map(|tid| {
-                state.kernel.registry.find_by_name_and_tenant(&binding.agent, tid.as_str()).is_some()
-            }).unwrap_or(false)
+            ctx.tenant_id
+                .as_ref()
+                .map(|tid| {
+                    state
+                        .kernel
+                        .registry
+                        .find_by_name_and_tenant(&binding.agent, tid.as_str())
+                        .is_some()
+                })
+                .unwrap_or(false)
         };
         if !agent_owned && !ctx.is_admin() {
             return (
                 StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Cannot remove a binding for an agent you don't own"})),
+                Json(
+                    serde_json::json!({"error": "Cannot remove a binding for an agent you don't own"}),
+                ),
             );
         }
     } else {
@@ -113,11 +149,13 @@ pub async fn remove_binding(
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/bindings", routing::post(add_binding).get(list_bindings))
+    axum::Router::new()
+        .route(
+            "/api/bindings",
+            routing::post(add_binding).get(list_bindings),
+        )
         .route("/api/bindings/{index}", routing::delete(remove_binding))
 }

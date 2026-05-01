@@ -380,12 +380,19 @@ impl LlmDriver for AnthropicDriver {
                     }
 
                     // DEBUG: log raw SSE events from GLM
-                    eprintln!("[anthropic-sse] event={} data_len={}", event_type, data.len());
+                    eprintln!(
+                        "[anthropic-sse] event={} data_len={}",
+                        event_type,
+                        data.len()
+                    );
 
                     let json: serde_json::Value = match serde_json::from_str(&data) {
                         Ok(v) => v,
                         Err(_) => {
-                            eprintln!("[anthropic-sse] JSON parse failed, raw: {}", &data[..data.len().min(200)]);
+                            eprintln!(
+                                "[anthropic-sse] JSON parse failed, raw: {}",
+                                &data[..data.len().min(200)]
+                            );
                             continue;
                         }
                     };

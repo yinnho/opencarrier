@@ -17,10 +17,37 @@ use tracing::info;
 
 /// Trivial inputs that are never worth analyzing.
 const TRIVIAL_INPUTS: &[&str] = &[
-    "ok", "好的", "嗯", "继续", "谢谢", "感谢", "对", "是的", "是的",
-    "可以", "明白", "知道了", "了解", "没问题", "好", "行", "嗯嗯",
-    "哈哈", "哈哈", "👍", "👌", "是的", "right", "yes", "thanks",
-    "继续说", "然后呢", "还有吗", "exit", "quit", "退出",
+    "ok",
+    "好的",
+    "嗯",
+    "继续",
+    "谢谢",
+    "感谢",
+    "对",
+    "是的",
+    "是的",
+    "可以",
+    "明白",
+    "知道了",
+    "了解",
+    "没问题",
+    "好",
+    "行",
+    "嗯嗯",
+    "哈哈",
+    "哈哈",
+    "👍",
+    "👌",
+    "是的",
+    "right",
+    "yes",
+    "thanks",
+    "继续说",
+    "然后呢",
+    "还有吗",
+    "exit",
+    "quit",
+    "退出",
 ];
 
 /// A single knowledge candidate extracted from a conversation.
@@ -84,7 +111,8 @@ pub fn build_analysis_prompt() -> String {
 4. 不要提取：问候语、闲聊、已存在于索引中的内容
 5. 知识内容要完整准确，保留关键细节
 6. 如果没有新知识，返回 {"has_new_knowledge": false, "knowledge": [], "gaps": []}
-7. 只返回 JSON，不要其他文字"#.to_string()
+7. 只返回 JSON，不要其他文字"#
+        .to_string()
 }
 
 /// Parse the LLM analysis response into structured data.
@@ -198,10 +226,7 @@ fn write_knowledge(workspace: &Path, candidate: &KnowledgeCandidate) -> Result<P
 
     let safe_title = sanitize_filename(&candidate.title);
     let filename = if safe_title.is_empty() {
-        format!(
-            "knowledge-{}.md",
-            chrono::Utc::now().timestamp_millis()
-        )
+        format!("knowledge-{}.md", chrono::Utc::now().timestamp_millis())
     } else {
         format!("{}.md", safe_title)
     };
@@ -214,7 +239,10 @@ fn write_knowledge(workspace: &Path, candidate: &KnowledgeCandidate) -> Result<P
         let (compiled_truth, mut timeline) = split_dual_layer(&before);
 
         // Add new entry to timeline
-        timeline.push_str(&format!("- {}: {} (from conversation)\n", date, candidate.title));
+        timeline.push_str(&format!(
+            "- {}: {} (from conversation)\n",
+            date, candidate.title
+        ));
 
         let updated = format!(
             "{}\n\n---\n\n{}",
@@ -355,9 +383,15 @@ pub fn split_dual_layer(content: &str) -> (String, String) {
 
     // Find frontmatter end (first standalone ---)
     let fm_end = if lines.first().map(|l| l.trim()) == Some("---") {
-        lines.iter().position(|l| l.trim() == "---").and_then(|start| {
-            lines[start + 1..].iter().position(|l| l.trim() == "---").map(|end| start + 1 + end)
-        })
+        lines
+            .iter()
+            .position(|l| l.trim() == "---")
+            .and_then(|start| {
+                lines[start + 1..]
+                    .iter()
+                    .position(|l| l.trim() == "---")
+                    .map(|end| start + 1 + end)
+            })
     } else {
         None
     };
@@ -596,11 +630,18 @@ mod tests {
         assert_eq!(saved.len(), 1, "should append, not skip");
 
         // File should have dual-layer format: compiled truth preserved + timeline appended
-        let content = fs::read_to_string(workspace.join("data/knowledge/test-knowledge.md")).unwrap();
+        let content =
+            fs::read_to_string(workspace.join("data/knowledge/test-knowledge.md")).unwrap();
         let (compiled, timeline) = split_dual_layer(&content);
-        assert!(compiled.contains("original"), "compiled truth should preserve original");
+        assert!(
+            compiled.contains("original"),
+            "compiled truth should preserve original"
+        );
         assert!(timeline.contains("created from conversation"));
-        assert!(timeline.contains("from conversation"), "timeline should have appended entry");
+        assert!(
+            timeline.contains("from conversation"),
+            "timeline should have appended entry"
+        );
 
         // Two version records: create + update
         let versions = crate::version::get_all_versions(workspace).unwrap();
@@ -626,7 +667,10 @@ mod tests {
     #[test]
     fn test_extract_frontmatter_name() {
         let content = "---\nname: Test Knowledge\nsource: evolution\n---\n\nSome content";
-        assert_eq!(extract_frontmatter_name(content), Some("Test Knowledge".to_string()));
+        assert_eq!(
+            extract_frontmatter_name(content),
+            Some("Test Knowledge".to_string())
+        );
     }
 
     #[test]

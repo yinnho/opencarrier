@@ -32,7 +32,9 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
     let skill_names: Vec<String> = data.skills.iter().map(|s| s.name.clone()).collect();
 
     // Collect all allowed_tools from skills
-    let mut all_tools: Vec<String> = data.skills.iter()
+    let mut all_tools: Vec<String> = data
+        .skills
+        .iter()
         .flat_map(|s| s.allowed_tools.iter().cloned())
         .collect();
 
@@ -67,11 +69,15 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
 
     let clone_source = CloneSource {
         template_name: data.name.clone(),
-        template_author: data.manifest.as_ref()
+        template_author: data
+            .manifest
+            .as_ref()
             .map(|m| m.author.clone())
             .unwrap_or_default(),
         installed_at: chrono::Utc::now().timestamp().to_string(),
-        agx_version: data.manifest.as_ref()
+        agx_version: data
+            .manifest
+            .as_ref()
             .map(|m| m.version.clone())
             .unwrap_or_else(|| "1".to_string()),
         hub_template_id: None,
@@ -81,13 +87,24 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
 
     AgentManifest {
         name: data.name.clone(),
-        version: data.manifest.as_ref().map(|m| m.version.clone()).unwrap_or_else(|| "0.1.0".to_string()),
+        version: data
+            .manifest
+            .as_ref()
+            .map(|m| m.version.clone())
+            .unwrap_or_else(|| "0.1.0".to_string()),
         description: if data.description.is_empty() {
-            data.manifest.as_ref().map(|m| m.description.clone()).unwrap_or_default()
+            data.manifest
+                .as_ref()
+                .map(|m| m.description.clone())
+                .unwrap_or_default()
         } else {
             data.description.clone()
         },
-        author: data.manifest.as_ref().map(|m| m.author.clone()).unwrap_or_default(),
+        author: data
+            .manifest
+            .as_ref()
+            .map(|m| m.author.clone())
+            .unwrap_or_default(),
         module: "builtin:chat".to_string(),
         schedule: opencarrier_types::agent::ScheduleMode::default(),
         model: ModelConfig {
@@ -106,7 +123,11 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
             ..Default::default()
         },
         skills: skill_names,
-        tags: data.manifest.as_ref().map(|m| m.tags.clone()).unwrap_or_default(),
+        tags: data
+            .manifest
+            .as_ref()
+            .map(|m| m.tags.clone())
+            .unwrap_or_default(),
         clone_source: Some(clone_source),
         knowledge_files,
         plugins: data.plugins.clone(),
@@ -142,13 +163,23 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     let output_dir = workspace.join("output");
     let users_dir = workspace.join("users");
 
-    for dir in &[&data_dir, &memory_dir, &skills_dir, &agents_dir, &style_dir, &sessions_dir, &logs_dir, &output_dir, &users_dir] {
+    for dir in &[
+        &data_dir,
+        &memory_dir,
+        &skills_dir,
+        &agents_dir,
+        &style_dir,
+        &sessions_dir,
+        &logs_dir,
+        &output_dir,
+        &users_dir,
+    ] {
         std::fs::create_dir_all(dir)?;
     }
 
     // Write agent.toml
-    let toml_str = toml::to_string_pretty(&manifest)
-        .context("Failed to serialize AgentManifest to TOML")?;
+    let toml_str =
+        toml::to_string_pretty(&manifest).context("Failed to serialize AgentManifest to TOML")?;
     std::fs::write(workspace.join("agent.toml"), toml_str)?;
     info!("Wrote agent.toml to {}", workspace.display());
 
@@ -174,7 +205,10 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
         let tools_str = if skill.allowed_tools.is_empty() {
             String::new()
         } else {
-            format!("\nallowed_tools: {}", crate::loader::format_string_array(&skill.allowed_tools))
+            format!(
+                "\nallowed_tools: {}",
+                crate::loader::format_string_array(&skill.allowed_tools)
+            )
         };
         let skill_md = format!(
             "---\nname: {}\nwhen_to_use: {}{}\n---\n\n{}",
@@ -187,7 +221,10 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
             let scripts_dir = skill_dir.join("scripts");
             std::fs::create_dir_all(&scripts_dir)?;
             for script in &skill.scripts {
-                std::fs::write(scripts_dir.join(format!("{}.toml", script.name)), &script.toml_content)?;
+                std::fs::write(
+                    scripts_dir.join(format!("{}.toml", script.name)),
+                    &script.toml_content,
+                )?;
             }
         }
     }
@@ -195,11 +232,18 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     // Write agents
     for agent in &data.agents {
         let agent_path = agents_dir.join(format!("{}.md", agent.name));
-        let color_line = agent.color.as_ref().map(|c| format!("color: {}", c)).unwrap_or_default();
+        let color_line = agent
+            .color
+            .as_ref()
+            .map(|c| format!("color: {}", c))
+            .unwrap_or_default();
         let tools_line = if agent.tools.is_empty() {
             String::new()
         } else {
-            format!("\ntools: {}", crate::loader::format_string_array(&agent.tools))
+            format!(
+                "\ntools: {}",
+                crate::loader::format_string_array(&agent.tools)
+            )
         };
         let model_line = if agent.model.is_empty() {
             String::new()
@@ -222,8 +266,8 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
 
     // Write template.json for round-trip preservation
     if let Some(ref manifest) = data.manifest {
-        let json = serde_json::to_string_pretty(manifest)
-            .context("Failed to serialize template.json")?;
+        let json =
+            serde_json::to_string_pretty(manifest).context("Failed to serialize template.json")?;
         std::fs::write(workspace.join("template.json"), json)?;
         debug!("Wrote template.json");
     }

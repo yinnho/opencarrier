@@ -141,19 +141,37 @@ pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
     let mut score = 0u32;
 
     // Identity completeness (max 40 points)
-    if has_soul { score += 15; }
-    if has_system_prompt { score += 15; }
-    if has_memory { score += 10; }
+    if has_soul {
+        score += 15;
+    }
+    if has_system_prompt {
+        score += 15;
+    }
+    if has_memory {
+        score += 10;
+    }
 
     // Knowledge richness (max 30 points)
-    if knowledge_files > 0 { score += 10; }
-    if knowledge_files >= 3 { score += 10; }
-    if knowledge_total_bytes > 500 { score += 10; }
+    if knowledge_files > 0 {
+        score += 10;
+    }
+    if knowledge_files >= 3 {
+        score += 10;
+    }
+    if knowledge_total_bytes > 500 {
+        score += 10;
+    }
 
     // Skills (max 15 points)
-    if skill_count > 0 { score += 5; }
-    if skill_count >= 3 { score += 5; }
-    if skill_count >= 5 { score += 5; }
+    if skill_count > 0 {
+        score += 5;
+    }
+    if skill_count >= 3 {
+        score += 5;
+    }
+    if skill_count >= 5 {
+        score += 5;
+    }
 
     // Knowledge quality (max 15 points)
     if knowledge_files > 0 && files_missing_frontmatter == 0 {
@@ -166,9 +184,13 @@ pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
     // Confidence bonus (max 5 points) — reward verified knowledge
     if knowledge_files > 0 {
         let extracted_ratio = confidence_extracted as f32 / knowledge_files as f32;
-        if extracted_ratio >= 0.8 { score += 5; }
-        else if extracted_ratio >= 0.5 { score += 3; }
-        else if confidence_ambiguous == 0 { score += 1; }
+        if extracted_ratio >= 0.8 {
+            score += 5;
+        } else if extracted_ratio >= 0.5 {
+            score += 3;
+        } else if confidence_ambiguous == 0 {
+            score += 1;
+        }
     }
 
     let grade = match score {
@@ -245,7 +267,8 @@ pub fn build_judge_prompt(question: &str, answer: &str) -> (String, String) {
 - 4-6: 部分正确，有遗漏或偏差
 - 0-4: 错误或无意义
 
-只返回 JSON，不要其他内容。"#.to_string();
+只返回 JSON，不要其他内容。"#
+        .to_string();
 
     let user = format!("问题: {}\n\n回答: {}", question, answer);
     (system, user)
@@ -258,10 +281,7 @@ pub fn parse_judge_response(text: &str) -> (f32, String) {
     match serde_json::from_str::<serde_json::Value>(&json_text) {
         Ok(v) => {
             let score = v["score"].as_f64().unwrap_or(5.0) as f32;
-            let feedback = v["feedback"]
-                .as_str()
-                .unwrap_or("无法解析评价")
-                .to_string();
+            let feedback = v["feedback"].as_str().unwrap_or("无法解析评价").to_string();
             (score, feedback)
         }
         Err(_) => {
@@ -296,7 +316,10 @@ pub fn read_knowledge_for_eval(workspace: &Path) -> String {
 
         for entry in files {
             let path = entry.path();
-            let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
             if let Ok(file_content) = fs::read_to_string(&path) {
                 let body = strip_frontmatter(&file_content);
                 if !body.trim().is_empty() {

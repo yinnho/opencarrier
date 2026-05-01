@@ -1,7 +1,7 @@
 //! Session management endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -14,7 +14,8 @@ pub async fn get_agent_session(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let (agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx)
+    {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -192,7 +193,11 @@ pub async fn list_sessions(
     extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let tid = if ctx.is_admin() { None } else { ctx.tenant_id.as_deref() };
+    let tid = if ctx.is_admin() {
+        None
+    } else {
+        ctx.tenant_id.as_deref()
+    };
     match state.kernel.memory.list_sessions(tid) {
         Ok(sessions) => Json(serde_json::json!({"sessions": sessions})),
         Err(_) => Json(serde_json::json!({"sessions": []})),
@@ -330,10 +335,11 @@ pub async fn find_session_by_label(
     Path((agent_id_str, label)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, _entry) = match resolve_agent_id_with_tenant(&agent_id_str, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (agent_id, _entry) =
+        match resolve_agent_id_with_tenant(&agent_id_str, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     match state.kernel.memory.find_session_by_label(agent_id, &label) {
         Ok(Some(session)) => (
@@ -462,10 +468,11 @@ pub async fn clear_agent_history(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, _entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (agent_id, _entry) =
+        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
     match state.kernel.clear_agent_history(agent_id) {
         Ok(()) => (
             StatusCode::OK,
@@ -500,20 +507,40 @@ pub async fn compact_session(
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/agents/{id}/history", routing::delete(clear_agent_history))
+    axum::Router::new()
+        .route(
+            "/api/agents/{id}/history",
+            routing::delete(clear_agent_history),
+        )
         .route("/api/agents/{id}/session", routing::get(get_agent_session))
-        .route("/api/agents/{id}/session/compact", routing::post(compact_session))
-        .route("/api/agents/{id}/session/reset", routing::post(reset_session))
-        .route("/api/agents/{id}/sessions", routing::post(create_agent_session).get(list_agent_sessions))
-        .route("/api/agents/{id}/sessions/by-label/{label}", routing::get(find_session_by_label))
-        .route("/api/agents/{id}/sessions/{session_id}/switch", routing::post(switch_agent_session))
+        .route(
+            "/api/agents/{id}/session/compact",
+            routing::post(compact_session),
+        )
+        .route(
+            "/api/agents/{id}/session/reset",
+            routing::post(reset_session),
+        )
+        .route(
+            "/api/agents/{id}/sessions",
+            routing::post(create_agent_session).get(list_agent_sessions),
+        )
+        .route(
+            "/api/agents/{id}/sessions/by-label/{label}",
+            routing::get(find_session_by_label),
+        )
+        .route(
+            "/api/agents/{id}/sessions/{session_id}/switch",
+            routing::post(switch_agent_session),
+        )
         .route("/api/sessions", routing::get(list_sessions))
-        .route("/api/sessions/by-label/{label}", routing::get(find_session_by_label))
+        .route(
+            "/api/sessions/by-label/{label}",
+            routing::get(find_session_by_label),
+        )
         .route("/api/sessions/{id}", routing::delete(delete_session))
         .route("/api/sessions/{id}/label", routing::put(set_session_label))
 }

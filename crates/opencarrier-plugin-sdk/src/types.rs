@@ -87,25 +87,13 @@ pub enum PluginContent {
         caption: Option<String>,
     },
     /// File attachment.
-    File {
-        url: String,
-        filename: String,
-    },
+    File { url: String, filename: String },
     /// Voice message.
-    Voice {
-        url: String,
-        duration_seconds: u32,
-    },
+    Voice { url: String, duration_seconds: u32 },
     /// Geographic location.
-    Location {
-        lat: f64,
-        lon: f64,
-    },
+    Location { lat: f64, lon: f64 },
     /// Bot command.
-    Command {
-        name: String,
-        args: Vec<String>,
-    },
+    Command { name: String, args: Vec<String> },
 }
 
 impl PluginContent {

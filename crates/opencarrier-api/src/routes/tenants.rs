@@ -1,7 +1,7 @@
 //! Tenant management endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -15,7 +15,10 @@ pub async fn list_tenants(
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
     if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin only"})),
+        );
     }
 
     let tenant_store = state.kernel.memory.tenant();
@@ -51,7 +54,10 @@ pub async fn create_tenant(
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
     if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin only"})),
+        );
     }
 
     if req.name.trim().is_empty() || req.password.trim().is_empty() {
@@ -80,7 +86,12 @@ pub async fn create_tenant(
         Ok(()) => {
             // Try to auto-start clone-creator and clone-trainer for this tenant
             for clone_name in &["clone-creator", "clone-trainer"] {
-                if state.kernel.registry.find_by_name_and_tenant(clone_name, &tenant_id).is_some() {
+                if state
+                    .kernel
+                    .registry
+                    .find_by_name_and_tenant(clone_name, &tenant_id)
+                    .is_some()
+                {
                     // Already running in this tenant — skip
                     continue;
                 }
@@ -93,36 +104,32 @@ pub async fn create_tenant(
                     .join("agent.toml");
                 if clone_toml.exists() {
                     match std::fs::read_to_string(&clone_toml) {
-                        Ok(toml_str) => {
-                            match toml::from_str::<AgentManifest>(&toml_str) {
-                                Ok(manifest) => {
-                                    match state.kernel.spawn_agent(manifest, &tenant_id) {
-                                        Ok(agent_id) => {
-                                            state.kernel.registry.set_tenant_id(
-                                                agent_id,
-                                                tenant_id.clone(),
-                                            );
-                                            tracing::info!(
-                                                "Auto-started {} for tenant {}",
-                                                clone_name,
-                                                tenant_name
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "Failed to auto-start {} for tenant {}: {}",
-                                                clone_name,
-                                                tenant_name,
-                                                e
-                                            );
-                                        }
-                                    }
+                        Ok(toml_str) => match toml::from_str::<AgentManifest>(&toml_str) {
+                            Ok(manifest) => match state.kernel.spawn_agent(manifest, &tenant_id) {
+                                Ok(agent_id) => {
+                                    state
+                                        .kernel
+                                        .registry
+                                        .set_tenant_id(agent_id, tenant_id.clone());
+                                    tracing::info!(
+                                        "Auto-started {} for tenant {}",
+                                        clone_name,
+                                        tenant_name
+                                    );
                                 }
                                 Err(e) => {
-                                    tracing::warn!("Invalid {} manifest: {}", clone_name, e);
+                                    tracing::warn!(
+                                        "Failed to auto-start {} for tenant {}: {}",
+                                        clone_name,
+                                        tenant_name,
+                                        e
+                                    );
                                 }
+                            },
+                            Err(e) => {
+                                tracing::warn!("Invalid {} manifest: {}", clone_name, e);
                             }
-                        }
+                        },
                         Err(e) => {
                             tracing::warn!("Cannot read {} manifest: {}", clone_name, e);
                         }
@@ -154,7 +161,10 @@ pub async fn get_tenant(
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
     if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin only"})),
+        );
     }
 
     let tenant_store = state.kernel.memory.tenant();
@@ -189,7 +199,10 @@ pub async fn update_tenant(
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
     if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin only"})),
+        );
     }
 
     let tenant_store = state.kernel.memory.tenant();
@@ -243,15 +256,15 @@ pub async fn delete_tenant(
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
     if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin only"})));
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin only"})),
+        );
     }
 
     let tenant_store = state.kernel.memory.tenant();
     match tenant_store.delete_tenant(&id) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "ok"})),
-        ),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to delete tenant: {e}")})),
@@ -259,11 +272,18 @@ pub async fn delete_tenant(
     }
 }
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/tenants", routing::post(create_tenant).get(list_tenants))
-        .route("/api/tenants/{id}", routing::put(update_tenant).delete(delete_tenant).get(get_tenant))
+    axum::Router::new()
+        .route(
+            "/api/tenants",
+            routing::post(create_tenant).get(list_tenants),
+        )
+        .route(
+            "/api/tenants/{id}",
+            routing::put(update_tenant)
+                .delete(delete_tenant)
+                .get(get_tenant),
+        )
 }

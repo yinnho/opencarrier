@@ -1,7 +1,7 @@
 //! Agent lifecycle management endpoints.
 
-use crate::routes::state::AppState;
 use crate::routes::common::*;
+use crate::routes::state::AppState;
 use crate::types::*;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -268,7 +268,8 @@ pub async fn restart_agent(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let (agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx)
+    {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -343,10 +344,11 @@ pub async fn get_agent(
     extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (_agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (_agent_id, entry) =
+        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     (
         StatusCode::OK,
@@ -392,10 +394,11 @@ pub async fn patch_agent(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, _entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let (agent_id, _entry) =
+        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
 
     // Apply partial updates using dedicated registry methods
     if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
@@ -423,10 +426,7 @@ pub async fn patch_agent(
         }
     }
     if let Some(model) = body.get("model").and_then(|v| v.as_str()) {
-        if let Err(e) = state
-            .kernel
-            .set_agent_model(agent_id, model)
-        {
+        if let Err(e) = state.kernel.set_agent_model(agent_id, model) {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": format!("{e}")})),
@@ -510,10 +510,7 @@ pub async fn set_model(
         }
     };
     let _provider_hint = body["provider"].as_str(); // Ignored — Brain manages providers
-    match state
-        .kernel
-        .set_agent_model(agent_id, model)
-    {
+    match state.kernel.set_agent_model(agent_id, model) {
         Ok(()) => {
             // Return the resolved modality so frontend stays in sync.
             let resolved_modality = state
@@ -810,7 +807,10 @@ pub async fn clone_agent(
         );
     }
 
-    let source = match get_agent_or_404(&state.kernel.registry, &agent_id) { Ok(e) => e, Err(r) => return r };
+    let source = match get_agent_or_404(&state.kernel.registry, &agent_id) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
 
     // Deep-clone manifest with new name
     let mut cloned_manifest = source.manifest.clone();
@@ -869,16 +869,26 @@ pub async fn clone_agent(
 // Workspace File Editor endpoints
 // ---------------------------------------------------------------------------
 
-
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/api/agents", routing::post(spawn_agent).get(list_agents))
-        .route("/api/agents/{id}", routing::delete(kill_agent).patch(patch_agent).get(get_agent))
+    axum::Router::new()
+        .route("/api/agents", routing::post(spawn_agent).get(list_agents))
+        .route(
+            "/api/agents/{id}",
+            routing::delete(kill_agent)
+                .patch(patch_agent)
+                .get(get_agent),
+        )
         .route("/api/agents/{id}/clone", routing::post(clone_agent))
-        .route("/api/agents/{id}/config", routing::patch(patch_agent_config))
-        .route("/api/agents/{id}/identity", routing::patch(update_agent_identity))
+        .route(
+            "/api/agents/{id}/config",
+            routing::patch(patch_agent_config),
+        )
+        .route(
+            "/api/agents/{id}/identity",
+            routing::patch(update_agent_identity),
+        )
         .route("/api/agents/{id}/mode", routing::put(set_agent_mode))
         .route("/api/agents/{id}/model", routing::put(set_model))
         .route("/api/agents/{id}/restart", routing::post(restart_agent))

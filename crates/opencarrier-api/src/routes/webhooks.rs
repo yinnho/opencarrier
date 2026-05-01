@@ -113,7 +113,10 @@ pub async fn webhook_agent(
             Err(_) => {
                 // Name lookup — use tenant-scoped if tenant_id provided
                 let entry = match &body.tenant_id {
-                    Some(tid) => state.kernel.registry.find_by_name_and_tenant(agent_ref, tid.as_str()),
+                    Some(tid) => state
+                        .kernel
+                        .registry
+                        .find_by_name_and_tenant(agent_ref, tid.as_str()),
                     None => {
                         // No tenant context: reject name lookup to prevent cross-tenant ambiguity
                         return (
@@ -167,8 +170,6 @@ pub async fn webhook_agent(
     }
 }
 
-
-
 /// SECURITY: Validate webhook bearer token using constant-time comparison.
 fn validate_webhook_token(headers: &axum::http::HeaderMap, token_env: &str) -> bool {
     let expected = match std::env::var(token_env) {
@@ -194,6 +195,7 @@ fn validate_webhook_token(headers: &axum::http::HeaderMap, token_env: &str) -> b
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
-    axum::Router::new().route("/hooks/agent", routing::post(webhook_agent))
+    axum::Router::new()
+        .route("/hooks/agent", routing::post(webhook_agent))
         .route("/hooks/wake", routing::post(webhook_wake))
 }

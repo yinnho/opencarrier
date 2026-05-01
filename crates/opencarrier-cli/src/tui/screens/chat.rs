@@ -563,11 +563,7 @@ fn draw_model_picker(f: &mut Frame, area: Rect, state: &ChatState) {
             Style::default().fg(theme::TEXT_SECONDARY)
         };
 
-        let ready_indicator = if entry.ready {
-            ""
-        } else {
-            " [unavailable]"
-        };
+        let ready_indicator = if entry.ready { "" } else { " [unavailable]" };
         let ready_style = if entry.ready {
             theme::dim_style()
         } else {
@@ -577,10 +573,7 @@ fn draw_model_picker(f: &mut Frame, area: Rect, state: &ChatState) {
         lines.push(Line::from(vec![
             Span::styled(indicator, Style::default().fg(theme::ACCENT)),
             Span::styled(&entry.modality, modality_style),
-            Span::styled(
-                format!(" ({})", entry.model_name),
-                theme::dim_style(),
-            ),
+            Span::styled(format!(" ({})", entry.model_name), theme::dim_style()),
             Span::styled(ready_indicator, ready_style),
         ]));
     }

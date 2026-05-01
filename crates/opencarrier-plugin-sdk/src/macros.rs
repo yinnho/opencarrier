@@ -91,24 +91,20 @@ macro_rules! declare_plugin {
                 return ptr::null_mut();
             }
 
-            let config_str = unsafe {
-                CStr::from_ptr(config_json)
-                    .to_string_lossy()
-                    .into_owned()
-            };
+            let config_str = unsafe { CStr::from_ptr(config_json).to_string_lossy().into_owned() };
 
-            let config: $crate::PluginConfig =
-                match serde_json::from_str(&config_str) {
-                    Ok(c) => c,
-                    Err(_) => return ptr::null_mut(),
-                };
+            let config: $crate::PluginConfig = match serde_json::from_str(&config_str) {
+                Ok(c) => c,
+                Err(_) => return ptr::null_mut(),
+            };
 
             let ctx = $crate::PluginContext::new(message_cb, user_data);
 
-            let plugin: $plugin_type = match <$plugin_type as $crate::Plugin>::new(config, ctx.clone()) {
-                Ok(p) => p,
-                Err(_) => return ptr::null_mut(),
-            };
+            let plugin: $plugin_type =
+                match <$plugin_type as $crate::Plugin>::new(config, ctx.clone()) {
+                    Ok(p) => p,
+                    Err(_) => return ptr::null_mut(),
+                };
 
             // Collect channels
             let channel_adapters = <$plugin_type as $crate::Plugin>::channels(&plugin);
@@ -123,8 +119,9 @@ macro_rules! declare_plugin {
             }
 
             let channels_json = CString::new(
-                serde_json::to_string(&channel_descs).unwrap_or_else(|_| "[]".to_string())
-            ).unwrap_or_default();
+                serde_json::to_string(&channel_descs).unwrap_or_else(|_| "[]".to_string()),
+            )
+            .unwrap_or_default();
 
             // Collect tools
             let tool_providers = <$plugin_type as $crate::Plugin>::tools(&plugin);
@@ -144,8 +141,9 @@ macro_rules! declare_plugin {
             }
 
             let tools_json = CString::new(
-                serde_json::to_string(&tool_defs).unwrap_or_else(|_| "[]".to_string())
-            ).unwrap_or_default();
+                serde_json::to_string(&tool_defs).unwrap_or_else(|_| "[]".to_string()),
+            )
+            .unwrap_or_default();
 
             let state = Box::new(_OcState {
                 plugin,
@@ -157,7 +155,9 @@ macro_rules! declare_plugin {
             });
             let state_ptr = Box::into_raw(state);
 
-            unsafe { _OC_STATE = state_ptr; }
+            unsafe {
+                _OC_STATE = state_ptr;
+            }
 
             state_ptr as *mut c_void
         }
@@ -254,9 +254,7 @@ macro_rules! declare_plugin {
                 return -1;
             }
 
-            let msg_str = unsafe {
-                CStr::from_ptr(message_json).to_string_lossy()
-            };
+            let msg_str = unsafe { CStr::from_ptr(message_json).to_string_lossy() };
 
             let msg: serde_json::Value = match serde_json::from_str(&msg_str) {
                 Ok(v) => v,
@@ -267,7 +265,10 @@ macro_rules! declare_plugin {
             let user_id = msg["user_id"].as_str().unwrap_or("");
             let text = msg["text"].as_str().unwrap_or("");
 
-            match state.channels[idx - 1].adapter.send(tenant_id, user_id, text) {
+            match state.channels[idx - 1]
+                .adapter
+                .send(tenant_id, user_id, text)
+            {
                 Ok(()) => 0,
                 Err(_) => -1,
             }
@@ -293,11 +294,7 @@ macro_rules! declare_plugin {
                 &*(handle as *const _OcState)
             };
 
-            let tool_name_str = unsafe {
-                CStr::from_ptr(tool_name)
-                    .to_string_lossy()
-                    .into_owned()
-            };
+            let tool_name_str = unsafe { CStr::from_ptr(tool_name).to_string_lossy().into_owned() };
 
             let args: serde_json::Value = unsafe {
                 let s = CStr::from_ptr(args_json).to_string_lossy();

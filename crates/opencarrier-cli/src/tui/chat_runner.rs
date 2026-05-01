@@ -395,7 +395,9 @@ impl StandaloneChat {
                                                     .and_then(|eps| eps.get(primary))
                                                     .map(|ep| {
                                                         (
-                                                            ep["model"].as_str().unwrap_or("unknown"),
+                                                            ep["model"]
+                                                                .as_str()
+                                                                .unwrap_or("unknown"),
                                                             ep["ready"].as_bool().unwrap_or(false),
                                                         )
                                                     })
@@ -425,8 +427,10 @@ impl StandaloneChat {
         };
 
         if models.is_empty() {
-            self.chat
-                .push_message(Role::System, "No modalities available. Check Brain config.".to_string());
+            self.chat.push_message(
+                Role::System,
+                "No modalities available. Check Brain config.".to_string(),
+            );
             return;
         }
 
@@ -459,8 +463,10 @@ impl StandaloneChat {
                                 let resolved_model = body["model"].as_str().unwrap_or("?");
                                 self.chat.model_label = format!("{resolved_mod}/{resolved_model}");
                             }
-                            self.chat
-                                .push_message(Role::System, format!("Switched modality to {modality}"));
+                            self.chat.push_message(
+                                Role::System,
+                                format!("Switched modality to {modality}"),
+                            );
                         }
                         _ => {
                             self.chat.push_message(
@@ -477,8 +483,10 @@ impl StandaloneChat {
                     match result {
                         Ok(()) => {
                             self.chat.model_label = modality.to_string();
-                            self.chat
-                                .push_message(Role::System, format!("Switched modality to {modality}"));
+                            self.chat.push_message(
+                                Role::System,
+                                format!("Switched modality to {modality}"),
+                            );
                         }
                         Err(e) => {
                             self.chat
@@ -517,7 +525,8 @@ impl StandaloneChat {
                             let model_name = brain
                                 .get("endpoints")
                                 .and_then(|eps| {
-                                    brain.get("modalities")
+                                    brain
+                                        .get("modalities")
                                         .and_then(|mods| mods.get(modality))
                                         .and_then(|m| m["primary"].as_str())
                                         .and_then(|ep_name| eps.get(ep_name))
@@ -650,7 +659,9 @@ impl StandaloneChat {
                         }
                     };
                 let name = manifest.name.clone();
-                let spawn_tid = kernel.memory.tenant()
+                let spawn_tid = kernel
+                    .memory
+                    .tenant()
                     .get_tenant_by_name(&kernel.config.auth.username)
                     .ok()
                     .flatten()

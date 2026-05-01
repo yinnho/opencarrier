@@ -11,14 +11,10 @@ use crate::registry::AgentRegistry;
 use crate::scheduler::AgentScheduler;
 use crate::supervisor::Supervisor;
 use opencarrier_memory::MemorySubstrate;
-use opencarrier_runtime::agent_loop::{
-    run_agent_loop, run_agent_loop_streaming, AgentLoopResult,
-};
+use opencarrier_runtime::agent_loop::{run_agent_loop, run_agent_loop_streaming, AgentLoopResult};
 use opencarrier_runtime::audit::AuditLog;
 use opencarrier_runtime::kernel_handle::{self, KernelHandle};
-use opencarrier_runtime::llm_driver::{
-    LlmDriver, StreamEvent,
-};
+use opencarrier_runtime::llm_driver::{LlmDriver, StreamEvent};
 use opencarrier_runtime::python_runtime::{self, PythonConfig};
 use opencarrier_runtime::sandbox::{SandboxConfig, WasmSandbox};
 use opencarrier_runtime::tool_runner::builtin_tool_definitions;
@@ -78,8 +74,9 @@ pub struct KernelPlugins {
     /// Skill registry for plugin skills (RwLock for hot-reload on install/uninstall).
     pub skill_registry: std::sync::RwLock<opencarrier_skills::registry::SkillRegistry>,
     /// Plugin tool dispatcher — routes plugin tool calls to loaded shared libraries.
-    pub plugin_tool_dispatcher:
-        std::sync::Mutex<Option<Arc<opencarrier_runtime::plugin::tool_dispatch::PluginToolDispatcher>>>,
+    pub plugin_tool_dispatcher: std::sync::Mutex<
+        Option<Arc<opencarrier_runtime::plugin::tool_dispatch::PluginToolDispatcher>>,
+    >,
     /// Source tenant_id (bot UUID) for the current message being processed per agent.
     /// Set by bridge before agent loop, read by execute_plugin_tool.
     /// Safe because per-agent mutex ensures single concurrent message per agent.
@@ -157,7 +154,16 @@ pub struct OpenCarrierKernel {
 
 /// Create workspace directory structure for an agent.
 fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
-    for subdir in &["data", "data/knowledge", "sessions", "skills", "logs", "memory", "history", "users"] {
+    for subdir in &[
+        "data",
+        "data/knowledge",
+        "sessions",
+        "skills",
+        "logs",
+        "memory",
+        "history",
+        "users",
+    ] {
         std::fs::create_dir_all(workspace.join(subdir)).map_err(|e| {
             KernelError::OpenCarrier(OpenCarrierError::Internal(format!(
                 "Failed to create workspace dir {}/{subdir}: {e}",
@@ -368,10 +374,15 @@ impl OpenCarrierKernel {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            return Err(format!("Hub returned {}: {}", status, resp.text().unwrap_or_default()));
+            return Err(format!(
+                "Hub returned {}: {}",
+                status,
+                resp.text().unwrap_or_default()
+            ));
         }
 
-        let json_str = resp.text()
+        let json_str = resp
+            .text()
             .map_err(|e| format!("Failed to read response body: {e}"))?;
 
         // Validate JSON before saving
@@ -431,8 +442,8 @@ impl OpenCarrierKernel {
         let clone_name = manifest.name.clone();
         let feedback_to_hub = evo_config.feedback_to_hub;
         let hub_url = self.config.hub.url.clone();
-        let hub_api_key = opencarrier_clone::hub::read_api_key(&self.config.hub.api_key_env)
-            .unwrap_or_default();
+        let hub_api_key =
+            opencarrier_clone::hub::read_api_key(&self.config.hub.api_key_env).unwrap_or_default();
         let driver = match self.resolve_driver(manifest) {
             Ok(d) => d,
             Err(_) => return,
@@ -475,8 +486,9 @@ impl OpenCarrierKernel {
                     let text = completion.text();
                     match opencarrier_lifecycle::evolution::parse_analysis_response(&text) {
                         Ok(analysis) => {
-                            let saved =
-                                opencarrier_lifecycle::evolution::apply_evolution(&workspace, &analysis);
+                            let saved = opencarrier_lifecycle::evolution::apply_evolution(
+                                &workspace, &analysis,
+                            );
                             if !saved.is_empty() {
                                 tracing::info!(
                                     count = saved.len(),
@@ -492,18 +504,22 @@ impl OpenCarrierKernel {
                                             &candidate.title,
                                             &candidate.content,
                                         );
-                                    let anon_req = opencarrier_runtime::llm_driver::CompletionRequest {
-                                        model: String::new(),
-                                        messages: vec![opencarrier_types::message::Message {
-                                            role: opencarrier_types::message::Role::User,
-                                            content: opencarrier_types::message::MessageContent::Text(user),
-                                        }],
-                                        tools: vec![],
-                                        max_tokens: 1024,
-                                        temperature: 0.1,
-                                        system: Some(sys),
-                                        thinking: None,
-                                    };
+                                    let anon_req =
+                                        opencarrier_runtime::llm_driver::CompletionRequest {
+                                            model: String::new(),
+                                            messages: vec![opencarrier_types::message::Message {
+                                                role: opencarrier_types::message::Role::User,
+                                                content:
+                                                    opencarrier_types::message::MessageContent::Text(
+                                                        user,
+                                                    ),
+                                            }],
+                                            tools: vec![],
+                                            max_tokens: 1024,
+                                            temperature: 0.1,
+                                            system: Some(sys),
+                                            thinking: None,
+                                        };
                                     match driver.complete(anon_req).await {
                                         Ok(anon_resp) => {
                                             let anon_text = anon_resp.text();
@@ -514,12 +530,14 @@ impl OpenCarrierKernel {
                                                 .unwrap_or_else(|_| {
                                                     (candidate.title.clone(), candidate.content.clone())
                                                 });
-                                            if let Err(e) = opencarrier_lifecycle::feedback::save_feedback(
-                                                &workspace,
-                                                &clone_name,
-                                                &title,
-                                                &content,
-                                            ) {
+                                            if let Err(e) =
+                                                opencarrier_lifecycle::feedback::save_feedback(
+                                                    &workspace,
+                                                    &clone_name,
+                                                    &title,
+                                                    &content,
+                                                )
+                                            {
                                                 tracing::warn!(error = %e, "Feedback: failed to save");
                                             }
                                         }
@@ -599,7 +617,11 @@ fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
 /// Returns a short summary string suitable for the system prompt.
 fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<String> {
     // SECURITY: sanitize sender_id to prevent path traversal
-    if sender_id.contains('/') || sender_id.contains('\\') || sender_id.contains("..") || sender_id.is_empty() {
+    if sender_id.contains('/')
+        || sender_id.contains('\\')
+        || sender_id.contains("..")
+        || sender_id.is_empty()
+    {
         return None;
     }
     let profile_path = workspace.join("users").join(sender_id).join("profile.json");
@@ -620,12 +642,18 @@ fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<String
     }
     if let Some(prefs) = profile["preferences"].as_object() {
         if !prefs.is_empty() {
-            parts.push(format!("Preferences: {}", serde_json::to_string(prefs).unwrap_or_default()));
+            parts.push(format!(
+                "Preferences: {}",
+                serde_json::to_string(prefs).unwrap_or_default()
+            ));
         }
     }
     if let Some(patterns) = profile["interaction_patterns"].as_object() {
         if !patterns.is_empty() {
-            parts.push(format!("Interaction patterns: {}", serde_json::to_string(patterns).unwrap_or_default()));
+            parts.push(format!(
+                "Interaction patterns: {}",
+                serde_json::to_string(patterns).unwrap_or_default()
+            ));
         }
     }
     if let Some(notes) = profile["notes"].as_str() {
@@ -643,7 +671,11 @@ fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<String
 /// Update user profile after a conversation (touch last_seen, increment count).
 fn touch_user_profile(workspace: &Path, sender_id: &str) {
     // SECURITY: sanitize sender_id to prevent path traversal
-    if sender_id.contains('/') || sender_id.contains('\\') || sender_id.contains("..") || sender_id.is_empty() {
+    if sender_id.contains('/')
+        || sender_id.contains('\\')
+        || sender_id.contains("..")
+        || sender_id.is_empty()
+    {
         return;
     }
     let profile_path = workspace.join("users").join(sender_id).join("profile.json");
@@ -807,8 +839,16 @@ fn read_style_samples(workspace: &Path) -> Option<String> {
             let trimmed = content.trim();
             if !trimmed.is_empty() {
                 // Enforce 32KB cap per style file (same as identity files)
-                let capped = if trimmed.len() > 32_768 { &trimmed[..32_768] } else { trimmed };
-                let name = path.file_stem().unwrap_or_default().to_str().unwrap_or("unknown");
+                let capped = if trimmed.len() > 32_768 {
+                    &trimmed[..32_768]
+                } else {
+                    trimmed
+                };
+                let name = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_str()
+                    .unwrap_or("unknown");
                 parts.push(format!("### {}\n{}", name, capped));
             }
         }
@@ -829,7 +869,8 @@ fn read_agents_directory(workspace: &Path) -> Option<String> {
         return None;
     }
 
-    let mut entries: Vec<_> = std::fs::read_dir(&agents_dir).ok()?
+    let mut entries: Vec<_> = std::fs::read_dir(&agents_dir)
+        .ok()?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .collect();
@@ -842,7 +883,13 @@ fn read_agents_directory(workspace: &Path) -> Option<String> {
         if trimmed.is_empty() {
             continue;
         }
-        let name = entry.path().file_stem().unwrap_or_default().to_str().unwrap_or("unknown").to_string();
+        let name = entry
+            .path()
+            .file_stem()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or("unknown")
+            .to_string();
         // Extract body (skip frontmatter)
         let body = if let Some(rest) = trimmed.strip_prefix("---") {
             if let Some(end) = rest.find("---") {
@@ -1083,10 +1130,12 @@ impl OpenCarrierKernel {
         // Brain is required — boot fails without a valid brain.json.
         let brain_path = config.home_dir.join(&config.brain.config);
         let brain = if brain_path.exists() {
-            let json_str = std::fs::read_to_string(&brain_path)
-                .map_err(|e| KernelError::BootFailed(format!("Cannot read {}: {e}", brain_path.display())))?;
-            let brain_config: opencarrier_types::brain::BrainConfig = serde_json::from_str(&json_str)
-                .map_err(|e| KernelError::BootFailed(format!("Invalid brain.json: {e}")))?;
+            let json_str = std::fs::read_to_string(&brain_path).map_err(|e| {
+                KernelError::BootFailed(format!("Cannot read {}: {e}", brain_path.display()))
+            })?;
+            let brain_config: opencarrier_types::brain::BrainConfig =
+                serde_json::from_str(&json_str)
+                    .map_err(|e| KernelError::BootFailed(format!("Invalid brain.json: {e}")))?;
             let brain = Brain::new(brain_config)
                 .map_err(|e| KernelError::BootFailed(format!("Brain init failed: {e}")))?;
             info!("Brain loaded from {}", brain_path.display());
@@ -1098,14 +1147,19 @@ impl OpenCarrierKernel {
                 Ok(brain_config) => {
                     let brain = Brain::new(brain_config)
                         .map_err(|e| KernelError::BootFailed(format!("Brain init failed: {e}")))?;
-                    info!("Brain fetched from Hub and saved to {}", brain_path.display());
+                    info!(
+                        "Brain fetched from Hub and saved to {}",
+                        brain_path.display()
+                    );
                     brain
                 }
                 Err(e) => {
                     return Err(KernelError::BootFailed(format!(
                         "Brain config not found at {} and could not be fetched from Hub: {}. \
                          Please set {} or create brain.json manually.",
-                        brain_path.display(), e, config.hub.api_key_env
+                        brain_path.display(),
+                        e,
+                        config.hub.api_key_env
                     )));
                 }
             }
@@ -1138,9 +1192,7 @@ impl OpenCarrierKernel {
         model_catalog.load_custom_models(&custom_models_path);
         let total_count = model_catalog.list_models().len();
         let provider_count = model_catalog.list_providers().len();
-        info!(
-            "Model catalog: {total_count} models, {provider_count} providers"
-        );
+        info!("Model catalog: {total_count} models, {provider_count} providers");
 
         // Initialize skill registry
         let skills_dir = config.home_dir.join("skills");
@@ -1249,7 +1301,9 @@ impl OpenCarrierKernel {
                 bindings: std::sync::Mutex::new(initial_bindings),
                 broadcast: initial_broadcast,
                 hooks: opencarrier_runtime::hooks::HookRegistry::new(),
-                process_manager: Arc::new(opencarrier_runtime::process_manager::ProcessManager::new(5)),
+                process_manager: Arc::new(
+                    opencarrier_runtime::process_manager::ProcessManager::new(5),
+                ),
                 booted_at: std::time::Instant::now(),
                 self_handle: OnceLock::new(),
             },
@@ -1266,7 +1320,9 @@ impl OpenCarrierKernel {
                     let mut entry = entry;
 
                     // Workspace 始终从 tenant_id + name 推导，不依赖 DB/TOML 中的值
-                    let ws = kernel.config.tenant_workspaces_dir(entry.tenant_id.as_str())
+                    let ws = kernel
+                        .config
+                        .tenant_workspaces_dir(entry.tenant_id.as_str())
                         .join(&name);
                     entry.manifest.workspace = Some(ws);
 
@@ -1340,9 +1396,10 @@ impl OpenCarrierKernel {
         // SECURITY: Validate agent name doesn't contain path traversal characters
         if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
             return Err(KernelError::OpenCarrier(
-                opencarrier_types::error::OpenCarrierError::InvalidInput(
-                    format!("Invalid agent name {:?}: must not contain path separators or '..'", name),
-                ),
+                opencarrier_types::error::OpenCarrierError::InvalidInput(format!(
+                    "Invalid agent name {:?}: must not contain path separators or '..'",
+                    name
+                )),
             ));
         }
 
@@ -1381,7 +1438,8 @@ impl OpenCarrierKernel {
         self.coordination.capabilities.grant(agent_id, caps);
 
         // Register with scheduler
-        self.runtime.scheduler
+        self.runtime
+            .scheduler
             .register(agent_id, manifest.resources.clone());
 
         // Create registry entry
@@ -1523,7 +1581,8 @@ impl OpenCarrierKernel {
         let _guard = lock.lock().await;
 
         // Enforce quota before running the agent loop
-        self.runtime.scheduler
+        self.runtime
+            .scheduler
             .check_quota(agent_id)
             .map_err(KernelError::OpenCarrier)?;
 
@@ -1554,7 +1613,9 @@ impl OpenCarrierKernel {
         match result {
             Ok(result) => {
                 // Record token usage for quota tracking
-                self.runtime.scheduler.record_usage(agent_id, &result.total_usage);
+                self.runtime
+                    .scheduler
+                    .record_usage(agent_id, &result.total_usage);
 
                 // Update last active time
                 let _ = self.registry.set_state(agent_id, AgentState::Running);
@@ -1609,7 +1670,8 @@ impl OpenCarrierKernel {
         tokio::task::JoinHandle<KernelResult<AgentLoopResult>>,
     )> {
         // Enforce quota before spawning the streaming task
-        self.runtime.scheduler
+        self.runtime
+            .scheduler
             .check_quota(agent_id)
             .map_err(KernelError::OpenCarrier)?;
 
@@ -1683,11 +1745,10 @@ impl OpenCarrierKernel {
                 .map_err(KernelError::OpenCarrier)?
             {
                 Some(s) => s,
-                None => {
-                    self.memory
-                        .create_session_with_label(agent_id, Some(&user_label))
-                        .map_err(KernelError::OpenCarrier)?
-                }
+                None => self
+                    .memory
+                    .create_session_with_label(agent_id, Some(&user_label))
+                    .map_err(KernelError::OpenCarrier)?,
             }
         } else {
             self.memory
@@ -1773,7 +1834,8 @@ impl OpenCarrierKernel {
         let handle = tokio::spawn(async move {
             // Clone Brain Arc before any .await so the RwLockReadGuard is dropped (not Send).
             let brain_ref: Option<Arc<dyn opencarrier_runtime::llm_driver::Brain>> =
-                Some(Arc::clone(&*kernel_clone.brain.brain.read().unwrap()) as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
+                Some(Arc::clone(&*kernel_clone.brain.brain.read().unwrap())
+                    as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
 
             // Auto-compact if the session is large before running the loop
             if needs_compact {
@@ -1860,7 +1922,7 @@ impl OpenCarrierKernel {
                 Some(&kernel_clone.coordination.hooks),
                 ctx_window,
                 Some(&kernel_clone.coordination.process_manager),
-                None, // content_blocks (streaming path uses text only for now)
+                None,              // content_blocks (streaming path uses text only for now)
                 brain_ref.clone(), // Brain for modality-based routing
                 sender_id.as_deref(),
             )
@@ -1896,9 +1958,11 @@ impl OpenCarrierKernel {
 
                     // Write JSONL session mirror to workspace
                     if let Some(ref workspace) = manifest.workspace {
-                        if let Err(e) =
-                            memory.write_jsonl_mirror(&session, &workspace.join("sessions"), sender_id.as_deref())
-                        {
+                        if let Err(e) = memory.write_jsonl_mirror(
+                            &session,
+                            &workspace.join("sessions"),
+                            sender_id.as_deref(),
+                        ) {
                             warn!("Failed to write JSONL session mirror (streaming): {e}");
                         }
                         // Append daily memory log (best-effort)
@@ -1957,7 +2021,9 @@ impl OpenCarrierKernel {
         });
 
         // Store abort handle for cancellation support
-        self.runtime.running_tasks.insert(agent_id, handle.abort_handle());
+        self.runtime
+            .running_tasks
+            .insert(agent_id, handle.abort_handle());
 
         Ok((rx, handle))
     }
@@ -2121,7 +2187,8 @@ impl OpenCarrierKernel {
     ) -> KernelResult<AgentLoopResult> {
         // Clone Brain Arc early so the RwLockReadGuard is dropped before any .await.
         let brain_ref: Option<Arc<dyn opencarrier_runtime::llm_driver::Brain>> =
-            Some(Arc::clone(&*self.brain.brain.read().unwrap()) as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
+            Some(Arc::clone(&*self.brain.brain.read().unwrap())
+                as Arc<dyn opencarrier_runtime::llm_driver::Brain>);
 
         // Load session: use per-user session when sender_id is present (multi-tenancy),
         // otherwise use the agent's default session.
@@ -2133,11 +2200,10 @@ impl OpenCarrierKernel {
                 .map_err(KernelError::OpenCarrier)?
             {
                 Some(s) => s,
-                None => {
-                    self.memory
-                        .create_session_with_label(agent_id, Some(&user_label))
-                        .map_err(KernelError::OpenCarrier)?
-                }
+                None => self
+                    .memory
+                    .create_session_with_label(agent_id, Some(&user_label))
+                    .map_err(KernelError::OpenCarrier)?,
             }
         } else {
             self.memory
@@ -2204,7 +2270,6 @@ impl OpenCarrierKernel {
 
         // Apply model routing if configured (disabled in Stable mode)
         let mut manifest = entry.manifest.clone();
-
 
         self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name);
 
@@ -2295,10 +2360,11 @@ impl OpenCarrierKernel {
 
         // Write JSONL session mirror to workspace
         if let Some(ref workspace) = manifest.workspace {
-            if let Err(e) = self
-                .memory
-                .write_jsonl_mirror(&session, &workspace.join("sessions"), sender_id.as_deref())
-            {
+            if let Err(e) = self.memory.write_jsonl_mirror(
+                &session,
+                &workspace.join("sessions"),
+                sender_id.as_deref(),
+            ) {
                 warn!("Failed to write JSONL session mirror: {e}");
             }
             // Append daily memory log (best-effort)
@@ -2567,11 +2633,7 @@ impl OpenCarrierKernel {
     ///
     /// The `model` parameter is the modality name (e.g. "chat", "fast", "vision").
     /// Brain maps the modality to the actual provider/model/endpoint.
-    pub fn set_agent_model(
-        &self,
-        agent_id: AgentId,
-        model: &str,
-    ) -> KernelResult<()> {
+    pub fn set_agent_model(&self, agent_id: AgentId, model: &str) -> KernelResult<()> {
         // Model/provider management moved to Brain — this updates modality only
         let modality = model.to_string();
 
@@ -2864,8 +2926,11 @@ impl OpenCarrierKernel {
     /// Get a kernel handle for passing to agent loop operations.
     ///
     /// Returns `None` if `set_self_handle` hasn't been called yet.
-    pub fn get_kernel_handle(self: &Arc<Self>) -> Option<Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle>> {
-        self.coordination.self_handle
+    pub fn get_kernel_handle(
+        self: &Arc<Self>,
+    ) -> Option<Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle>> {
+        self.coordination
+            .self_handle
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle>)
@@ -2879,7 +2944,8 @@ impl OpenCarrierKernel {
 
     /// List all agent bindings.
     pub fn list_bindings(&self) -> Vec<opencarrier_types::config::AgentBinding> {
-        self.coordination.bindings
+        self.coordination
+            .bindings
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -2887,7 +2953,11 @@ impl OpenCarrierKernel {
 
     /// Add a binding at runtime.
     pub fn add_binding(&self, binding: opencarrier_types::config::AgentBinding) {
-        let mut bindings = self.coordination.bindings.lock().unwrap_or_else(|e| e.into_inner());
+        let mut bindings = self
+            .coordination
+            .bindings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         bindings.push(binding);
         // Sort by specificity descending
         bindings.sort_by(|a, b| b.match_rule.specificity().cmp(&a.match_rule.specificity()));
@@ -2895,7 +2965,11 @@ impl OpenCarrierKernel {
 
     /// Remove a binding by index, returns the removed binding if valid.
     pub fn remove_binding(&self, index: usize) -> Option<opencarrier_types::config::AgentBinding> {
-        let mut bindings = self.coordination.bindings.lock().unwrap_or_else(|e| e.into_inner());
+        let mut bindings = self
+            .coordination
+            .bindings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if index < bindings.len() {
             Some(bindings.remove(index))
         } else {
@@ -3435,7 +3509,8 @@ impl OpenCarrierKernel {
     ) {
         // Start continuous/periodic loops
         let kernel = Arc::clone(self);
-        self.runtime.background
+        self.runtime
+            .background
             .start_agent(agent_id, name, schedule, move |aid, msg| {
                 let k = Arc::clone(&kernel);
                 tokio::spawn(async move {
@@ -3516,7 +3591,7 @@ impl OpenCarrierKernel {
         // Check if modality exists at all
         if !brain.has_modality(modality) {
             return Err(KernelError::OpenCarrier(OpenCarrierError::LlmDriver(
-                format!("Modality '{modality}' not configured in brain.json")
+                format!("Modality '{modality}' not configured in brain.json"),
             )));
         }
 
@@ -3529,9 +3604,16 @@ impl OpenCarrierKernel {
 
         // endpoints_for returned empty — all circuit-broken or no drivers
         let status = brain.status();
-        let broken: Vec<String> = status.endpoints.iter()
+        let broken: Vec<String> = status
+            .endpoints
+            .iter()
             .filter(|e| e.circuit_open)
-            .map(|e| format!("{} ({} consecutive failures)", e.endpoint, e.consecutive_failures))
+            .map(|e| {
+                format!(
+                    "{} ({} consecutive failures)",
+                    e.endpoint, e.consecutive_failures
+                )
+            })
             .collect();
 
         if broken.is_empty() {
@@ -3543,7 +3625,7 @@ impl OpenCarrierKernel {
                 format!(
                     "No available endpoints for modality '{modality}' — circuit-broken: [{}]",
                     broken.join(", ")
-                )
+                ),
             )))
         }
     }
@@ -3552,10 +3634,9 @@ impl OpenCarrierKernel {
     pub fn reload_brain(&self) -> Result<(), String> {
         let json_str = std::fs::read_to_string(&self.brain.brain_path)
             .map_err(|e| format!("Cannot read {}: {e}", self.brain.brain_path.display()))?;
-        let config: opencarrier_types::brain::BrainConfig = serde_json::from_str(&json_str)
-            .map_err(|e| format!("Invalid brain.json: {e}"))?;
-        let brain = Brain::new(config)
-            .map_err(|e| format!("Brain init failed: {e}"))?;
+        let config: opencarrier_types::brain::BrainConfig =
+            serde_json::from_str(&json_str).map_err(|e| format!("Invalid brain.json: {e}"))?;
+        let brain = Brain::new(config).map_err(|e| format!("Brain init failed: {e}"))?;
         *self.brain.brain.write().unwrap() = Arc::new(brain);
         info!("Brain reloaded from {}", self.brain.brain_path.display());
         Ok(())
@@ -3582,8 +3663,8 @@ impl OpenCarrierKernel {
             .map_err(|e| format!("Cannot write {}: {e}", self.brain.brain_path.display()))?;
 
         // Hot-reload: create new Brain from updated config
-        let brain = Brain::new(config)
-            .map_err(|e| format!("Brain init failed after update: {e}"))?;
+        let brain =
+            Brain::new(config).map_err(|e| format!("Brain init failed after update: {e}"))?;
         *self.brain.brain.write().unwrap() = Arc::new(brain);
         info!("Brain config updated and reloaded");
         Ok(())
@@ -3694,7 +3775,10 @@ impl OpenCarrierKernel {
                             let tool_count = conn.tools().len();
                             // Remove stale tools for this server before re-adding
                             if let Ok(mut tools) = kernel.plugins.mcp_tools.lock() {
-                                let prefix = format!("mcp_{}", opencarrier_runtime::mcp::normalize_name(&name));
+                                let prefix = format!(
+                                    "mcp_{}",
+                                    opencarrier_runtime::mcp::normalize_name(&name)
+                                );
                                 tools.retain(|t| !t.name.starts_with(&prefix));
                                 tools.extend(conn.tools().iter().cloned());
                             }
@@ -3846,9 +3930,7 @@ impl OpenCarrierKernel {
                 let mut matched = 0;
                 let mut unmatched = Vec::new();
                 for t in &plugin_defs {
-                    if !tools_unrestricted
-                        && !declared_tools.iter().any(|d| d == &t.name)
-                    {
+                    if !tools_unrestricted && !declared_tools.iter().any(|d| d == &t.name) {
                         unmatched.push(t.name.clone());
                         continue;
                     }
@@ -3999,12 +4081,10 @@ impl OpenCarrierKernel {
             std::collections::HashMap::new();
         let mut tool_count = 0usize;
         for tool in &tools {
-            let server = opencarrier_runtime::mcp::extract_mcp_server_from_known(
-                &tool.name,
-                &known_names,
-            )
-            .map(String::from)
-            .unwrap_or_else(|| "unknown".to_string());
+            let server =
+                opencarrier_runtime::mcp::extract_mcp_server_from_known(&tool.name, &known_names)
+                    .map(String::from)
+                    .unwrap_or_else(|| "unknown".to_string());
 
             // Filter by MCP allowlist if set
             if !mcp_allowlist.is_empty() && !normalized.iter().any(|n| n == &server) {
@@ -4188,7 +4268,10 @@ impl OpenCarrierKernel {
             sender_id: sender_id.clone(),
             sender_name,
             user_profile_summary: sender_id.as_ref().and_then(|sid| {
-                manifest.workspace.as_ref().and_then(|w| read_user_profile_summary(w, sid))
+                manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| read_user_profile_summary(w, sid))
             }),
             clone_system_prompt_md: manifest
                 .workspace
@@ -4352,14 +4435,20 @@ impl OpenCarrierKernel {
             Some(dir) => dir.clone(),
             None => {
                 let dir = self.config.home_dir.join("plugins");
-                tracing::info!("No plugins_dir configured, using default: {}", dir.display());
+                tracing::info!(
+                    "No plugins_dir configured, using default: {}",
+                    dir.display()
+                );
                 dir
             }
         };
 
         // Ensure plugins directory exists
         if let Err(e) = std::fs::create_dir_all(&plugins_dir) {
-            tracing::warn!("Failed to create plugins dir {}: {e}", plugins_dir.display());
+            tracing::warn!(
+                "Failed to create plugins dir {}: {e}",
+                plugins_dir.display()
+            );
             return;
         }
 
@@ -4392,7 +4481,9 @@ impl OpenCarrierKernel {
                 plugin_name,
                 None,
                 &plugins_dir,
-            ).await {
+            )
+            .await
+            {
                 Ok(_) => {
                     tracing::info!(plugin = %plugin_name, "Plugin installed successfully");
                     installed.push(plugin_name.clone());
@@ -4448,14 +4539,15 @@ impl KernelHandle for OpenCarrierKernel {
         // Resolve target agent — UUID first, then name lookup
         let (id, target_entry): (AgentId, AgentEntry) = match agent_id.parse() {
             Ok(id) => {
-                let entry = self.registry.get(id)
+                let entry = self
+                    .registry
+                    .get(id)
                     .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
                 (id, entry)
             }
             Err(_) => {
                 // Name lookup — prefer caller tenant for scoping, fallback to global
-                let caller_tid = caller_agent_id
-                    .and_then(|cid| self.get_agent_tenant_id(cid));
+                let caller_tid = caller_agent_id.and_then(|cid| self.get_agent_tenant_id(cid));
                 let entry = if let Some(ref tid) = caller_tid {
                     self.registry.find_by_name_and_tenant(agent_id, tid)
                 } else {
@@ -4488,7 +4580,13 @@ impl KernelHandle for OpenCarrierKernel {
         }
 
         let result = self
-            .send_message_with_handle(id, message, handle, sender_id.map(|s| s.to_string()), sender_name.map(|s| s.to_string()))
+            .send_message_with_handle(
+                id,
+                message,
+                handle,
+                sender_id.map(|s| s.to_string()),
+                sender_name.map(|s| s.to_string()),
+            )
             .await
             .map_err(|e| format!("Send failed: {e}"))?;
 
@@ -4525,22 +4623,37 @@ impl KernelHandle for OpenCarrierKernel {
         OpenCarrierKernel::kill_agent(self, id).map_err(|e| format!("Kill failed: {e}"))
     }
 
-    fn memory_store(&self, agent_id: &str, key: &str, value: serde_json::Value) -> Result<(), String> {
-        let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
+    fn memory_store(
+        &self,
+        agent_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), String> {
+        let aid: AgentId = agent_id
+            .parse()
+            .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
             .structured_set(aid, key, value)
             .map_err(|e| format!("Memory store failed: {e}"))
     }
 
-    fn memory_recall(&self, agent_id: &str, key: &str) -> Result<Option<serde_json::Value>, String> {
-        let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
+    fn memory_recall(
+        &self,
+        agent_id: &str,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let aid: AgentId = agent_id
+            .parse()
+            .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
             .structured_get(aid, key)
             .map_err(|e| format!("Memory recall failed: {e}"))
     }
 
     fn memory_list(&self, agent_id: &str) -> Result<Vec<(String, serde_json::Value)>, String> {
-        let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
+        let aid: AgentId = agent_id
+            .parse()
+            .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
             .list_kv(aid)
             .map_err(|e| format!("Memory list failed: {e}"))
@@ -4589,26 +4702,45 @@ impl KernelHandle for OpenCarrierKernel {
         // Resolve tenant from created_by (agent ID)
         let tenant_id = created_by.and_then(|cid| self.get_agent_tenant_id(cid));
         self.memory
-            .task_post(title, description, assigned_to, created_by, tenant_id.as_deref())
+            .task_post(
+                title,
+                description,
+                assigned_to,
+                created_by,
+                tenant_id.as_deref(),
+            )
             .await
             .map_err(|e| format!("Task post failed: {e}"))
     }
 
-    async fn task_claim(&self, agent_id: &str, tenant_id: &str) -> Result<Option<serde_json::Value>, String> {
+    async fn task_claim(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
         self.memory
             .task_claim(agent_id, Some(tenant_id))
             .await
             .map_err(|e| format!("Task claim failed: {e}"))
     }
 
-    async fn task_complete(&self, task_id: &str, result: &str, tenant_id: &str) -> Result<(), String> {
+    async fn task_complete(
+        &self,
+        task_id: &str,
+        result: &str,
+        tenant_id: &str,
+    ) -> Result<(), String> {
         self.memory
             .task_complete(task_id, result, Some(tenant_id))
             .await
             .map_err(|e| format!("Task complete failed: {e}"))
     }
 
-    async fn task_list(&self, status: Option<&str>, tenant_id: &str) -> Result<Vec<serde_json::Value>, String> {
+    async fn task_list(
+        &self,
+        status: Option<&str>,
+        tenant_id: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
         self.memory
             .task_list(status, Some(tenant_id))
             .await
@@ -4815,7 +4947,11 @@ impl KernelHandle for OpenCarrierKernel {
             .map(|p| p.to_string_lossy().to_string())
     }
 
-    fn resolve_agent_workspace_in_tenant(&self, agent_name: &str, tenant_id: &str) -> Option<String> {
+    fn resolve_agent_workspace_in_tenant(
+        &self,
+        agent_name: &str,
+        tenant_id: &str,
+    ) -> Option<String> {
         self.registry
             .find_by_name_and_tenant(agent_name, tenant_id)
             .and_then(|entry| entry.manifest.workspace.clone())
@@ -4828,17 +4964,26 @@ impl KernelHandle for OpenCarrierKernel {
     }
 
     fn set_agent_tenant(&self, agent_id: &str, tenant_id: &str) -> Result<(), String> {
-        let aid: AgentId = agent_id.parse().map_err(|_| "Invalid agent ID".to_string())?;
-        self.registry.get(aid).ok_or_else(|| "Agent not found".to_string())?;
+        let aid: AgentId = agent_id
+            .parse()
+            .map_err(|_| "Invalid agent ID".to_string())?;
+        self.registry
+            .get(aid)
+            .ok_or_else(|| "Agent not found".to_string())?;
         self.registry.set_tenant_id(aid, tenant_id.to_string());
         Ok(())
     }
 
     fn get_agent_tenant_id_from_name(&self, agent_name: &str) -> Option<String> {
-        self.registry.find_by_name(agent_name).map(|entry| entry.tenant_id.clone())
+        self.registry
+            .find_by_name(agent_name)
+            .map(|entry| entry.tenant_id.clone())
     }
 
-    fn refresh_tools(&self, agent_id_str: &str) -> Option<Vec<opencarrier_types::tool::ToolDefinition>> {
+    fn refresh_tools(
+        &self,
+        agent_id_str: &str,
+    ) -> Option<Vec<opencarrier_types::tool::ToolDefinition>> {
         let agent_id: opencarrier_types::agent::AgentId = agent_id_str.parse().ok()?;
         let tools = self.available_tools(agent_id);
         if tools.is_empty() {
@@ -4848,12 +4993,22 @@ impl KernelHandle for OpenCarrierKernel {
         }
     }
 
-    async fn clone_install(&self, name: &str, agx_data: &[u8], tenant_id: &str) -> Result<(String, String), String> {
-        use opencarrier_clone::{load_agx, install_clone_to_workspace, convert_to_manifest};
+    async fn clone_install(
+        &self,
+        name: &str,
+        agx_data: &[u8],
+        tenant_id: &str,
+    ) -> Result<(String, String), String> {
+        use opencarrier_clone::{convert_to_manifest, install_clone_to_workspace, load_agx};
 
         // Validate name: only lowercase alphanumeric and hyphens
-        if name.is_empty() || name.len() > 64 || name.starts_with('-') || name.ends_with('-')
-            || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        if name.is_empty()
+            || name.len() > 64
+            || name.starts_with('-')
+            || name.ends_with('-')
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         {
             return Err(format!(
                 "Invalid clone name '{}': must be 1-64 lowercase alphanumeric/hyphen characters",
@@ -4868,10 +5023,12 @@ impl KernelHandle for OpenCarrierKernel {
         }
 
         // Write uploaded bytes to temp file
-        let tmp_dir = std::env::temp_dir().join(format!("opencarrier-clone-{}", uuid::Uuid::new_v4()));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("opencarrier-clone-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
         let tmp_path = tmp_dir.join("clone.agx");
-        std::fs::write(&tmp_path, agx_data).map_err(|e| format!("Failed to write temp file: {e}"))?;
+        std::fs::write(&tmp_path, agx_data)
+            .map_err(|e| format!("Failed to write temp file: {e}"))?;
 
         // Load and parse .agx
         let clone_data = load_agx(&tmp_path).map_err(|e| {
@@ -4883,8 +5040,15 @@ impl KernelHandle for OpenCarrierKernel {
         let clone_name = name.to_string();
 
         // Check for name collision within the same tenant
-        if self.registry.find_by_name_and_tenant(&clone_name, tenant_id).is_some() {
-            return Err(format!("Agent '{}' already exists in this tenant", clone_name));
+        if self
+            .registry
+            .find_by_name_and_tenant(&clone_name, tenant_id)
+            .is_some()
+        {
+            return Err(format!(
+                "Agent '{}' already exists in this tenant",
+                clone_name
+            ));
         }
 
         // Create workspace directory (including parents)
@@ -4908,7 +5072,9 @@ impl KernelHandle for OpenCarrierKernel {
 
         // Spawn agent
         let agent_name = manifest.name.clone();
-        let id = self.spawn_agent(manifest, tenant_id).map_err(|e| format!("Spawn failed: {e}"))?;
+        let id = self
+            .spawn_agent(manifest, tenant_id)
+            .map_err(|e| format!("Spawn failed: {e}"))?;
 
         // Ensure tenant ownership is set (spawn_agent_with_parent already sets it,
         // but be explicit for clone_install)
@@ -4931,10 +5097,11 @@ impl KernelHandle for OpenCarrierKernel {
     }
 
     fn clone_export(&self, name: &str) -> Result<Vec<u8>, String> {
-        use opencarrier_clone::{CloneData, SkillData, SkillScriptData, AgentData, pack_agx};
+        use opencarrier_clone::{pack_agx, AgentData, CloneData, SkillData, SkillScriptData};
         use std::collections::HashMap;
 
-        let workspace_str = self.resolve_agent_workspace(name)
+        let workspace_str = self
+            .resolve_agent_workspace(name)
             .ok_or_else(|| format!("Agent '{}' not found or has no workspace", name))?;
         let workspace = std::path::Path::new(&workspace_str);
 
@@ -4957,7 +5124,8 @@ impl KernelHandle for OpenCarrierKernel {
                 fm.lines()
                     .find_map(|line| {
                         let trimmed = line.trim();
-                        trimmed.strip_prefix("description:")
+                        trimmed
+                            .strip_prefix("description:")
                             .map(|v| v.trim().trim_matches('"').to_string())
                     })
                     .unwrap_or_default()
@@ -4969,12 +5137,15 @@ impl KernelHandle for OpenCarrierKernel {
         };
 
         // Read template.json — create a default if absent (workspace name = template name)
-        let manifest = workspace.join("template.json")
+        let manifest = workspace
+            .join("template.json")
             .exists()
             .then(|| {
                 std::fs::read_to_string(workspace.join("template.json"))
                     .ok()
-                    .and_then(|s| serde_json::from_str::<opencarrier_clone::TemplateManifest>(&s).ok())
+                    .and_then(|s| {
+                        serde_json::from_str::<opencarrier_clone::TemplateManifest>(&s).ok()
+                    })
             })
             .flatten()
             .unwrap_or_else(|| opencarrier_clone::TemplateManifest {
@@ -5007,13 +5178,16 @@ impl KernelHandle for OpenCarrierKernel {
                         if skill_md_path.exists() {
                             let content = read_file(&skill_md_path);
                             let (fm, body) = opencarrier_clone::parse_frontmatter(&content);
-                            let skill_name = fm.get("name")
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    skill_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
-                                });
+                            let skill_name = fm.get("name").cloned().unwrap_or_else(|| {
+                                skill_path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("unknown")
+                                    .to_string()
+                            });
                             let when_to_use = fm.get("when_to_use").cloned().unwrap_or_default();
-                            let allowed_tools = fm.get("allowed_tools")
+                            let allowed_tools = fm
+                                .get("allowed_tools")
                                 .map(|s| opencarrier_clone::parse_string_array(s))
                                 .unwrap_or_default();
 
@@ -5026,11 +5200,14 @@ impl KernelHandle for OpenCarrierKernel {
                                         let sp = se.path();
                                         if sp.extension().map(|e| e == "toml").unwrap_or(false) {
                                             let toml_content = read_file(&sp);
-                                            let script_name = sp.file_stem()
+                                            let script_name = sp
+                                                .file_stem()
                                                 .and_then(|n| n.to_str())
                                                 .unwrap_or("unknown")
                                                 .to_string();
-                                            let desc = opencarrier_clone::parse_toml_description(&toml_content);
+                                            let desc = opencarrier_clone::parse_toml_description(
+                                                &toml_content,
+                                            );
                                             scripts.push(SkillScriptData {
                                                 name: script_name,
                                                 description: desc,
@@ -5065,13 +5242,22 @@ impl KernelHandle for OpenCarrierKernel {
                         let content = read_file(&path);
                         let (fm, body) = opencarrier_clone::parse_frontmatter(&content);
                         let agent_name = fm.get("name").cloned().unwrap_or_else(|| {
-                            path.file_stem().and_then(|n| n.to_str()).unwrap_or("unknown").to_string()
+                            path.file_stem()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string()
                         });
                         agents.push(AgentData {
                             name: agent_name,
                             description: fm.get("description").cloned().unwrap_or_default(),
-                            tools: fm.get("tools").map(|s| opencarrier_clone::parse_string_array(s)).unwrap_or_default(),
-                            model: fm.get("model").cloned().unwrap_or_else(|| "sonnet".to_string()),
+                            tools: fm
+                                .get("tools")
+                                .map(|s| opencarrier_clone::parse_string_array(s))
+                                .unwrap_or_default(),
+                            model: fm
+                                .get("model")
+                                .cloned()
+                                .unwrap_or_else(|| "sonnet".to_string()),
                             color: fm.get("color").cloned(),
                             prompt: body.trim().to_string(),
                         });
@@ -5127,12 +5313,8 @@ impl KernelHandle for OpenCarrierKernel {
             .unwrap_or_else(|_| "unknown".to_string());
 
         let result = opencarrier_clone::hub::publish(
-            &hub_url,
-            &api_key,
-            agx_bytes,
-            &device_id,
-            None,  // category
-            None,  // visibility (default: public)
+            &hub_url, &api_key, agx_bytes, &device_id, None, // category
+            None, // visibility (default: public)
         )
         .await
         .map_err(|e| format!("Hub publish failed: {e}"))?;
@@ -5159,14 +5341,24 @@ impl KernelHandle for OpenCarrierKernel {
             // fallback to default plugin tenant from bot bindings.
             // Note: agent's own tenant_id (workspace-level) is NOT used here —
             // it serves workspace isolation, not plugin credential routing.
-            let agent_uuid = uuid::Uuid::parse_str(agent_id).ok().map(opencarrier_types::agent::AgentId);
+            let agent_uuid = uuid::Uuid::parse_str(agent_id)
+                .ok()
+                .map(opencarrier_types::agent::AgentId);
             let tenant_id = agent_uuid
                 .as_ref()
-                .and_then(|id| self.plugins.source_tenant_id.get(id).map(|v| v.value().clone()))
+                .and_then(|id| {
+                    self.plugins
+                        .source_tenant_id
+                        .get(id)
+                        .map(|v| v.value().clone())
+                })
                 .or_else(|| {
-                    agent_uuid
-                        .as_ref()
-                        .and_then(|id| self.plugins.default_plugin_tenant.get(id).map(|v| v.value().clone()))
+                    agent_uuid.as_ref().and_then(|id| {
+                        self.plugins
+                            .default_plugin_tenant
+                            .get(id)
+                            .map(|v| v.value().clone())
+                    })
                 })
                 .unwrap_or_default();
             let context = opencarrier_types::plugin::PluginToolContext {
@@ -5183,7 +5375,9 @@ impl KernelHandle for OpenCarrierKernel {
 
     fn set_default_plugin_tenant(&self, agent_id: &str, tenant_id: &str) {
         if let Ok(id) = agent_id.parse() {
-            self.plugins.default_plugin_tenant.insert(id, tenant_id.to_string());
+            self.plugins
+                .default_plugin_tenant
+                .insert(id, tenant_id.to_string());
         }
     }
 }
@@ -5427,5 +5621,4 @@ mod tests {
             .iter()
             .any(|c| matches!(c, Capability::ToolInvoke(name) if name == "shell_exec")));
     }
-
 }

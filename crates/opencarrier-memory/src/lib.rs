@@ -7,6 +7,7 @@
 //!
 //! Agents interact with a single `Memory` trait that abstracts over all three stores.
 
+pub mod acp_session;
 pub mod consolidation;
 pub mod knowledge;
 pub mod migration;
@@ -15,7 +16,6 @@ pub mod session;
 pub mod structured;
 pub mod tenant;
 pub mod usage;
-pub mod acp_session;
 
 mod substrate;
 pub use substrate::MemorySubstrate;

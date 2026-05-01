@@ -367,21 +367,26 @@ fn test_is_chat_request_equivalent() {
     });
 
     // Valid 'chat' type should parse
-    assert!(serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(valid_chat).is_ok());
+    assert!(
+        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(valid_chat).is_ok()
+    );
 
     // Valid 'message' type should parse
     assert!(
-        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(valid_message).is_ok()
+        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(valid_message)
+            .is_ok()
     );
 
     // Invalid type should fail
     assert!(
-        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(invalid_type).is_err()
+        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(invalid_type)
+            .is_err()
     );
 
     // Missing required fields should fail
     assert!(
-        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(missing_fields).is_err()
+        serde_json::from_value::<opencarrier_types::conversation::ChatRequest>(missing_fields)
+            .is_err()
     );
 }
 

@@ -96,7 +96,10 @@ mod tests {
             skip_permissions: true,
         };
         let driver = create_driver(&config);
-        assert!(driver.is_ok(), "Anthropic format with key + URL should succeed");
+        assert!(
+            driver.is_ok(),
+            "Anthropic format with key + URL should succeed"
+        );
     }
 
     #[test]
@@ -138,7 +141,10 @@ mod tests {
             skip_permissions: true,
         };
         let driver = create_driver(&config);
-        assert!(driver.is_ok(), "OpenAI format with key + URL should succeed");
+        assert!(
+            driver.is_ok(),
+            "OpenAI format with key + URL should succeed"
+        );
     }
 
     #[test]
@@ -153,7 +159,10 @@ mod tests {
             skip_permissions: true,
         };
         let driver = create_driver(&config);
-        assert!(driver.is_ok(), "OpenAI format without key should succeed (local providers)");
+        assert!(
+            driver.is_ok(),
+            "OpenAI format without key should succeed (local providers)"
+        );
     }
 
     #[test]
@@ -181,7 +190,10 @@ mod tests {
             skip_permissions: true,
         };
         let driver = create_driver(&config);
-        assert!(driver.is_ok(), "Gemini format with key + URL should succeed");
+        assert!(
+            driver.is_ok(),
+            "Gemini format with key + URL should succeed"
+        );
     }
 
     #[test]
@@ -203,9 +215,7 @@ mod tests {
         let config = DriverConfig {
             provider: "azure".to_string(),
             api_key: Some("test-azure-key".to_string()),
-            base_url: Some(
-                "https://myresource.openai.azure.com/openai/deployments".to_string(),
-            ),
+            base_url: Some("https://myresource.openai.azure.com/openai/deployments".to_string()),
             format: Some(ApiFormat::OpenAI),
             auth_header: AuthHeaderType::default(),
             skip_permissions: true,
@@ -239,9 +249,7 @@ mod tests {
         let config = DriverConfig {
             provider: "azure-openai".to_string(),
             api_key: Some("test-azure-key".to_string()),
-            base_url: Some(
-                "https://myresource.openai.azure.com/openai/deployments".to_string(),
-            ),
+            base_url: Some("https://myresource.openai.azure.com/openai/deployments".to_string()),
             format: Some(ApiFormat::OpenAI),
             auth_header: AuthHeaderType::default(),
             skip_permissions: true,

@@ -19,9 +19,7 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
 }
 
 /// List installed plugins.
-pub async fn list_plugins(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn list_plugins(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let plugin_statuses = if let Some(ref pm) = state.plugin_manager {
         let pm = pm.lock().await;
         let statuses = pm.status();
@@ -87,7 +85,9 @@ pub async fn install_plugin(
         Err(_) => {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Hub API key not set (env: {})", api_key_env)})),
+                Json(
+                    serde_json::json!({"error": format!("Hub API key not set (env: {})", api_key_env)}),
+                ),
             );
         }
     };
@@ -96,7 +96,9 @@ pub async fn install_plugin(
     if opencarrier_clone::hub::is_plugin_installed(&plugins_dir, &body.name) {
         return (
             axum::http::StatusCode::OK,
-            Json(serde_json::json!({"ok": true, "message": format!("Plugin '{}' already installed", body.name)})),
+            Json(
+                serde_json::json!({"ok": true, "message": format!("Plugin '{}' already installed", body.name)}),
+            ),
         );
     }
 
@@ -106,10 +108,14 @@ pub async fn install_plugin(
         &body.name,
         body.version.as_deref(),
         &plugins_dir,
-    ).await {
+    )
+    .await
+    {
         Ok(name) => (
             axum::http::StatusCode::OK,
-            Json(serde_json::json!({"ok": true, "name": name, "message": "Plugin installed. Restart daemon to load."})),
+            Json(
+                serde_json::json!({"ok": true, "name": name, "message": "Plugin installed. Restart daemon to load."}),
+            ),
         ),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -148,7 +154,9 @@ pub async fn remove_plugin(
     match std::fs::remove_dir_all(&plugin_dir) {
         Ok(_) => (
             axum::http::StatusCode::OK,
-            Json(serde_json::json!({"ok": true, "message": format!("Plugin '{}' removed. Restart daemon to unload.", name)})),
+            Json(
+                serde_json::json!({"ok": true, "message": format!("Plugin '{}' removed. Restart daemon to unload.", name)}),
+            ),
         ),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -170,7 +178,9 @@ pub async fn search_plugins(
         Err(_) => {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Hub API key not set (env: {})", api_key_env)})),
+                Json(
+                    serde_json::json!({"error": format!("Hub API key not set (env: {})", api_key_env)}),
+                ),
             );
         }
     };

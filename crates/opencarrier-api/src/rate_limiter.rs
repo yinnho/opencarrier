@@ -114,10 +114,7 @@ mod tests {
             100
         );
         // Check-deps should also have elevated cost
-        assert_eq!(
-            operation_cost("POST", "/api/custom/check-deps").get(),
-            20
-        );
+        assert_eq!(operation_cost("POST", "/api/custom/check-deps").get(), 20);
         // Regular install endpoints
         assert_eq!(operation_cost("POST", "/api/skills/install").get(), 50);
     }

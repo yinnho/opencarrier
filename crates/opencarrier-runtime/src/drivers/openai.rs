@@ -3,10 +3,10 @@
 //! Works with OpenAI, Ollama, vLLM, and any other OpenAI-compatible endpoint.
 
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
-use opencarrier_types::brain::AuthHeaderType;
 use crate::think_filter::{FilterAction, StreamingThinkFilter};
 use async_trait::async_trait;
 use futures::StreamExt;
+use opencarrier_types::brain::AuthHeaderType;
 use opencarrier_types::message::{ContentBlock, MessageContent, Role, StopReason, TokenUsage};
 use opencarrier_types::tool::ToolCall;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,11 @@ impl OpenAIDriver {
     }
 
     /// Create a driver with a specific auth header style.
-    pub fn with_auth_header(api_key: String, base_url: String, auth_header: AuthHeaderType) -> Self {
+    pub fn with_auth_header(
+        api_key: String,
+        base_url: String,
+        auth_header: AuthHeaderType,
+    ) -> Self {
         Self {
             api_key: Zeroizing::new(api_key),
             base_url,
@@ -76,7 +80,8 @@ impl OpenAIDriver {
                 builder = builder.header("api-key", self.api_key.as_str());
             }
             AuthHeaderType::Bearer => {
-                builder = builder.header("authorization", format!("Bearer {}", self.api_key.as_str()));
+                builder =
+                    builder.header("authorization", format!("Bearer {}", self.api_key.as_str()));
             }
         }
         builder
