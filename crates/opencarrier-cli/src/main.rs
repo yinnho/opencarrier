@@ -4217,7 +4217,21 @@ async fn cmd_plugin(cmd: PluginCommands) {
                     Ok(r) if r.status().is_success() => {
                         r.json::<serde_json::Value>().await.unwrap_or_default()
                     }
-                    _ => serde_json::Value::Null,
+                    Ok(r) => {
+                        let status = r.status();
+                        let err_body: serde_json::Value =
+                            r.json().await.unwrap_or_default();
+                        let msg = err_body["error"].as_str().unwrap_or("未知错误");
+                        eprintln!("Daemon 返回错误 ({}): {}", status, msg);
+                        if status.as_u16() == 401 {
+                            eprintln!("请运行 `opencarrier config set-key <key>` 配置 API key");
+                        }
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("无法连接 Daemon: {e}");
+                        return;
+                    }
                 };
 
                 if !body.is_null() && body["plugins"].is_array() {
