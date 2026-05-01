@@ -104,12 +104,14 @@ pub async fn generate_image(request: &ImageGenRequest) -> Result<ImageGenResult,
     })
 }
 
-/// Save generated images to workspace output directory.
+/// Save generated images to per-user output directory.
 pub fn save_images_to_workspace(
     result: &ImageGenResult,
     workspace: &std::path::Path,
+    sender_id: Option<&str>,
 ) -> Result<Vec<String>, String> {
-    let output_dir = workspace.join("output");
+    let sid = sender_id.ok_or("Cannot save images: no sender context")?;
+    let output_dir = workspace.join("users").join(sid).join("output");
     std::fs::create_dir_all(&output_dir)
         .map_err(|e| format!("Failed to create output dir: {e}"))?;
 
@@ -214,7 +216,7 @@ mod tests {
             model: "dall-e-3".to_string(),
             revised_prompt: None,
         };
-        let paths = save_images_to_workspace(&result, workspace).unwrap();
+        let paths = save_images_to_workspace(&result, workspace, Some("test-user")).unwrap();
         assert_eq!(paths.len(), 1);
         assert!(std::path::Path::new(&paths[0]).exists());
     }

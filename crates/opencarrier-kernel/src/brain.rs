@@ -197,9 +197,7 @@ impl Brain {
             .filter_map(|name| {
                 let endpoint = self.config.endpoints.get(&name)?;
                 // Only include endpoints that can produce a driver
-                if self.get_or_create_driver(&name).is_none() {
-                    return None;
-                }
+                self.get_or_create_driver(&name)?;
                 // Circuit-breaker: skip endpoints with too many consecutive failures
                 if let Some(tracker) = self.health.get(&name) {
                     if !tracker.is_available() {

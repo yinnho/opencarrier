@@ -309,10 +309,10 @@ pub async fn execute_tool(
         "media_transcribe" => tool_media_transcribe(input, media_engine).await,
 
         // Image generation tool
-        "image_generate" => tool_image_generate(input, workspace_root).await,
+        "image_generate" => tool_image_generate(input, workspace_root, sender_id).await,
 
         // TTS/STT tools
-        "text_to_speech" => tool_text_to_speech(input, tts_engine, workspace_root).await,
+        "text_to_speech" => tool_text_to_speech(input, tts_engine, workspace_root, sender_id).await,
         "speech_to_text" => tool_speech_to_text(input, media_engine, workspace_root).await,
 
         // Docker sandbox tool
@@ -415,7 +415,7 @@ pub async fn execute_tool(
         ),
 
         // Canvas / A2UI tool
-        "canvas_present" => tool_canvas_present(input, workspace_root).await,
+        "canvas_present" => tool_canvas_present(input, workspace_root, sender_id).await,
 
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
@@ -1180,7 +1180,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Image generation tool ---
         ToolDefinition {
             name: "image_generate".to_string(),
-            description: "Generate images from a text prompt using DALL-E 3, DALL-E 2, or GPT-Image-1. Requires OPENAI_API_KEY. Generated images are saved to the workspace output/ directory.".to_string(),
+            description: "Generate images from a text prompt using DALL-E 3, DALL-E 2, or GPT-Image-1. Requires OPENAI_API_KEY. Generated images are saved to the user's output directory.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1266,7 +1266,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- TTS/STT tools ---
         ToolDefinition {
             name: "text_to_speech".to_string(),
-            description: "Convert text to speech audio. Auto-selects OpenAI or ElevenLabs. Saves audio to workspace output/ directory.".to_string(),
+            description: "Convert text to speech audio. Auto-selects OpenAI or ElevenLabs. Saves audio to the user's output directory.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -3785,6 +3785,7 @@ async fn tool_media_transcribe(
 async fn tool_image_generate(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let prompt = input["prompt"]
         .as_str()
@@ -3818,7 +3819,7 @@ async fn tool_image_generate(
 
     // Save images to workspace if available
     let saved_paths = if let Some(workspace) = workspace_root {
-        match crate::image_gen::save_images_to_workspace(&result, workspace) {
+        match crate::image_gen::save_images_to_workspace(&result, workspace, sender_id) {
             Ok(paths) => paths,
             Err(e) => {
                 warn!("Failed to save images to workspace: {e}");
@@ -3868,6 +3869,7 @@ async fn tool_text_to_speech(
     input: &serde_json::Value,
     tts_engine: Option<&crate::tts::TtsEngine>,
     workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let engine =
         tts_engine.ok_or("TTS engine not available. Ensure tts.enabled=true in config.")?;
@@ -3877,9 +3879,10 @@ async fn tool_text_to_speech(
 
     let result = engine.synthesize(text, voice, format).await?;
 
-    // Save audio to workspace
+    // Save audio to per-user output directory
     let saved_path = if let Some(workspace) = workspace_root {
-        let output_dir = workspace.join("output");
+        let sid = sender_id.ok_or("Cannot save audio: no sender context")?;
+        let output_dir = workspace.join("users").join(sid).join("output");
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
@@ -4202,6 +4205,7 @@ fn sanitize_canvas_html(html: &str, max_bytes: usize) -> Result<String, String> 
 async fn tool_canvas_present(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let html = input["html"].as_str().ok_or("Missing 'html' parameter")?;
     let title = input["title"].as_str().unwrap_or("Canvas");
@@ -4213,11 +4217,12 @@ async fn tool_canvas_present(
     // Generate canvas ID
     let canvas_id = uuid::Uuid::new_v4().to_string();
 
-    // Save to workspace output directory
+    // Save to per-user output directory
     let output_dir = if let Some(root) = workspace_root {
-        root.join("output")
+        let sid = sender_id.ok_or("Cannot save canvas: no sender context")?;
+        root.join("users").join(sid).join("output")
     } else {
-        PathBuf::from("output")
+        return Err("Cannot save canvas: no workspace".into());
     };
     let _ = tokio::fs::create_dir_all(&output_dir).await;
 
@@ -4985,7 +4990,7 @@ mod tests {
         });
         let tmp = std::env::temp_dir().join("opencarrier_canvas_test");
         let _ = std::fs::create_dir_all(&tmp);
-        let result = tool_canvas_present(&input, Some(tmp.as_path())).await;
+        let result = tool_canvas_present(&input, Some(tmp.as_path()), Some("test-user")).await;
         assert!(result.is_ok());
         let output: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
         assert!(output["canvas_id"].is_string());

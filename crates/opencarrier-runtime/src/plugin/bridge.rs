@@ -21,10 +21,8 @@ pub struct PluginBridgeManager {
     kernel: Arc<dyn KernelHandle>,
     /// Loaded plugins (for channel_send responses).
     plugins: Vec<Arc<LoadedPlugin>>,
-    /// Default agent ID for routing when no specific binding exists.
-    default_agent_id: Option<String>,
-    /// (channel_type, tenant_id) → agent_id bindings.
-    /// tenant_id is the bot UUID from bot.toml directory name.
+    /// (channel_type, bot_id) → agent_id bindings.
+    /// bot_id is the bot UUID from bot.toml directory name.
     channel_bindings: HashMap<(String, String), String>,
 }
 
@@ -34,7 +32,6 @@ impl PluginBridgeManager {
         Self {
             kernel,
             plugins: Vec::new(),
-            default_agent_id: None,
             channel_bindings: HashMap::new(),
         }
     }
@@ -44,21 +41,16 @@ impl PluginBridgeManager {
         self.plugins.push(plugin);
     }
 
-    /// Set the default agent for routing unbound messages.
-    pub fn set_default_agent(&mut self, agent_id: String) {
-        self.default_agent_id = Some(agent_id);
-    }
-
-    /// Bind a specific (channel_type, tenant_id) to an agent.
-    pub fn bind_channel(&mut self, channel_type: String, tenant_id: String, agent_id: String) {
+    /// Bind a specific (channel_type, bot_id) to an agent.
+    pub fn bind_channel(&mut self, channel_type: String, bot_id: String, agent_id: String) {
         info!(
             channel = %channel_type,
-            tenant = %tenant_id,
+            bot = %bot_id,
             agent = %agent_id,
-            "Bound channel+tenant to agent"
+            "Bound channel+bot to agent"
         );
         self.channel_bindings
-            .insert((channel_type, tenant_id), agent_id);
+            .insert((channel_type, bot_id), agent_id);
     }
 
     /// Run the message processing loop (consumes self).
@@ -82,20 +74,17 @@ impl PluginBridgeManager {
             None => self.describe_non_text_content(&msg),
         };
 
-        // Route by (channel_type, tenant_id), fallback to default
-        let agent_id = self
+        // Route by (channel_type, bot_id)
+        let agent_id = match self
             .channel_bindings
             .get(&(msg.channel_type.clone(), msg.tenant_id.clone()))
-            .cloned()
-            .or_else(|| self.default_agent_id.clone());
-
-        let agent_id = match agent_id {
-            Some(id) => id,
+        {
+            Some(id) => id.clone(),
             None => {
                 warn!(
                     channel = %msg.channel_type,
-                    tenant = %msg.tenant_id,
-                    "No agent binding for channel+tenant, dropping message"
+                    bot = %msg.tenant_id,
+                    "No agent binding for channel+bot, dropping message"
                 );
                 return;
             }
@@ -168,10 +157,11 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     fn send_response(&self, original: &PluginMessage, response: &str) {
-        let mut sent = false;
         for plugin in &self.plugins {
             for channel in &plugin.channels {
-                if channel.channel_type == original.channel_type {
+                if channel.channel_type == original.channel_type
+                    && channel.tenant_id == original.tenant_id
+                {
                     if let Err(e) = plugin.channel_send(
                         channel,
                         &original.tenant_id,
@@ -180,20 +170,19 @@ impl PluginBridgeManager {
                     ) {
                         error!(
                             channel = %channel.channel_type,
+                            tenant = %channel.tenant_id,
                             error = %e,
                             "Failed to send response through channel"
                         );
-                    } else {
-                        sent = true;
                     }
+                    return;
                 }
             }
         }
-        if !sent {
-            warn!(
-                channel = %original.channel_type,
-                "No plugin channel found for response"
-            );
-        }
+        warn!(
+            channel = %original.channel_type,
+            tenant = %original.tenant_id,
+            "No plugin channel found for response"
+        );
     }
 }

@@ -169,11 +169,11 @@ impl SessionStore {
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
         let row_data: Vec<rusqlite::Result<serde_json::Value>> = if let Some(tid) = tenant_id {
-            stmt.query_map(rusqlite::params![tid], |row| Self::session_row_to_json(row))
+            stmt.query_map(rusqlite::params![tid], Self::session_row_to_json)
                 .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
                 .collect()
         } else {
-            stmt.query_map([], |row| Self::session_row_to_json(row))
+            stmt.query_map([], Self::session_row_to_json)
                 .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
                 .collect()
         };

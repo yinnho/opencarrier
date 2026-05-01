@@ -4386,11 +4386,7 @@ fn manifest_to_capabilities(manifest: &AgentManifest) -> Vec<Capability> {
     caps
 }
 
-/// Pick a sensible default embedding model for a given provider when the user
-/// configured an explicit `embedding_provider` but left `embedding_model` at the
-/// default value (which is a local model name that cloud APIs wouldn't recognise).
-
-/// Deliver a cron job's agent response to the configured delivery target.
+// Deliver a cron job's agent response to the configured delivery target.
 async fn cron_deliver_response(
     _kernel: &OpenCarrierKernel,
     agent_id: AgentId,

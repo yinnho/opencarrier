@@ -40,19 +40,6 @@ pub struct PluginConfig {
     /// Plugin metadata.
     #[serde(rename = "plugin")]
     pub meta: PluginMeta,
-    /// Channel descriptors provided by this plugin.
-    #[serde(default)]
-    pub channels: Vec<ChannelDescriptor>,
-    /// Tool descriptors provided by this plugin.
-    #[serde(default)]
-    pub tools: Vec<PluginToolDef>,
-    /// Schema for tenant configuration fields.
-    #[serde(default)]
-    pub config_schema: serde_json::Value,
-    /// Legacy tenant configurations (from plugin.toml [[tenants]]).
-    /// Empty after migration to per-bot bot.toml files.
-    #[serde(default)]
-    pub tenants: Vec<serde_json::Value>,
     /// Discovered bot configurations (from <plugin-dir>/<uuid>/bot.toml).
     /// Each value includes all bot config fields plus `_bot_id` (the bot UUID).
     #[serde(default)]
@@ -74,6 +61,8 @@ pub struct ChannelDescriptor {
     /// Human-readable name.
     #[serde(default)]
     pub name: String,
+    /// Bot UUID this channel is bound to (from bot.toml directory name).
+    pub tenant_id: String,
 }
 
 /// Content types that can be exchanged with a channel.
@@ -118,7 +107,7 @@ pub struct PluginMessage {
     /// Display name of the sender.
     #[serde(default)]
     pub sender_name: String,
-    /// Tenant identifier (e.g. corp_id) — critical for multi-tenant routing.
+    /// Bot UUID — identifies which bot this message came from.
     #[serde(default)]
     pub tenant_id: String,
     /// Message content.

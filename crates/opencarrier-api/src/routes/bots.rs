@@ -59,16 +59,6 @@ fn platform_plugin_dir(platform: &str) -> Option<&str> {
     }
 }
 
-/// Human-readable platform name.
-fn platform_label(platform: &str) -> &str {
-    match platform {
-        "wecom" => "企业微信",
-        "feishu" => "飞书",
-        "dingtalk" => "钉钉",
-        _ => platform,
-    }
-}
-
 /// Scan a plugin directory for bot.toml files in subdirectories.
 fn scan_bots(
     plugin_dir: &std::path::Path,

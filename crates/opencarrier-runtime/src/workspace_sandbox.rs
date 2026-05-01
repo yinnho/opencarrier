@@ -108,12 +108,11 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
 ///
 /// Extends `resolve_sandbox_path` with per-directory permission rules:
 /// - **Blocked**: `agent.toml`, `SOUL.md` (only trainer tools may modify these)
-/// - **Allowed (self-evolution)**: `system_prompt.md`, `skills/`, `data/`, `memory/`, `output/`
+/// - **Allowed (self-evolution)**: `system_prompt.md`, `skills/`, `data/`, `memory/`
 /// - **Per-user**: `users/{sender_id}/` when sender_id matches the current sender
 /// - **Blocked**: `users/{other_sender_id}/`
 ///
-/// When `sender_id` is present and the path starts with `output/`, the path is
-/// automatically rewritten to `users/{sender_id}/output/`.
+/// When `sender_id` is present, `output/` paths are rewritten to `users/{sender_id}/output/`.
 pub fn resolve_sandbox_path_for_write(
     user_path: &str,
     workspace_root: &Path,
@@ -141,7 +140,7 @@ pub fn resolve_sandbox_path_for_write(
         ));
     }
 
-    // Rewrite output/ paths to per-user output when sender_id is present
+    // Rewrite output/ to per-user output when sender_id is present
     let effective_path = if let Some(sid) = sender_id {
         if rel_str.starts_with("output/") || rel_str == "output" {
             let rest = rel_str.strip_prefix("output").unwrap_or("");
@@ -191,8 +190,7 @@ pub fn resolve_sandbox_path_for_write(
 /// Resolve a user-supplied path for read operations within a workspace sandbox.
 ///
 /// When `sender_id` is present, rewrites `input/` and `output/` paths to
-/// per-user directories so agents can read back files they or the user
-/// placed there:
+/// per-user directories:
 /// - `input/xxx`  → `users/{sender_id}/input/xxx`
 /// - `output/xxx` → `users/{sender_id}/output/xxx`
 ///
@@ -216,7 +214,7 @@ pub fn resolve_sandbox_path_for_read(
 
     let rel_str = relative.to_string_lossy();
 
-    // Rewrite input/ and output/ paths to per-user directories when sender_id is present
+    // Rewrite input/ and output/ to per-user directories when sender_id is present
     let effective_path = if let Some(sid) = sender_id {
         if rel_str.starts_with("input/") || rel_str == "input" {
             let rest = rel_str.strip_prefix("input").unwrap_or("");

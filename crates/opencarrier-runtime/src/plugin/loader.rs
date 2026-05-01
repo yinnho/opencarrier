@@ -9,8 +9,6 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
-use uuid::Uuid;
-
 use libloading::Library;
 use opencarrier_types::plugin::{
     BotConfig, ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginToolDef, PLUGIN_ABI_VERSION,
@@ -86,6 +84,8 @@ pub struct LoadedChannel {
     pub channel_type: String,
     /// Human-readable name.
     pub name: String,
+    /// Bot UUID (tenant_id) this channel is bound to.
+    pub tenant_id: String,
     /// Opaque channel handle from the plugin.
     pub handle: *mut std::os::raw::c_void,
 }
@@ -306,12 +306,7 @@ impl PluginLoader {
         let mut config: PluginConfig =
             toml::from_str(&config_content).map_err(|e| format!("Invalid plugin.toml: {}", e))?;
 
-        // 1b. Migrate legacy [[tenants]] to per-bot bot.toml files
-        if let Err(e) = Self::migrate_tenants_to_bots(plugin_dir) {
-            warn!(error = %e, "Tenant migration failed, continuing with legacy config");
-        }
-
-        // 1c. Discover bot configs from <plugin-dir>/<uuid>/bot.toml
+        // 2. Discover bot configs from <plugin-dir>/<uuid>/bot.toml
         let discovered_bots = Self::discover_bots(plugin_dir);
         config.bots = discovered_bots
             .into_iter()
@@ -325,7 +320,7 @@ impl PluginLoader {
             })
             .collect();
 
-        // 2. Check ABI version
+        // 3. Check ABI version
         if config.meta.abi_version != 0 && config.meta.abi_version != PLUGIN_ABI_VERSION {
             return Err(format!(
                 "ABI version mismatch: plugin expects {}, host provides {}",
@@ -333,7 +328,7 @@ impl PluginLoader {
             ));
         }
 
-        // 3. Find shared library
+        // 4. Find shared library
         let lib_path = Self::find_shared_library(plugin_dir)
             .ok_or_else(|| format!("No shared library found in {}", plugin_dir.display()))?;
 
@@ -473,90 +468,6 @@ impl PluginLoader {
         bots
     }
 
-    /// Migrate legacy `[[tenants]]` in plugin.toml to per-bot `bot.toml` files.
-    ///
-    /// For each tenant entry, generates a deterministic UUID v5 based on
-    /// (plugin_name, tenant_name), creates `<uuid>/bot.toml`, then strips
-    /// `[[tenants]]` from plugin.toml. Idempotent — skips if bot.toml already exists.
-    pub fn migrate_tenants_to_bots(plugin_dir: &Path) -> Result<(), String> {
-        let config_path = plugin_dir.join("plugin.toml");
-        let content = match std::fs::read_to_string(&config_path) {
-            Ok(c) => c,
-            Err(_) => return Ok(()),
-        };
-
-        let mut config: toml::Value = match toml::from_str(&content) {
-            Ok(c) => c,
-            Err(e) => return Err(format!("Failed to parse plugin.toml: {e}")),
-        };
-
-        let tenants = match config.get("tenants") {
-            Some(toml::Value::Array(arr)) => arr.clone(),
-            _ => return Ok(()),
-        };
-
-        if tenants.is_empty() {
-            return Ok(());
-        }
-
-        let plugin_name = plugin_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
-        let ns = Uuid::new_v5(
-            &Uuid::NAMESPACE_DNS,
-            format!("opencarrier:{plugin_name}").as_bytes(),
-        );
-
-        let mut migrated = 0;
-        for tenant in &tenants {
-            let tenant_name = tenant
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unnamed");
-
-            let bot_uuid = Uuid::new_v5(&ns, tenant_name.as_bytes());
-            let bot_dir = plugin_dir.join(bot_uuid.to_string());
-
-            if bot_dir.join("bot.toml").exists() {
-                info!(bot_id = %bot_uuid, "bot.toml already exists, skipping migration");
-                continue;
-            }
-
-            std::fs::create_dir_all(&bot_dir)
-                .map_err(|e| format!("Failed to create bot dir: {e}"))?;
-
-            let bot_content = toml::to_string_pretty(tenant)
-                .map_err(|e| format!("Failed to serialize bot config: {e}"))?;
-            std::fs::write(bot_dir.join("bot.toml"), &bot_content)
-                .map_err(|e| format!("Failed to write bot.toml: {e}"))?;
-
-            info!(
-                bot_id = %bot_uuid,
-                name = %tenant_name,
-                "Migrated tenant to bot.toml"
-            );
-            migrated += 1;
-        }
-
-        if migrated > 0 {
-            let backup_path = config_path.with_extension("toml.bak");
-            let _ = std::fs::copy(&config_path, &backup_path);
-
-            if let Some(table) = config.as_table_mut() {
-                table.remove("tenants");
-            }
-            let new_content = toml::to_string_pretty(&config)
-                .map_err(|e| format!("Failed to serialize plugin.toml: {e}"))?;
-            std::fs::write(&config_path, new_content)
-                .map_err(|e| format!("Failed to update plugin.toml: {e}"))?;
-
-            info!(migrated, "Migrated tenants to bot.toml files");
-        }
-
-        Ok(())
-    }
-
     /// Find the shared library file in a plugin directory.
     fn find_shared_library(plugin_dir: &Path) -> Option<PathBuf> {
         let extensions = if cfg!(target_os = "macos") {
@@ -602,6 +513,7 @@ impl PluginLoader {
             .map(|(i, desc)| LoadedChannel {
                 channel_type: desc.channel_type,
                 name: desc.name,
+                tenant_id: desc.tenant_id,
                 handle: (i + 1) as *mut std::os::raw::c_void,
             })
             .collect()
