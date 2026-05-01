@@ -49,3 +49,23 @@ Thumbs.db
 *.swo
 *~
 .serena/
+
+# Legacy files
+.cargo/
+.env.example
+CONTRIBUTING.md
+SECURITY.md
+MIGRATION.md
+LICENSE-*
+CHANGELOG.md
+Cross.toml
+flake.nix
+justfile
+build-release.sh
+opencarrier.toml.example
+test.sh
+clones/
+sdk/
+packages/
+deploy/
+docs/
