@@ -1,10 +1,11 @@
 //! Plugin bridge — routes messages between plugin channels and the kernel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 
 use opencarrier_types::plugin::PluginMessage;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tracing::{error, info, warn};
 
 use super::loader::LoadedPlugin;
@@ -19,11 +20,13 @@ use crate::kernel_handle::KernelHandle;
 pub struct PluginBridgeManager {
     /// Kernel handle for sending messages to agents.
     kernel: Arc<dyn KernelHandle>,
-    /// Loaded plugins (for channel_send responses).
+    /// Loaded plugins (for channel_send responses and plugin directory paths).
     plugins: Vec<Arc<LoadedPlugin>>,
     /// (channel_type, bot_id) → agent_id bindings.
     /// bot_id is the bot UUID from bot.toml directory name.
     channel_bindings: HashMap<(String, String), String>,
+    /// Bot IDs that already have an owner set (avoids repeated file reads).
+    owned_bots: Arc<Mutex<HashSet<String>>>,
 }
 
 impl PluginBridgeManager {
@@ -33,6 +36,7 @@ impl PluginBridgeManager {
             kernel,
             plugins: Vec::new(),
             channel_bindings: HashMap::new(),
+            owned_bots: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -53,6 +57,11 @@ impl PluginBridgeManager {
             .insert((channel_type, bot_id), agent_id);
     }
 
+    /// Mark a bot as already having an owner (called at startup).
+    pub fn mark_bot_owned(&mut self, bot_id: String) {
+        self.owned_bots.blocking_lock().insert(bot_id);
+    }
+
     /// Run the message processing loop (consumes self).
     pub async fn run(self, mut rx: mpsc::Receiver<PluginMessage>) {
         info!("Plugin bridge started");
@@ -69,6 +78,9 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     async fn handle_inbound(&self, msg: PluginMessage) {
+        // Set owner on first message
+        self.try_set_owner(&msg).await;
+
         let text = match msg.content.as_text() {
             Some(t) => t.to_string(),
             None => self.describe_non_text_content(&msg),
@@ -121,6 +133,57 @@ impl PluginBridgeManager {
                 );
             }
         }
+    }
+
+    /// If this bot has no owner yet, set the message sender as owner.
+    async fn try_set_owner(&self, msg: &PluginMessage) {
+        let bot_id = &msg.tenant_id;
+        if bot_id.is_empty() || msg.sender_id.is_empty() {
+            return;
+        }
+
+        {
+            let owned = self.owned_bots.lock().await;
+            if owned.contains(bot_id) {
+                return;
+            }
+        }
+
+        // Find the plugin directory for this bot
+        let bot_toml_path = match self.find_bot_toml(&msg.channel_type, bot_id) {
+            Some(p) => p,
+            None => return,
+        };
+
+        match write_owner_id(&bot_toml_path, &msg.sender_id) {
+            Ok(()) => {
+                info!(
+                    bot = %bot_id,
+                    owner = %msg.sender_id,
+                    "Set bot owner (first message)"
+                );
+                self.owned_bots.lock().await.insert(bot_id.clone());
+            }
+            Err(e) => {
+                warn!(
+                    bot = %bot_id,
+                    error = %e,
+                    "Failed to write owner_id to bot.toml"
+                );
+            }
+        }
+    }
+
+    /// Find the bot.toml path for a given (channel_type, bot_id).
+    fn find_bot_toml(&self, channel_type: &str, bot_id: &str) -> Option<std::path::PathBuf> {
+        for plugin in &self.plugins {
+            for channel in &plugin.channels {
+                if channel.channel_type == channel_type && channel.tenant_id == bot_id {
+                    return Some(plugin.path.join(bot_id).join("bot.toml"));
+                }
+            }
+        }
+        None
     }
 
     fn describe_non_text_content(&self, msg: &PluginMessage) -> String {
@@ -185,4 +248,31 @@ impl PluginBridgeManager {
             "No plugin channel found for response"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// bot.toml owner write helper
+// ---------------------------------------------------------------------------
+
+/// Write `owner_id` into a bot.toml file (read → parse → insert → write).
+fn write_owner_id(path: &Path, owner_id: &str) -> Result<(), String> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("读取失败: {e}"))?;
+    let mut doc = content
+        .parse::<toml::Value>()
+        .map_err(|e| format!("解析失败: {e}"))?;
+    let table = doc
+        .as_table_mut()
+        .ok_or("Invalid bot.toml structure".to_string())?;
+    table.insert(
+        "owner_id".into(),
+        toml::Value::String(owner_id.to_string()),
+    );
+    let new_content =
+        toml::to_string_pretty(&doc).map_err(|e| format!("序列化失败: {e}"))?;
+    // Atomic write: write to tmp file then rename
+    let tmp_path = path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, &new_content).map_err(|e| format!("写入临时文件失败: {e}"))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("重命名失败: {e}"))?;
+    Ok(())
 }

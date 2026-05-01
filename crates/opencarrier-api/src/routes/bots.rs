@@ -105,6 +105,7 @@ fn scan_bots(
             "tenant_name": tenant_name,
             "mode": doc.get("mode").and_then(|v| v.as_str()).unwrap_or(""),
             "bind_agent": if bind_agent.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(bind_agent.to_string()) },
+            "owner_id": doc.get("owner_id").and_then(|v| v.as_str()).map(|s| serde_json::Value::String(s.to_string())).unwrap_or(serde_json::Value::Null),
             "status": "configured",
         });
 

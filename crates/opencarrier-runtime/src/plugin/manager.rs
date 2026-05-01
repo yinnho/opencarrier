@@ -110,6 +110,11 @@ impl PluginManager {
                 .collect();
 
             for (bot_uuid, bot_config) in &bots {
+                // Mark bots that already have an owner
+                if bot_config.owner_id.is_some() {
+                    bridge.mark_bot_owned(bot_uuid.clone());
+                }
+
                 if let Some(ref agent_uuid) = bot_config.bind_agent {
                     // bind_agent must be a UUID — agent names are not unique across tenants
                     if uuid::Uuid::parse_str(agent_uuid).is_err() {

@@ -29,6 +29,9 @@ pub struct BotConfig {
     /// Bound agent ID (UUID string). None = unbound.
     #[serde(default)]
     pub bind_agent: Option<String>,
+    /// Platform user ID of the bot owner (first person to send a message).
+    #[serde(default)]
+    pub owner_id: Option<String>,
     /// Platform-specific fields stored as a flat TOML table.
     #[serde(flatten)]
     pub extra: serde_json::Value,
