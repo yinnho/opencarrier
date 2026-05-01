@@ -59,8 +59,14 @@ impl MessageSender {
     /// The host copies the data inside the callback, so it is safe
     /// to drop the message after this returns.
     pub fn send(&self, msg: PluginMessage) {
-        let json = serde_json::to_string(&msg).unwrap_or_default();
-        let c_str = CString::new(json).unwrap_or_default();
+        let json = match serde_json::to_string(&msg) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+        let c_str = match CString::new(json) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
         unsafe {
             (self.callback)(self.user_data, c_str.as_ptr());
         }

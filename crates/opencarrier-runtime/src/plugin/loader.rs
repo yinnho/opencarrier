@@ -63,7 +63,9 @@ pub struct LoadedPlugin {
     /// Plugin directory path.
     pub path: PathBuf,
     /// Opaque handle returned by `oc_plugin_init`.
-    pub handle: *mut std::os::raw::c_void,
+    handle: std::cell::UnsafeCell<*mut std::os::raw::c_void>,
+    /// user_data Box pointer — must be reclaimed on stop.
+    user_data: std::cell::UnsafeCell<*mut std::os::raw::c_void>,
     /// Loaded channels with their opaque handles.
     pub channels: Vec<LoadedChannel>,
     /// Tool definitions provided by this plugin.
@@ -158,7 +160,7 @@ impl LoadedPlugin {
             let mut buf = vec![0u8; TOOL_RESULT_BUF_SIZE as usize];
             let ret = unsafe {
                 fn_exec(
-                    self.handle,
+                    *self.handle.get(),
                     c_tool.as_ptr(),
                     c_args.as_ptr(),
                     c_ctx.as_ptr(),
@@ -200,10 +202,29 @@ impl LoadedPlugin {
     /// Stop the plugin and release resources.
     pub fn stop(&self) {
         if let Some(fn_stop) = self.fn_stop {
-            if !self.handle.is_null() {
-                unsafe { fn_stop(self.handle) };
+            unsafe {
+                let handle = *self.handle.get();
+                if !handle.is_null() {
+                    fn_stop(handle);
+                    *self.handle.get() = std::ptr::null_mut();
+                }
             }
         }
+        // Reclaim the user_data Box to prevent leak
+        unsafe {
+            let user_data = *self.user_data.get();
+            if !user_data.is_null() {
+                let _ = Box::from_raw(
+                    user_data as *mut mpsc::Sender<opencarrier_types::plugin::PluginMessage>,
+                );
+                *self.user_data.get() = std::ptr::null_mut();
+            }
+        }
+    }
+
+    /// Check whether this plugin has been stopped.
+    pub fn is_stopped(&self) -> bool {
+        unsafe { (*self.handle.get()).is_null() }
     }
 }
 
@@ -404,7 +425,8 @@ impl PluginLoader {
             name,
             version,
             path: plugin_dir.to_path_buf(),
-            handle,
+            handle: std::cell::UnsafeCell::new(handle),
+            user_data: std::cell::UnsafeCell::new(user_data),
             channels,
             tools,
             _library: library,
@@ -627,5 +649,7 @@ unsafe extern "C" fn message_callback(user_data: *mut std::os::raw::c_void, json
     };
 
     // Non-blocking send — drop the message if the channel is full
-    let _ = tx.try_send(message);
+    if let Err(e) = tx.try_send(message) {
+        warn!(error = %e, "Plugin message channel full, dropping message");
+    }
 }

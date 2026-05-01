@@ -18,6 +18,7 @@ macro_rules! declare_plugin {
         use std::ffi::{CStr, CString};
         use std::os::raw::{c_char, c_void};
         use std::ptr;
+        use std::sync::atomic::{AtomicPtr, Ordering};
         use std::sync::OnceLock;
 
         // ------------------------------------------------------------------
@@ -43,7 +44,7 @@ macro_rules! declare_plugin {
             tools_json: CString,
         }
 
-        static mut _OC_STATE: *mut _OcState = ptr::null_mut();
+        static _OC_STATE: AtomicPtr<_OcState> = AtomicPtr::new(ptr::null_mut());
 
         // ------------------------------------------------------------------
         // 1. oc_plugin_name
@@ -156,7 +157,7 @@ macro_rules! declare_plugin {
             let state_ptr = Box::into_raw(state);
 
             unsafe {
-                _OC_STATE = state_ptr;
+                _OC_STATE.store(state_ptr, Ordering::Release);
             }
 
             state_ptr as *mut c_void
@@ -172,9 +173,13 @@ macro_rules! declare_plugin {
                 return;
             }
             unsafe {
+                // Guard against double-stop: only proceed if this is the active state
+                if _OC_STATE.load(Ordering::Acquire) != handle {
+                    return;
+                }
                 let state = Box::from_raw(handle as *mut _OcState);
                 <$plugin_type as $crate::Plugin>::stop(&state.plugin);
-                _OC_STATE = ptr::null_mut();
+                _OC_STATE.store(ptr::null_mut(), Ordering::Release);
             }
         }
 
@@ -214,11 +219,12 @@ macro_rules! declare_plugin {
         #[no_mangle]
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub extern "C" fn oc_channel_start(channel_handle: *mut c_void) -> i32 {
+            let state_ptr = _OC_STATE.load(Ordering::Acquire);
             let state = unsafe {
-                if _OC_STATE.is_null() {
+                if state_ptr.is_null() {
                     return -1;
                 }
-                &mut *_OC_STATE
+                &mut *state_ptr
             };
 
             let idx = channel_handle as usize;
@@ -242,11 +248,12 @@ macro_rules! declare_plugin {
             channel_handle: *mut c_void,
             message_json: *const c_char,
         ) -> i32 {
+            let state_ptr = _OC_STATE.load(Ordering::Acquire);
             let state = unsafe {
-                if _OC_STATE.is_null() {
+                if state_ptr.is_null() {
                     return -1;
                 }
-                &*_OC_STATE
+                &*state_ptr
             };
 
             let idx = channel_handle as usize;
@@ -254,6 +261,9 @@ macro_rules! declare_plugin {
                 return -1;
             }
 
+            if message_json.is_null() {
+                return -1;
+            }
             let msg_str = unsafe { CStr::from_ptr(message_json).to_string_lossy() };
 
             let msg: serde_json::Value = match serde_json::from_str(&msg_str) {
@@ -294,6 +304,10 @@ macro_rules! declare_plugin {
                 &*(handle as *const _OcState)
             };
 
+            if tool_name.is_null() || args_json.is_null() || context_json.is_null() {
+                return -1;
+            }
+
             let tool_name_str = unsafe { CStr::from_ptr(tool_name).to_string_lossy().into_owned() };
 
             let args: serde_json::Value = unsafe {
@@ -311,10 +325,11 @@ macro_rules! declare_plugin {
             let Some(entry) = entry else {
                 let err = format!("Unknown tool: {}", tool_name_str);
                 let bytes = err.as_bytes();
-                let len = bytes.len().min(result_buf_len as usize);
+                let len = bytes.len().min(result_buf_len.saturating_sub(1) as usize);
                 if len > 0 {
                     unsafe {
                         std::ptr::copy_nonoverlapping(bytes.as_ptr(), result_buf as *mut u8, len);
+                        *result_buf.add(len) = 0;
                     }
                 }
                 return -1;
@@ -338,7 +353,7 @@ macro_rules! declare_plugin {
                 Err(e) => {
                     let err_str = e.to_string();
                     let bytes = err_str.as_bytes();
-                    let len = bytes.len().min(result_buf_len as usize);
+                    let len = bytes.len().min(result_buf_len.saturating_sub(1) as usize);
                     if len > 0 {
                         unsafe {
                             std::ptr::copy_nonoverlapping(
@@ -346,6 +361,7 @@ macro_rules! declare_plugin {
                                 result_buf as *mut u8,
                                 len,
                             );
+                            *result_buf.add(len) = 0;
                         }
                     }
                     -1

@@ -168,6 +168,7 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     fn send_response(&self, original: &PluginMessage, response: &str) {
+        let mut sent = false;
         for plugin in &self.plugins {
             for channel in &plugin.channels {
                 if channel.channel_type == original.channel_type {
@@ -182,14 +183,17 @@ impl PluginBridgeManager {
                             error = %e,
                             "Failed to send response through channel"
                         );
+                    } else {
+                        sent = true;
                     }
-                    return;
                 }
             }
         }
-        warn!(
-            channel = %original.channel_type,
-            "No plugin channel found for response"
-        );
+        if !sent {
+            warn!(
+                channel = %original.channel_type,
+                "No plugin channel found for response"
+            );
+        }
     }
 }
