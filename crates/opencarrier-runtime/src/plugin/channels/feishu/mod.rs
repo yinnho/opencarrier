@@ -240,14 +240,8 @@ impl BuiltinChannel for FeishuWatcher {
             .get(tenant_id)
             .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
 
-        let token = entry
-            .token_cache
-            .get_token()
-            .map_err(|e| format!("Token error: {e}"))?;
-
         let content = serde_json::json!({ "text": text }).to_string();
-        let http = entry.token_cache.http().clone();
-        let base = entry.token_cache.api_base().to_string();
+        let token_cache = entry.token_cache.clone();
         let user_id = user_id.to_string();
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -265,6 +259,12 @@ impl BuiltinChannel for FeishuWatcher {
                 }
             };
             let result = rt.block_on(async {
+                let token = token_cache
+                    .get_token()
+                    .await
+                    .map_err(|e| format!("Token error: {e}"))?;
+                let http = token_cache.http().clone();
+                let base = token_cache.api_base().to_string();
                 let resp = api::send_message(&http, &token, &base, &user_id, "open_id", "text", &content)
                     .await?;
 

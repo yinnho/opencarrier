@@ -173,7 +173,10 @@ pub async fn weixin_qrcode_status(
             .get("ilink_bot_id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let ilink_user_id = data.get("ilink_user_id").and_then(|v| v.as_str());
+        let ilink_user_id = data
+            .get("ilink_user_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| data.get("user_id").and_then(|v| v.as_str()));
 
         // Check if this WeChat user already has a tenant (dedup by user_id)
         let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
@@ -267,6 +270,10 @@ pub async fn weixin_qrcode_status(
                                         "existing": true,
                                         "bind_agent": existing_bind,
                                         "session_token": session_token,
+                                        "ilink_bot_id": ilink_bot_id,
+                                        "ilink_user_id": ilink_user_id,
+                                        "bot_token": bot_token,
+                                        "baseurl": raw_baseurl,
                                         "data": data,
                                     })),
                                 );

@@ -86,7 +86,7 @@ impl FeishuWsClient {
     /// Connect to the WebSocket and listen for events until disconnection.
     async fn connect_and_listen(&self, sender: &mpsc::Sender<PluginMessage>) -> Result<(), String> {
         // Get token
-        let token = self.token_cache.get_token()?;
+        let token = self.token_cache.get_token().await?;
 
         // Get WebSocket endpoint URL
         let ws_resp = api::get_ws_endpoint(self.token_cache.http(), &token, self.token_cache.api_base()).await?;

@@ -72,14 +72,8 @@ impl BuiltinChannel for FeishuChannel {
             ));
         }
 
-        let token = self
-            .token_cache
-            .get_token()
-            .map_err(|e| format!("Token error: {e}"))?;
-
         let content = serde_json::json!({ "text": text }).to_string();
-        let http = self.token_cache.http().clone();
-        let base = self.token_cache.api_base().to_string();
+        let token_cache = self.token_cache.clone();
         let user_id = user_id.to_string();
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -97,6 +91,12 @@ impl BuiltinChannel for FeishuChannel {
                 }
             };
             let result = rt.block_on(async {
+                let token = token_cache
+                    .get_token()
+                    .await
+                    .map_err(|e| format!("Token error: {e}"))?;
+                let http = token_cache.http().clone();
+                let base = token_cache.api_base().to_string();
                 let resp = crate::plugin::channels::feishu::api::send_message(
                     &http, &token, &base, &user_id, "open_id", "text", &content,
                 )

@@ -6,8 +6,12 @@ function botsPage() {
     // Data
     bots: [],
     agents: [],
+    tenants: [],
     loading: true,
     loadError: '',
+
+    // Filter
+    activePlatformFilter: 'all',
 
     // Modal state
     showCreateModal: false,
@@ -55,12 +59,14 @@ function botsPage() {
       this.loading = true;
       this.loadError = '';
       try {
-        const [botsRes, agentsRes] = await Promise.all([
+        const [botsRes, agentsRes, tenantsRes] = await Promise.all([
           OpenCarrierAPI.get('/api/bots'),
           OpenCarrierAPI.get('/api/agents'),
+          OpenCarrierAPI.get('/api/tenants').catch(() => []),
         ]);
         this.bots = botsRes.bots || [];
         this.agents = Array.isArray(agentsRes) ? agentsRes : (agentsRes.agents || []);
+        this.tenants = Array.isArray(tenantsRes) ? tenantsRes : [];
       } catch (e) {
         this.loadError = e.message || '加载失败';
       }
@@ -71,9 +77,14 @@ function botsPage() {
     // Computed helpers
     // ------------------------------------------------------------------
 
+    filteredBots() {
+      if (this.activePlatformFilter === 'all') return this.bots;
+      return this.bots.filter(b => (b.platform || 'other') === this.activePlatformFilter);
+    },
+
     botsByPlatform() {
       const groups = {};
-      for (const bot of this.bots) {
+      for (const bot of this.filteredBots()) {
         const p = bot.platform || 'other';
         if (!groups[p]) groups[p] = [];
         groups[p].push(bot);
@@ -117,10 +128,23 @@ function botsPage() {
 
     installState: {},
 
+    tenantName(tenantId) {
+      if (!tenantId) return '';
+      const t = this.tenants.find(x => x.id === tenantId);
+      return t ? t.name : tenantId.substring(0, 8);
+    },
+
     agentName(id) {
       if (!id) return null;
       const a = this.agents.find(x => x.id === id || x.name === id);
-      return a ? a.name : id.substring(0, 8);
+      if (!a) return id.substring(0, 8);
+      const tn = this.tenantName(a.tenant_id);
+      return tn ? a.name + ' (' + tn + ')' : a.name;
+    },
+
+    agentDisplayName(agent) {
+      const tn = this.tenantName(agent.tenant_id);
+      return tn ? agent.name + ' (' + tn + ')' : agent.name;
     },
 
     agentAvatar(id) {

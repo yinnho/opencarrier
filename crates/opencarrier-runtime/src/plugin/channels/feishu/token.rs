@@ -37,7 +37,7 @@ impl TenantTokenCache {
     }
 
     /// Get a valid tenant_access_token, refreshing if necessary.
-    pub fn get_token(&self) -> Result<String, String> {
+    pub async fn get_token(&self) -> Result<String, String> {
         // Check cached token
         {
             let guard = self.token.lock().unwrap();
@@ -48,13 +48,7 @@ impl TenantTokenCache {
             }
         }
 
-        // Need to refresh — do a blocking HTTP call.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("Failed to create token refresh runtime: {e}"))?;
-
-        rt.block_on(async { self.refresh().await })
+        self.refresh().await
     }
 
     /// Fetch a new tenant_access_token from Feishu API.

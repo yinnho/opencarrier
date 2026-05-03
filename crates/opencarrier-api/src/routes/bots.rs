@@ -9,7 +9,8 @@ use axum::response::IntoResponse;
 use axum::Json;
 use opencarrier_kernel::KernelHandle;
 use serde::Deserialize;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::routes::plugin_toml::*;
 use crate::routes::state::AppState;
@@ -169,6 +170,35 @@ fn scan_bots(
                     ),
                 );
             }
+            "weixin" => {
+                obj.insert(
+                    "ilink_user_id".into(),
+                    serde_json::Value::String(
+                        doc.get("ilink_user_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                );
+                obj.insert(
+                    "ilink_bot_id".into(),
+                    serde_json::Value::String(
+                        doc.get("ilink_bot_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                );
+                obj.insert(
+                    "bot_token".into(),
+                    serde_json::Value::String(
+                        doc.get("bot_token")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                );
+            }
             _ => {}
         }
 
@@ -198,23 +228,22 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
             let toml_path = plugin_dir.join("plugin.toml");
-            if !toml_path.exists() {
-                continue;
-            }
-
-            let Ok(content) = std::fs::read_to_string(&toml_path) else {
-                continue;
+            let platform = if toml_path.exists() {
+                let Ok(content) = std::fs::read_to_string(&toml_path) else {
+                    continue;
+                };
+                let Ok(doc) = content.parse::<toml::Value>() else {
+                    continue;
+                };
+                detect_platform(&doc)
+                    .first()
+                    .copied()
+                    .or_else(|| plugin_dir_to_platform(dir_name))
+                    .map(|p| p.to_string())
+            } else {
+                plugin_dir_to_platform(dir_name).map(|p| p.to_string())
             };
-            let Ok(doc) = content.parse::<toml::Value>() else {
-                continue;
-            };
-
-            let platforms = detect_platform(&doc);
-            let platform = platforms
-                .first()
-                .copied()
-                .or_else(|| plugin_dir_to_platform(dir_name));
-            let Some(platform) = platform else { continue };
+            let Some(ref platform) = platform else { continue };
 
             bots.extend(scan_bots(&plugin_dir, dir_name, platform));
         }
@@ -396,55 +425,543 @@ pub async fn wecom_smartbot_poll(Query(query): Query<PollQuery>) -> impl IntoRes
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/bots — create a bot (write to <uuid>/bot.toml)
+// Shared in-memory store for device-auth flows
 // ---------------------------------------------------------------------------
 
-pub async fn create_bot(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
+#[derive(Clone)]
+#[allow(dead_code)]
+struct DeviceAuthSession {
+    device_code: String,
+    auth_url: String,
+    expires_at: std::time::Instant,
+    platform: String,
+    // stored credentials after poll success
+    credentials: Option<serde_json::Value>,
+}
+
+static DEVICE_AUTH_SESSIONS: LazyLock<Mutex<HashMap<String, DeviceAuthSession>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn generate_session_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn cleanup_expired_sessions() {
+    let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+    let now = std::time::Instant::now();
+    sessions.retain(|_, v| v.expires_at > now);
+}
+
+// ---------------------------------------------------------------------------
+// Feishu device-auth: POST /api/bots/feishu/device-auth
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct FeishuDeviceAuthBeginBody {
+    #[serde(default)]
+    brand: String,
+}
+
+pub async fn feishu_device_auth_begin(
+    Json(body): Json<FeishuDeviceAuthBeginBody>,
 ) -> impl IntoResponse {
-    let tenant_name = match body.get("name").and_then(|v| v.as_str()) {
-        Some(n) => match channel_sanitize_name(n) {
-            Some(s) => s,
-            None => {
+    cleanup_expired_sessions();
+
+    let brand = if body.brand.trim().is_empty() {
+        "feishu"
+    } else {
+        &body.brand
+    };
+
+    let base_url = if brand == "lark" {
+        "https://accounts.larksuite.com"
+    } else {
+        "https://accounts.feishu.cn"
+    };
+
+    let http = reqwest::Client::new();
+
+    // Step 1: init
+    let init_url = format!("{}/oauth/v1/app/registration", base_url);
+    let init_res = match http
+        .post(&init_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body("action=init")
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(e) => {
                 return (
-                    StatusCode::BAD_REQUEST,
-                    Json(
-                        serde_json::json!({ "error": "名称无效：仅支持字母、数字、连字符、下划线（最多64字符）" }),
-                    ),
-                );
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({"error": format!("飞书 init 响应解析失败: {}", e) })),
+                )
             }
         },
-        None => {
+        Err(e) => {
             return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "缺少 name 字段" })),
-            );
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("飞书 init 请求失败: {}", e) })),
+            )
         }
     };
 
-    let platform = body.get("platform").and_then(|v| v.as_str()).unwrap_or("");
-    let plugin_dir_name = match platform_plugin_dir(platform) {
-        Some(d) => d,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "不支持的平台，支持: wecom, feishu, dingtalk" })),
-            );
-        }
-    };
-
-    let home = &state.kernel.config.home_dir;
-    let plugin_dir = home.join("plugins").join(plugin_dir_name);
-
-    if !plugin_dir.exists() {
+    let nonce = init_res
+        .get("nonce")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if nonce.is_empty() {
         return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "插件目录不存在" })),
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": "飞书 init 未返回 nonce" })),
         );
     }
 
-    // Build bot.toml fields
+    // Step 2: begin
+    let begin_body = format!(
+        "action=begin&nonce={}&archetype=PersonalAgent&auth_method=client_secret&request_user_info=open_id",
+        nonce
+    );
+    let begin_res = match http
+        .post(&init_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(begin_body)
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({"error": format!("飞书 begin 响应解析失败: {}", e) })),
+                )
+            }
+        },
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("飞书 begin 请求失败: {}", e) })),
+            )
+        }
+    };
+
+    let device_code = begin_res
+        .get("device_code")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let auth_url = begin_res
+        .get("verification_uri_complete")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if device_code.is_empty() || auth_url.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": "飞书 begin 未返回 device_code 或 auth_url", "raw": begin_res })),
+        );
+    }
+
+    let session_id = generate_session_id();
+    let expires_in = begin_res
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(240u64);
+
+    let session = DeviceAuthSession {
+        device_code: device_code.to_string(),
+        auth_url: auth_url.to_string(),
+        expires_at: std::time::Instant::now() + std::time::Duration::from_secs(expires_in),
+        platform: "feishu".to_string(),
+        credentials: None,
+    };
+
+    {
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        sessions.insert(session_id.clone(), session);
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session_id": session_id,
+            "device_code": device_code,
+            "auth_url": auth_url,
+            "expires_in": expires_in,
+        })),
+    )
+}
+
+#[derive(Deserialize)]
+pub struct FeishuDeviceAuthPollQuery {
+    session_id: String,
+}
+
+pub async fn feishu_device_auth_poll(
+    Query(query): Query<FeishuDeviceAuthPollQuery>,
+) -> impl IntoResponse {
+    cleanup_expired_sessions();
+
+    let session = {
+        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        match sessions.get(&query.session_id) {
+            Some(s) => s.clone(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "会话不存在或已过期" })),
+                )
+            }
+        }
+    };
+
+    if let Some(creds) = session.credentials {
+        return (StatusCode::OK, Json(creds));
+    }
+
+    if std::time::Instant::now() > session.expires_at {
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        sessions.remove(&query.session_id);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "expired" })),
+        );
+    }
+
+    let base_url = if session.platform == "lark" {
+        "https://accounts.larksuite.com"
+    } else {
+        "https://accounts.feishu.cn"
+    };
+
+    let http = reqwest::Client::new();
+    let poll_url = format!("{}/oauth/v1/app/registration", base_url);
+    let poll_body = format!("action=poll&device_code={}", session.device_code);
+
+    let poll_res = match http
+        .post(&poll_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(poll_body)
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(_) => {
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({"status": "pending" })),
+                )
+            }
+        },
+        Err(_) => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "pending" })),
+            )
+        }
+    };
+
+    let status = poll_res
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if status == "SUCCESS" {
+        let app_id = poll_res
+            .get("app_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let app_secret = poll_res
+            .get("app_secret")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if !app_id.is_empty() && !app_secret.is_empty() {
+            let result = serde_json::json!({
+                "status": "success",
+                "app_id": app_id,
+                "app_secret": app_secret,
+            });
+
+            let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+            if let Some(s) = sessions.get_mut(&query.session_id) {
+                s.credentials = Some(result.clone());
+            }
+
+            return (StatusCode::OK, Json(result));
+        }
+    }
+
+    if status == "EXPIRED" || status == "FAIL" {
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        sessions.remove(&query.session_id);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "expired" })),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "pending" })),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// DingTalk device-auth: POST /api/bots/dingtalk/device-auth
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct DingtalkDeviceAuthPollQuery {
+    session_id: String,
+}
+
+pub async fn dingtalk_device_auth_begin() -> impl IntoResponse {
+    cleanup_expired_sessions();
+
+    let http = reqwest::Client::new();
+    let base_url = "https://oapi.dingtalk.com";
+
+    // Step 1: init
+    let init_res = match http
+        .post(format!("{}/app/registration/init", base_url))
+        .json(&serde_json::json!({"source": "opencarrier"}))
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({"error": format!("钉钉 init 响应解析失败: {}", e) })),
+                )
+            }
+        },
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("钉钉 init 请求失败: {}", e) })),
+            )
+        }
+    };
+
+    let nonce = init_res
+        .get("nonce")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if nonce.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": "钉钉 init 未返回 nonce" })),
+        );
+    }
+
+    // Step 2: begin
+    let begin_res = match http
+        .post(format!("{}/app/registration/begin", base_url))
+        .json(&serde_json::json!({"nonce": nonce}))
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({"error": format!("钉钉 begin 响应解析失败: {}", e) })),
+                )
+            }
+        },
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("钉钉 begin 请求失败: {}", e) })),
+            )
+        }
+    };
+
+    let device_code = begin_res
+        .get("device_code")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let auth_url = begin_res
+        .get("verification_uri_complete")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if device_code.is_empty() || auth_url.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": "钉钉 begin 未返回 device_code 或 auth_url", "raw": begin_res })),
+        );
+    }
+
+    let session_id = generate_session_id();
+    let expires_in = begin_res
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(7200u64);
+
+    let session = DeviceAuthSession {
+        device_code: device_code.to_string(),
+        auth_url: auth_url.to_string(),
+        expires_at: std::time::Instant::now() + std::time::Duration::from_secs(expires_in),
+        platform: "dingtalk".to_string(),
+        credentials: None,
+    };
+
+    {
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        sessions.insert(session_id.clone(), session);
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session_id": session_id,
+            "device_code": device_code,
+            "auth_url": auth_url,
+            "expires_in": expires_in,
+        })),
+    )
+}
+
+pub async fn dingtalk_device_auth_poll(
+    Query(query): Query<DingtalkDeviceAuthPollQuery>,
+) -> impl IntoResponse {
+    cleanup_expired_sessions();
+
+    let session = {
+        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        match sessions.get(&query.session_id) {
+            Some(s) => s.clone(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "会话不存在或已过期" })),
+                )
+            }
+        }
+    };
+
+    if let Some(creds) = session.credentials {
+        return (StatusCode::OK, Json(creds));
+    }
+
+    if std::time::Instant::now() > session.expires_at {
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        sessions.remove(&query.session_id);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "expired" })),
+        );
+    }
+
+    let http = reqwest::Client::new();
+    let poll_res = match http
+        .post("https://oapi.dingtalk.com/app/registration/poll")
+        .json(&serde_json::json!({"device_code": session.device_code}))
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(_) => {
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({"status": "pending" })),
+                )
+            }
+        },
+        Err(_) => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "pending" })),
+            )
+        }
+    };
+
+    let status = poll_res
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_uppercase();
+
+    if status == "SUCCESS" {
+        let client_id = poll_res
+            .get("client_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let client_secret = poll_res
+            .get("client_secret")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if !client_id.is_empty() && !client_secret.is_empty() {
+            let result = serde_json::json!({
+                "status": "success",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            });
+
+            let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+            if let Some(s) = sessions.get_mut(&query.session_id) {
+                s.credentials = Some(result.clone());
+            }
+
+            return (StatusCode::OK, Json(result));
+        }
+    }
+
+    if status == "EXPIRED" || status == "FAIL" {
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        sessions.remove(&query.session_id);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "expired" })),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "pending" })),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/bots — create a bot (write to <uuid>/bot.toml)
+// ---------------------------------------------------------------------------
+
+/// Extract the platform-specific user id used for deduplication.
+fn platform_user_id(platform: &str, body: &serde_json::Value) -> Option<String> {
+    match platform {
+        "weixin" => body
+            .get("ilink_user_id")
+            .or_else(|| body.get("bot_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        "wecom" => body
+            .get("bot_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        "feishu" => body
+            .get("app_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        "dingtalk" => body
+            .get("client_id")
+            .or_else(|| body.get("app_key"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+/// Build bot.toml fields from request body for a given platform.
+fn build_bot_fields(platform: &str, body: &serde_json::Value, tenant_name: &str) -> toml::value::Table {
     let mut bot_fields = toml::value::Table::new();
     let mode = body
         .get("mode")
@@ -511,8 +1028,125 @@ pub async fn create_bot(
                 }
             }
         }
+        "weixin" => {
+            if let Some(v) = body.get("ilink_user_id").and_then(|v| v.as_str()) {
+                if !v.is_empty() {
+                    bot_fields.insert("ilink_user_id".into(), toml::Value::String(v.to_string()));
+                }
+            }
+            if let Some(v) = body.get("bot_token").and_then(|v| v.as_str()) {
+                if !v.is_empty() {
+                    bot_fields.insert("bot_token".into(), toml::Value::String(v.to_string()));
+                }
+            }
+        }
         _ => {}
     }
+    bot_fields
+}
+
+pub async fn create_bot(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let tenant_name = match body.get("name").and_then(|v| v.as_str()) {
+        Some(n) => match channel_sanitize_name(n) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({ "error": "名称无效：仅支持字母、数字、连字符、下划线（最多64字符）" }),
+                    ),
+                );
+            }
+        },
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "缺少 name 字段" })),
+            );
+        }
+    };
+
+    let platform = body.get("platform").and_then(|v| v.as_str()).unwrap_or("");
+    let plugin_dir_name = match platform_plugin_dir(platform) {
+        Some(d) => d,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "不支持的平台，支持: wecom, feishu, dingtalk, weixin" })),
+            );
+        }
+    };
+
+    let home = &state.kernel.config.home_dir;
+    let plugin_dir = home.join("plugins").join(plugin_dir_name);
+
+    if !plugin_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(&plugin_dir) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("创建插件目录失败: {e}") })),
+            );
+        }
+    }
+
+    let puid = platform_user_id(platform, &body);
+
+    // ── Deduplication: if same (platform, platform_user_id) exists, update it ──
+    if let Some(ref uid) = puid {
+        if !uid.is_empty() {
+        for existing in scan_bots(&plugin_dir, plugin_dir_name, platform) {
+            let existing_puid = match platform {
+                "weixin" => existing
+                    .get("ilink_user_id")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| existing.get("ilink_bot_id").and_then(|v| v.as_str())),
+                "wecom" => existing.get("bot_id").and_then(|v| v.as_str()),
+                "feishu" => existing.get("app_id").and_then(|v| v.as_str()),
+                "dingtalk" => existing
+                    .get("app_key")
+                    .and_then(|v| v.as_str()),
+                _ => None,
+            };
+            if existing_puid == Some(uid.as_str()) {
+                let existing_id = existing
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let bot_dir = plugin_dir.join("bot").join(&existing_id);
+                let bot_toml_path = bot_dir.join("bot.toml");
+
+                // Merge new fields into existing bot.toml
+                return match update_bot_toml(&bot_toml_path, |table| {
+                    let new_fields = build_bot_fields(platform, &body, &tenant_name);
+                    for (k, v) in new_fields {
+                        table.insert(k, v);
+                    }
+                    table.insert("name".into(), toml::Value::String(tenant_name.to_string()));
+                }) {
+                    Ok(()) => (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "status": "updated",
+                            "message": "机器人已更新",
+                            "bot_id": existing_id,
+                        })),
+                    ),
+                    Err(e) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": e })),
+                    ),
+                };
+            }
+        }
+        }
+    }
+
+    // Build bot.toml fields
+    let mut bot_fields = build_bot_fields(platform, &body, &tenant_name);
 
     // bind_agent — resolve agent name to UUID
     if let Some(v) = body.get("bind_agent").and_then(|v| v.as_str()) {
@@ -538,16 +1172,6 @@ pub async fn create_bot(
     // Generate UUID for the bot
     let bot_uuid = uuid::Uuid::new_v4().to_string();
     let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
-
-    // Check duplicate name
-    for existing in scan_bots(&plugin_dir, plugin_dir_name, platform) {
-        if existing.get("tenant_name").and_then(|v| v.as_str()) == Some(tenant_name.as_str()) {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": format!("机器人 '{tenant_name}' 已存在") })),
-            );
-        }
-    }
 
     // Create bot directory and write bot.toml
     if let Err(e) = std::fs::create_dir_all(&bot_dir) {
@@ -768,6 +1392,63 @@ pub async fn bind_bot(
         };
     }
 
+    // Fallback: check weixin-tokens for iLink bots
+    {
+        let token_dir = home.join("weixin-tokens");
+        if token_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&token_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                        continue;
+                    }
+                    let content = match std::fs::read_to_string(&path) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    let mut tf: serde_json::Value = match serde_json::from_str(&content) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let user_id = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
+                    if user_id != bot_uuid {
+                        continue;
+                    }
+                    // Found the iLink bot — update bind_agent
+                    tf["bind_agent"] = serde_json::Value::String(agent_uuid.clone());
+                    if let Ok(updated) = serde_json::to_string_pretty(&tf) {
+                        let _ = std::fs::write(&path, updated);
+                    }
+                    // Add dynamic bridge binding
+                    let tenant_name = tf.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    if !tenant_name.is_empty() {
+                        state.kernel.set_default_plugin_tenant(&agent_uuid, &bot_uuid);
+                        if let Some(ref pm) = state.plugin_manager {
+                            let pm = pm.lock().await;
+                            pm.add_channel_binding("weixin", &bot_uuid, &agent_uuid);
+                            pm.add_channel_binding("weixin", tenant_name, &agent_uuid);
+                            pm.map_channel_tenant("weixin", tenant_name, &bot_uuid);
+                            tracing::info!(
+                                platform = "weixin",
+                                tenant = %tenant_name,
+                                agent = %agent_uuid,
+                                "Dynamic bridge binding added (iLink)"
+                            );
+                        }
+                    }
+                    return (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "status": "bound",
+                            "message": "分身已绑定",
+                            "bind_agent": agent_uuid,
+                        })),
+                    );
+                }
+            }
+        }
+    }
+
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({ "error": "机器人不存在" })),
@@ -821,6 +1502,42 @@ pub async fn unbind_bot(
                 Json(serde_json::json!({ "error": e })),
             ),
         };
+    }
+
+    // Fallback: check weixin-tokens for iLink bots
+    let token_dir = home.join("weixin-tokens");
+    if token_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&token_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                let content = match std::fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let mut tf: serde_json::Value = match serde_json::from_str(&content) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let user_id = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
+                if user_id != bot_uuid {
+                    continue;
+                }
+                tf.as_object_mut().map(|o| o.remove("bind_agent"));
+                if let Ok(updated) = serde_json::to_string_pretty(&tf) {
+                    let _ = std::fs::write(&path, updated);
+                }
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "status": "unbound",
+                        "message": "分身已解绑",
+                    })),
+                );
+            }
+        }
     }
 
     (
@@ -1000,6 +1717,22 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
         .route(
             "/api/bots/wecom/smartbot/poll",
             routing::get(wecom_smartbot_poll),
+        )
+        .route(
+            "/api/bots/feishu/device-auth",
+            routing::post(feishu_device_auth_begin),
+        )
+        .route(
+            "/api/bots/feishu/device-auth/poll",
+            routing::get(feishu_device_auth_poll),
+        )
+        .route(
+            "/api/bots/dingtalk/device-auth",
+            routing::post(dingtalk_device_auth_begin),
+        )
+        .route(
+            "/api/bots/dingtalk/device-auth/poll",
+            routing::get(dingtalk_device_auth_poll),
         )
         .route("/api/bots/{bot_uuid}", routing::get(get_bot).put(update_bot).delete(delete_bot))
         .route(

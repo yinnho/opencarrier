@@ -123,80 +123,110 @@
 
     <!-- Page: Bots -->
     <template x-if="page === 'bots'">
-      <div x-data="botsPage" x-init="loadData()">
-        <div class="page-header">
-          <h2>机器人</h2>
-          <div class="flex items-center gap-2">
-            <button class="btn btn-primary" @click="openCreateModal()">+ 创建机器人</button>
+      <div x-data="botsPage" x-init="loadData()" class="bots-page">
+        <!-- Toolbar: filter pills + create button -->
+        <div class="bots-toolbar">
+          <div class="bots-toolbar-left">
+            <button class="bots-filter-pill" :class="activePlatformFilter === 'all' ? 'active' : ''" @click="activePlatformFilter = 'all'">全部</button>
+            <button class="bots-filter-pill" :class="activePlatformFilter === 'weixin' ? 'active active-weixin' : ''" @click="activePlatformFilter = 'weixin'">微信</button>
+            <button class="bots-filter-pill" :class="activePlatformFilter === 'wecom' ? 'active active-wecom' : ''" @click="activePlatformFilter = 'wecom'">企业微信</button>
+            <button class="bots-filter-pill" :class="activePlatformFilter === 'feishu' ? 'active active-feishu' : ''" @click="activePlatformFilter = 'feishu'">飞书</button>
+            <button class="bots-filter-pill" :class="activePlatformFilter === 'dingtalk' ? 'active active-dingtalk' : ''" @click="activePlatformFilter = 'dingtalk'">钉钉</button>
+          </div>
+          <button class="btn btn-primary" @click="openCreateModal()">+ 创建机器人</button>
+        </div>
+
+        <!-- Micro stats -->
+        <div class="bots-stats" x-show="!loading && !loadError && bots.length > 0">
+          <div class="bots-stat">
+            <span class="bots-stat-value" x-text="bots.length"></span>
+            <span class="bots-stat-label">机器人</span>
+          </div>
+          <div class="bots-stat">
+            <span class="bots-stat-value" x-text="bots.filter(b => b.active).length"></span>
+            <span class="bots-stat-label">在线</span>
+          </div>
+          <div class="bots-stat">
+            <span class="bots-stat-value" x-text="bots.filter(b => b.bind_agent).length"></span>
+            <span class="bots-stat-label">已绑定</span>
+          </div>
+          <div class="bots-stat">
+            <span class="bots-stat-value" x-text="Object.keys(botsByPlatform()).length"></span>
+            <span class="bots-stat-label">平台</span>
           </div>
         </div>
-        <div class="page-body">
-          <!-- Loading -->
-          <div x-show="loading" class="loading-skeleton">
-            <div class="skeleton-line" style="width:60%"></div>
-            <div class="skeleton-line" style="width:40%"></div>
-          </div>
-          <!-- Error -->
-          <div x-show="!loading && loadError" class="error-state">
-            <p x-text="loadError"></p>
-          </div>
-          <!-- Stats row (dynamic: only show platforms with bots) -->
-          <div x-show="!loading && !loadError" class="stats-row" style="margin-bottom:20px">
-            <template x-for="[platform, platformBots] in Object.entries(botsByPlatform())" :key="platform">
-              <div class="stat-card">
-                <div class="stat-label" x-text="platformLabel(platform)"></div>
-                <div class="stat-value" x-text="platformBots.length"></div>
+
+        <!-- Loading skeleton -->
+        <div x-show="loading" class="bots-skeleton">
+          <div class="skeleton bots-skeleton-card"></div>
+          <div class="skeleton bots-skeleton-card"></div>
+          <div class="skeleton bots-skeleton-card"></div>
+          <div class="skeleton bots-skeleton-card"></div>
+          <div class="skeleton bots-skeleton-card"></div>
+          <div class="skeleton bots-skeleton-card"></div>
+        </div>
+
+        <!-- Error -->
+        <div x-show="!loading && loadError" class="error-state">
+          <p x-text="loadError"></p>
+        </div>
+
+        <!-- Bot sections by platform -->
+        <div x-show="!loading && !loadError">
+          <template x-for="[platform, platformBots] in Object.entries(botsByPlatform())" :key="platform">
+            <div class="bots-section">
+              <div class="bots-section-header">
+                <span class="bots-section-icon" x-html="platformIcon(platform)"></span>
+                <span class="bots-section-title" x-text="platformLabel(platform)"></span>
+                <span class="bots-section-count" x-text="platformBots.length"></span>
               </div>
-            </template>
-          </div>
-          <!-- Bot cards by platform -->
-          <div x-show="!loading && !loadError">
-            <template x-for="[platform, platformBots] in Object.entries(botsByPlatform())" :key="platform">
-              <div style="margin-bottom:24px">
-                <h3 style="margin-bottom:12px;font-size:15px;font-weight:600;opacity:0.8">
-                  <span x-html="platformIcon(platform)"></span>
-                  <span x-text="platformLabel(platform)" style="margin-left:6px;vertical-align:middle"></span>
-                  <span style="opacity:0.5;font-weight:400" x-text="'(' + platformBots.length + ')'"></span>
-                </h3>
-                <div class="bot-cards-grid">
-                  <template x-for="bot in platformBots" :key="bot.id">
-                    <div class="bot-card">
-                      <div class="bot-card-header">
-                        <div>
-                          <div class="bot-card-name" x-text="bot.tenant_name"></div>
-                          <div style="font-size:12px;opacity:0.6;margin-top:2px">
-                            <span x-text="modeLabel(bot.mode)"></span>
-                            <span x-show="bot.bot_id" style="margin-left:8px;opacity:0.5" x-text="'ID: ' + bot.bot_id.substring(0,12) + '...'"></span>
-                          </div>
-                        </div>
-                        <div class="bot-card-actions">
-                          <button class="btn btn-sm btn-ghost" @click="openEditModal(bot)" title="编辑">编辑</button>
-                          <button class="btn btn-sm btn-ghost" @click="deleteBot(bot)" title="删除">删除</button>
-                        </div>
+              <div class="bot-cards-grid">
+                <template x-for="bot in platformBots" :key="bot.id">
+                  <div class="bot-card" :class="'platform-' + (bot.platform || 'other')">
+                    <div class="bot-card-header">
+                      <div class="bot-card-name" x-text="bot.tenant_name"></div>
+                      <span class="bot-card-status" :class="bot.active ? 'active' : 'inactive'" x-text="bot.active ? '在线' : '离线'"></span>
+                    </div>
+                    <div class="bot-card-body">
+                      <div class="bot-card-meta">
+                        <span class="bot-mode-badge" x-text="modeLabel(bot.mode)"></span>
+                        <span class="bot-card-meta-sep">·</span>
+                        <span x-text="bot.bot_id ? bot.bot_id.substring(0, 12) + (bot.bot_id.length > 12 ? '...' : '') : '无 ID'"></span>
                       </div>
-                      <div class="bot-card-body">
-                        <div class="bot-bind-row">
-                          <span style="font-size:13px;opacity:0.7">绑定分身:</span>
-                          <select class="input-sm" style="flex:1;min-width:120px"
-                            x-model="bot._selectedAgent"
-                            @change="bot._selectedAgent ? bindAgent(bot, bot._selectedAgent) : unbindAgent(bot)">
-                            <option value="">未绑定</option>
-                            <template x-for="a in agents" :key="a.id">
-                              <option :value="a.id" :selected="bot.bind_agent === a.id" x-text="a.name"></option>
-                            </template>
-                          </select>
-                        </div>
+                      <div class="bot-card-bind">
+                        <span class="bot-card-bind-label">绑定:</span>
+                        <template x-if="bot.bind_agent">
+                          <span class="bot-card-bind-value" x-text="agentName(bot.bind_agent)"></span>
+                        </template>
+                        <span x-show="!bot.bind_agent" class="bot-card-bind-none">未绑定</span>
                       </div>
                     </div>
-                  </template>
-                </div>
+                    <div class="bot-card-actions">
+                      <select class="input-sm" style="flex:1;min-width:100px;background:transparent;border-color:var(--border-subtle)"
+                        x-model="bot._selectedAgent"
+                        @change="bot._selectedAgent ? bindAgent(bot, bot._selectedAgent) : unbindAgent(bot)">
+                        <option value="">绑定分身...</option>
+                        <template x-for="a in agents" :key="a.id">
+                          <option :value="a.id" :selected="bot.bind_agent === a.id" x-text="agentDisplayName(a)"></option>
+                        </template>
+                      </select>
+                      <button class="btn btn-ghost btn-sm" @click="openEditModal(bot)">编辑</button>
+                      <button class="btn btn-danger btn-sm" @click="deleteBot(bot)">删除</button>
+                    </div>
+                  </div>
+                </template>
               </div>
-            </template>
-            <!-- Empty state -->
-            <div x-show="bots.length === 0" class="empty-state" style="text-align:center;padding:60px 20px;opacity:0.6">
-              <p style="font-size:16px;margin-bottom:8px">还没有机器人</p>
-              <p style="font-size:13px">点击右上角"创建机器人"添加第一个</p>
             </div>
+          </template>
+
+          <!-- Empty state -->
+          <div x-show="bots.length === 0" class="bots-empty">
+            <div class="bots-empty-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div class="bots-empty-title">还没有机器人</div>
+            <div class="bots-empty-subtitle">点击"创建机器人"添加第一个</div>
+            <button class="btn btn-primary btn-sm" @click="openCreateModal()">创建机器人</button>
           </div>
         </div>
 
@@ -283,7 +313,7 @@
                   <select class="input" x-model="botForm.bind_agent" style="width:100%">
                     <option value="">不绑定</option>
                     <template x-for="a in agents" :key="a.id">
-                      <option :value="a.name" x-text="a.name"></option>
+                      <option :value="a.name" x-text="agentDisplayName(a)"></option>
                     </template>
                   </select>
                 </div>
@@ -316,7 +346,7 @@
                   <select class="input" x-model="botForm.bind_agent" style="width:100%">
                     <option value="">不绑定</option>
                     <template x-for="a in agents" :key="a.id">
-                      <option :value="a.name" x-text="a.name"></option>
+                      <option :value="a.name" x-text="agentDisplayName(a)"></option>
                     </template>
                   </select>
                 </div>
@@ -334,7 +364,7 @@
                   <select class="input" x-model="botForm.bind_agent" style="width:100%">
                     <option value="">不绑定</option>
                     <template x-for="a in agents" :key="a.id">
-                      <option :value="a.name" x-text="a.name"></option>
+                      <option :value="a.name" x-text="agentDisplayName(a)"></option>
                     </template>
                   </select>
                 </div>

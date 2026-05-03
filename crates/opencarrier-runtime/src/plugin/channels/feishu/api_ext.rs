@@ -26,7 +26,7 @@ pub async fn feishu_api(
     query: Option<&Value>,
     body: Option<&Value>,
 ) -> Result<Value, String> {
-    let token = token_cache.get_token()?;
+    let token = token_cache.get_token().await?;
     let base = token_cache.api_base().to_string();
     let url = format!("{base}/{path}");
 

@@ -196,6 +196,8 @@ const WEBCHAT_HTML: &str = concat!(
     "\n",
     include_str!("../static/css/components.css"),
     "\n",
+    include_str!("../static/css/bots.css"),
+    "\n",
     include_str!("../static/vendor/github-dark.min.css"),
     "\n",
     include_str!("../static/vendor/katex.min.css"),

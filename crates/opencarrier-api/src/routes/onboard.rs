@@ -17,16 +17,24 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
 pub struct OnboardRequest {
     #[allow(dead_code)]
     source: Option<String>,
+    /// Optional stable user identifier (fingerprint or platform user id).
+    /// If provided, used as tenant_name; otherwise a random name is generated.
+    tenant_name: Option<String>,
 }
 
 /// POST /api/onboard — create a new tenant with default agents.
 /// Public endpoint (no auth required).
 pub async fn onboard(
     State(state): State<Arc<AppState>>,
-    Json(_req): Json<OnboardRequest>,
+    Json(req): Json<OnboardRequest>,
 ) -> impl IntoResponse {
-    let suffix = &uuid::Uuid::new_v4().to_string()[..8];
-    let tenant_name = format!("user_{suffix}");
+    let tenant_name = req
+        .tenant_name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            let suffix = &uuid::Uuid::new_v4().to_string()[..8];
+            format!("user_{suffix}")
+        });
     let tenant_password = uuid::Uuid::new_v4().to_string();
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -44,6 +52,31 @@ pub async fn onboard(
     };
 
     let tenant_store = state.kernel.memory.tenant();
+
+    // Check if tenant already exists by name — reuse instead of creating duplicate
+    if let Ok(Some(existing)) = tenant_store.get_tenant_by_name(&tenant_name) {
+        let existing_id = existing.id.clone();
+        let api_key = state.kernel.config.api_key.trim().to_string();
+        let secret = if !api_key.is_empty() {
+            api_key
+        } else {
+            state.kernel.config.auth.password_hash.clone()
+        };
+        let session_token =
+            session_auth::create_session_token(Some(&existing_id), "tenant", &tenant_name, &secret, 24);
+        tracing::info!("Onboard reused existing tenant {} ({})", tenant_name, existing_id);
+        return (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "tenant_id": existing_id,
+                "tenant_name": tenant_name,
+                "session_token": session_token,
+                "existing": true,
+            })),
+        );
+    }
+
     if let Err(e) = tenant_store.create_tenant(&entry) {
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,

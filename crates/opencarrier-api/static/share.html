@@ -32,18 +32,45 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .btn-small:disabled{background:#ccc;cursor:not-allowed}
 .btn-small.bound{background:#e8f8ef;color:#07c160;cursor:default}
 
-/* ── Phase 2: WeChat Auth ── */
-.auth{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:#fff}
+/* ── Phase 2: Platform Auth ── */
+.auth{align-items:center;justify-content:flex-start;padding:32px 24px;text-align:center;background:#fff}
 .auth h2{font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
-.auth .sub{font-size:14px;color:#888;margin-bottom:28px}
-.qr-wrap{background:#fff;border-radius:16px;padding:24px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:inline-block;margin-bottom:20px}
+.auth .sub{font-size:14px;color:#888;margin-bottom:20px}
+
+/* Platform tabs */
+.platform-tabs{display:flex;gap:8px;justify-content:center;margin-bottom:24px;flex-wrap:wrap}
+.platform-tab{padding:8px 18px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;border:2px solid transparent;background:#f0f0f0;color:#666;transition:all .2s;display:flex;align-items:center;gap:6px}
+.platform-tab:hover{background:#e8e8e8}
+.platform-tab.active{background:#07c160;color:#fff;border-color:#07c160}
+.platform-tab[data-platform="feishu"].active{background:#3370ff;border-color:#3370ff}
+.platform-tab[data-platform="dingtalk"].active{background:#0089ff;border-color:#0089ff}
+.platform-tab .dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:.5}
+.platform-tab.active .dot{opacity:1}
+
+/* Auth panels */
+.auth-panel{display:none;width:100%;max-width:360px;margin:0 auto}
+.auth-panel.active{display:block}
+.qr-wrap{background:#fff;border-radius:16px;padding:24px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:inline-block;margin-bottom:16px}
 .qr-wrap img{width:200px;height:200px;border-radius:8px;display:block}
 .qr-wrap canvas{border-radius:8px;display:block}
 .qr-hint{font-size:13px;color:#999;display:flex;align-items:center;justify-content:center;gap:6px}
-.qr-hint .dot{width:8px;height:8px;border-radius:50%;background:#07c160;animation:pulse 1.5s infinite}
+.qr-hint .pulse-dot{width:8px;height:8px;border-radius:50%;background:#07c160;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .auth-success{color:#07c160;font-size:16px;font-weight:600}
 .auth-success .check{font-size:48px;margin-bottom:8px;display:block}
+.auth-link{display:inline-block;margin:12px 0;padding:12px 20px;background:#f5f5f5;border-radius:12px;color:#333;font-size:14px;text-decoration:none;word-break:break-all;max-width:100%}
+.auth-link:hover{background:#eee}
+.btn-auth{display:inline-block;background:#07c160;color:#fff;border:none;border-radius:24px;padding:14px 36px;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;margin:8px 0}
+.btn-auth:hover{transform:translateY(-1px)}
+.btn-auth:disabled{background:#ccc;cursor:not-allowed;transform:none}
+.btn-auth.feishu{background:#3370ff}
+.btn-auth.dingtalk{background:#0089ff}
+
+/* Platform-specific colors for status */
+.status-feishu .pulse-dot{background:#3370ff}
+.status-dingtalk .pulse-dot{background:#0089ff}
+.status-wecom .pulse-dot{background:#07c160}
+.status-weixin .pulse-dot{background:#07c160}
 
 /* ── Phase 3: Hub Selection ── */
 .hub{background:#f8faf9}
@@ -128,26 +155,85 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 <div id="p1" class="phase landing active">
   <div class="logo">🤖</div>
   <h1>Open<span>Carrier</span></h1>
-  <p class="tagline">你的专属 AI 助理，一个扫码就能拥有</p>
+  <p class="tagline">你的专属 AI 助理，扫码就能拥有</p>
   <div class="features">
     <div class="feat"><div class="icon">💬</div><div><h3>智能对话</h3><p>理解你的需求，自然流畅地交流</p></div></div>
     <div class="feat"><div class="icon">📚</div><div><h3>知识管理</h3><p>自动学习并记住你的偏好和知识</p></div></div>
-    <div class="feat"><div class="icon">📱</div><div><h3>多平台支持</h3><p>微信、企业微信、飞书，随处可用</p></div></div>
+    <div class="feat"><div class="icon">📱</div><div><h3>多平台支持</h3><p>微信、企业微信、飞书、钉钉，随处可用</p></div></div>
   </div>
   <button class="btn-primary" onclick="startAuth()">免费获取你的 AI 助理</button>
 </div>
 
-<!-- === Phase 2: WeChat Auth === -->
+<!-- === Phase 2: Platform Auth === -->
 <div id="p2" class="phase auth">
-  <h2>微信扫码授权</h2>
-  <p class="sub">用微信扫一扫，快速创建你的专属助理</p>
-  <div id="qr-area">
-    <div class="qr-wrap"><div id="qr-img"></div></div>
-    <p class="qr-hint" id="qr-hint"><span class="dot"></span>请用微信扫描二维码</p>
+  <h2>选择平台并授权</h2>
+  <p class="sub">扫码或点击授权，自动创建你的专属助理</p>
+
+  <!-- Platform tabs -->
+  <div class="platform-tabs">
+    <button class="platform-tab active" data-platform="weixin" onclick="switchPlatform('weixin')">
+      <span class="dot"></span>微信
+    </button>
+    <button class="platform-tab" data-platform="wecom" onclick="switchPlatform('wecom')">
+      <span class="dot"></span>企业微信
+    </button>
+    <button class="platform-tab" data-platform="feishu" onclick="switchPlatform('feishu')">
+      <span class="dot"></span>飞书
+    </button>
+    <button class="platform-tab" data-platform="dingtalk" onclick="switchPlatform('dingtalk')">
+      <span class="dot"></span>钉钉
+    </button>
   </div>
-  <div id="auth-success" class="auth-success hidden">
-    <span class="check">✅</span>
-    <p>授权成功</p>
+
+  <!-- WeChat panel -->
+  <div class="auth-panel active" id="panel-weixin">
+    <div id="weixin-qr-area">
+      <div class="qr-wrap"><div id="weixin-qr-img"></div></div>
+      <p class="qr-hint status-weixin" id="weixin-hint"><span class="pulse-dot"></span>请用微信扫描二维码</p>
+    </div>
+    <div id="weixin-success" class="auth-success hidden">
+      <span class="check">✅</span>
+      <p>微信授权成功</p>
+    </div>
+  </div>
+
+  <!-- WeCom panel -->
+  <div class="auth-panel" id="panel-wecom">
+    <div id="wecom-qr-area">
+      <div class="qr-wrap"><div id="wecom-qr-img"></div></div>
+      <p class="qr-hint status-wecom" id="wecom-hint"><span class="pulse-dot"></span>请用企业微信扫描或点击授权</p>
+      <a href="#" class="auth-link hidden" id="wecom-auth-link" target="_blank"></a>
+    </div>
+    <div id="wecom-success" class="auth-success hidden">
+      <span class="check">✅</span>
+      <p>企业微信授权成功</p>
+    </div>
+  </div>
+
+  <!-- Feishu panel -->
+  <div class="auth-panel" id="panel-feishu">
+    <div id="feishu-qr-area">
+      <div class="qr-wrap"><div id="feishu-qr-img"></div></div>
+      <p class="qr-hint status-feishu" id="feishu-hint"><span class="pulse-dot"></span>请用飞书扫描或点击授权</p>
+      <a href="#" class="auth-link hidden" id="feishu-auth-link" target="_blank"></a>
+    </div>
+    <div id="feishu-success" class="auth-success hidden">
+      <span class="check">✅</span>
+      <p>飞书授权成功</p>
+    </div>
+  </div>
+
+  <!-- DingTalk panel -->
+  <div class="auth-panel" id="panel-dingtalk">
+    <div id="dingtalk-qr-area">
+      <div class="qr-wrap"><div id="dingtalk-qr-img"></div></div>
+      <p class="qr-hint status-dingtalk" id="dingtalk-hint"><span class="pulse-dot"></span>请用钉钉扫描或点击授权</p>
+      <a href="#" class="auth-link hidden" id="dingtalk-auth-link" target="_blank"></a>
+    </div>
+    <div id="dingtalk-success" class="auth-success hidden">
+      <span class="check">✅</span>
+      <p>钉钉授权成功</p>
+    </div>
   </div>
 </div>
 
@@ -206,18 +292,47 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   </div>
   <div id="birth-done" class="birth-done">
     <img id="cert-img" alt="分身出生证">
-    <p>长按图片保存 · 去微信和你的助理对话吧</p>
+    <p>长按图片保存 · 去和你的助理对话吧</p>
   </div>
 </div>
 
 <script>
 (function(){
   var sessionToken = '';
+  try { sessionToken = localStorage.getItem('oc_share_session') || ''; } catch(e) {}
   var tenantId = '';
   var tenantName = '';
   var hubTemplates = [];
   var selectedTemplate = null;
   var installedAgents = [];
+  var activePlatform = 'weixin';
+  var platformCredentials = {};
+  var currentBotId = '';
+  var fingerprint = '';
+
+  // ── Fingerprint: stable user id across platforms ──
+  function getFingerprint() {
+    if (fingerprint) return fingerprint;
+    try {
+      var fp = localStorage.getItem('oc_fingerprint');
+      if (!fp) {
+        fp = 'fp_' + Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+        localStorage.setItem('oc_fingerprint', fp);
+      }
+      fingerprint = fp;
+      return fp;
+    } catch(e) {
+      return '';
+    }
+  }
+
+  // ── Platform config ──
+  var platformConfig = {
+    weixin:  { label: '微信',     color: '#07c160', icon: '💬' },
+    wecom:   { label: '企业微信', color: '#07c160', icon: '🏢' },
+    feishu:  { label: '飞书',     color: '#3370ff', icon: '📘' },
+    dingtalk:{ label: '钉钉',     color: '#0089ff', icon: '📌' },
+  };
 
   // ── Helpers ──
   function showPhase(n) {
@@ -227,11 +342,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   }
 
   function api(method, path, body) {
+    var fp = getFingerprint();
     var opts = {
       method: method,
       headers: {'Content-Type': 'application/json'},
       credentials: 'same-origin'
     };
+    if (fp) {
+      opts.headers['X-Fingerprint'] = fp;
+    }
     if (body) opts.body = JSON.stringify(body);
     if (sessionToken && path.indexOf('session=') < 0) {
       var sep = path.indexOf('?') >= 0 ? '&' : '?';
@@ -263,24 +382,51 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     try { localStorage.setItem('oc_share_session', s); } catch(e){}
   }
 
-  // ── Phase 2: Auth ──
-  window.startAuth = function() {
-    showPhase(2);
-    api('GET', '/api/weixin/qrcode').then(function(data){
-      if (data.error) throw new Error(data.error);
-      renderQR(data);
-      tenantName = data.tenant || 'share';
-      pollQRStatus();
-    }).catch(function(e){
-      document.getElementById('qr-hint').textContent = '错误: ' + e.message;
+  // ── Platform tab switching ──
+  window.switchPlatform = function(platform) {
+    activePlatform = platform;
+    document.querySelectorAll('.platform-tab').forEach(function(t){
+      t.classList.toggle('active', t.dataset.platform === platform);
     });
+    document.querySelectorAll('.auth-panel').forEach(function(p){
+      p.classList.toggle('active', p.id === 'panel-' + platform);
+    });
+    // Start auth for this platform if not already started
+    if (platform === 'weixin' && !weixinStarted) startWeixinAuth();
+    if (platform === 'wecom' && !wecomStarted) startWecomAuth();
+    if (platform === 'feishu' && !feishuStarted) startFeishuAuth();
+    if (platform === 'dingtalk' && !dingtalkStarted) startDingtalkAuth();
   };
 
-  function renderQR(data) {
-    var container = document.getElementById('qr-img');
+  // ── Phase 2: WeChat Auth ──
+  var weixinStarted = false;
+  var weixinQrRaw = '';
+  var weixinPollTimer = null;
+  var weixinHandled = false;
+  var ilinkData = {};
+
+  window.startAuth = function() {
+    showPhase(2);
+    switchPlatform(activePlatform);
+  };
+
+  function startWeixinAuth() {
+    if (weixinStarted) return;
+    weixinStarted = true;
+    api('GET', '/api/weixin/qrcode').then(function(data){
+      if (data.error) throw new Error(data.error);
+      renderQR('weixin-qr-img', data);
+      tenantName = data.tenant || 'share';
+      pollWeixinStatus(data);
+    }).catch(function(e){
+      document.getElementById('weixin-hint').textContent = '错误: ' + e.message;
+    });
+  }
+
+  function renderQR(containerId, data) {
+    var container = document.getElementById(containerId);
     container.innerHTML = '';
     var d = data.data || {};
-    qrRawCode = d.qrcode || '';
     var qrContent = d.qrcode_img_content || '';
     if (!qrContent) {
       container.textContent = '获取二维码失败';
@@ -308,21 +454,45 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     }
   }
 
-  var qrPollTimer = null;
-  var qrRawCode = '';
-  var ilinkData = {};
+  function renderAuthLink(containerId, url) {
+    var container = document.getElementById(containerId);
+    if (!container || !url) return;
+    if (typeof qrcode === 'function') {
+      try {
+        var qr = qrcode(0, 'M');
+        qr.addData(url);
+        qr.make();
+        var imgTag = qr.createImgTag(6, 8);
+        container.innerHTML = imgTag;
+        var img = container.querySelector('img');
+        if (img) {
+          img.style.width = '200px';
+          img.style.height = '200px';
+          img.style.imageRendering = 'pixelated';
+          img.style.borderRadius = '8px';
+        }
+      } catch(e) {
+        container.innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>';
+      }
+    }
+  }
 
-  function pollQRStatus() {
-    clearInterval(qrPollTimer);
-    qrPollTimer = setInterval(function(){
+  function pollWeixinStatus(data) {
+    clearInterval(weixinPollTimer);
+    weixinHandled = false;
+    var d = data.data || {};
+    weixinQrRaw = d.qrcode || '';
+    weixinPollTimer = setInterval(function(){
       var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(tenantName);
-      if (qrRawCode) url += '&qrcode=' + encodeURIComponent(qrRawCode);
+      if (weixinQrRaw) url += '&qrcode=' + encodeURIComponent(weixinQrRaw);
       api('GET', url).then(function(data){
         var status = data.status || (data.data && data.data.status);
         if (status === 'confirmed' || status === 'scaned_confirmed') {
-          clearInterval(qrPollTimer);
-          document.getElementById('qr-area').classList.add('hidden');
-          document.getElementById('auth-success').classList.remove('hidden');
+          if (weixinHandled) return;
+          weixinHandled = true;
+          clearInterval(weixinPollTimer);
+          document.getElementById('weixin-qr-area').classList.add('hidden');
+          document.getElementById('weixin-success').classList.remove('hidden');
 
           if (data.existing) {
             tenantName = data.tenant || tenantName;
@@ -331,7 +501,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
               tenantId = data.tenant_id || data.tenant || tenantName;
               setSession(sessionToken);
             }
-            createWeixinBot();
+            // Extract ilink data from response for dedup
+            ilinkData = {
+              ilink_bot_id: data.ilink_bot_id || '',
+              ilink_user_id: data.ilink_user_id || '',
+              bot_token: data.bot_token || '',
+              baseurl: data.baseurl || ''
+            };
+            createPlatformBot('weixin');
           } else {
             ilinkData = {
               ilink_bot_id: data.ilink_bot_id || '',
@@ -339,11 +516,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
               bot_token: data.bot_token || '',
               baseurl: data.baseurl || ''
             };
-            api('POST', '/api/onboard', {source:'share'}).then(function(data){
+            // Use fingerprint as tenant_name if available; fallback to ilink_user_id
+            var onboardName = getFingerprint() || ilinkData.ilink_user_id || 'weixin-share';
+            api('POST', '/api/onboard', {source:'share', tenant_name: onboardName}).then(function(data){
               if (!data.ok && !data.session_token) throw new Error(data.error || '创建失败');
               sessionToken = data.session_token;
               tenantId = data.tenant_id;
-              tenantName = data.tenant_name;
+              tenantName = data.tenant_name || onboardName;
               setSession(sessionToken);
               api('POST', '/api/weixin/save-token', {
                 tenant_name: tenantName,
@@ -353,33 +532,241 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
                 ilink_user_id: ilinkData.ilink_user_id,
                 baseurl: ilinkData.baseurl
               }).catch(function(){});
-              createWeixinBot();
+              createPlatformBot('weixin');
             }).catch(function(e){
-              document.getElementById('qr-hint').textContent = '错误: ' + e.message;
+              document.getElementById('weixin-hint').textContent = '错误: ' + e.message;
             });
           }
         } else if (status === 'scaned') {
-          document.getElementById('qr-hint').innerHTML = '<span class="dot"></span>已扫码，请在手机上确认';
+          document.getElementById('weixin-hint').innerHTML = '<span class="pulse-dot"></span>已扫码，请在手机上确认';
         } else if (status === 'expired') {
-          clearInterval(qrPollTimer);
-          document.getElementById('qr-hint').textContent = '二维码已过期，请刷新页面重试';
+          clearInterval(weixinPollTimer);
+          document.getElementById('weixin-hint').textContent = '二维码已过期，请刷新页面重试';
         }
       }).catch(function(){});
     }, 3000);
   }
 
-  function createWeixinBot() {
-    var proceed = function() {
+  // ── Phase 2: WeCom Auth ──
+  var wecomStarted = false;
+  var wecomScode = '';
+  var wecomPollTimer = null;
+  var wecomHandled = false;
+
+  function startWecomAuth() {
+    if (wecomStarted) return;
+    wecomStarted = true;
+    api('POST', '/api/bots/wecom/smartbot/generate', {}).then(function(res){
+      wecomScode = res.scode;
+      var authUrl = res.auth_url;
+      renderAuthLink('wecom-qr-img', authUrl);
+      var linkEl = document.getElementById('wecom-auth-link');
+      linkEl.href = authUrl;
+      linkEl.textContent = authUrl;
+      linkEl.classList.remove('hidden');
+      document.getElementById('wecom-hint').innerHTML = '<span class="pulse-dot"></span>请用企业微信扫描或点击链接授权';
+      pollWecomStatus();
+    }).catch(function(e){
+      document.getElementById('wecom-hint').textContent = '错误: ' + (e.message || '生成链接失败');
+    });
+  }
+
+  function pollWecomStatus() {
+    clearInterval(wecomPollTimer);
+    wecomHandled = false;
+    wecomPollTimer = setInterval(function(){
+      api('GET', '/api/bots/wecom/smartbot/poll?scode=' + encodeURIComponent(wecomScode)).then(function(res){
+        if (res.status === 'success') {
+          if (wecomHandled) return;
+          wecomHandled = true;
+          clearInterval(wecomPollTimer);
+          document.getElementById('wecom-qr-area').classList.add('hidden');
+          document.getElementById('wecom-success').classList.remove('hidden');
+          platformCredentials.wecom = {
+            bot_id: res.bot_id || '',
+            secret: res.secret || ''
+          };
+          // Create onboard session if needed
+          var wecomOnboardName = getFingerprint() || res.bot_id || 'wecom-share';
+          if (!sessionToken) {
+            api('POST', '/api/onboard', {source:'share', tenant_name: wecomOnboardName}).then(function(data){
+              if (data.session_token) {
+                sessionToken = data.session_token;
+                tenantId = data.tenant_id;
+                tenantName = data.tenant_name || wecomOnboardName;
+                setSession(sessionToken);
+              }
+              createPlatformBot('wecom');
+            }).catch(function(){
+              createPlatformBot('wecom');
+            });
+          } else {
+            tenantName = wecomOnboardName;
+            createPlatformBot('wecom');
+          }
+        } else if (res.status === 'expired') {
+          clearInterval(wecomPollTimer);
+          document.getElementById('wecom-hint').textContent = '链接已过期，请刷新页面重试';
+        }
+      }).catch(function(){});
+    }, 3000);
+  }
+
+  // ── Phase 2: Feishu Auth ──
+  var feishuStarted = false;
+  var feishuSessionId = '';
+  var feishuPollTimer = null;
+  var feishuHandled = false;
+
+  function startFeishuAuth() {
+    if (feishuStarted) return;
+    feishuStarted = true;
+    api('POST', '/api/bots/feishu/device-auth', {}).then(function(res){
+      feishuSessionId = res.session_id;
+      var authUrl = res.auth_url;
+      renderAuthLink('feishu-qr-img', authUrl);
+      var linkEl = document.getElementById('feishu-auth-link');
+      linkEl.href = authUrl;
+      linkEl.textContent = authUrl;
+      linkEl.classList.remove('hidden');
+      document.getElementById('feishu-hint').innerHTML = '<span class="pulse-dot"></span>请用飞书扫描或点击链接授权';
+      pollFeishuStatus();
+    }).catch(function(e){
+      document.getElementById('feishu-hint').textContent = '错误: ' + (e.message || '生成链接失败');
+    });
+  }
+
+  function pollFeishuStatus() {
+    clearInterval(feishuPollTimer);
+    feishuHandled = false;
+    feishuPollTimer = setInterval(function(){
+      api('GET', '/api/bots/feishu/device-auth/poll?session_id=' + encodeURIComponent(feishuSessionId)).then(function(res){
+        if (res.status === 'success') {
+          if (feishuHandled) return;
+          feishuHandled = true;
+          clearInterval(feishuPollTimer);
+          document.getElementById('feishu-qr-area').classList.add('hidden');
+          document.getElementById('feishu-success').classList.remove('hidden');
+          platformCredentials.feishu = {
+            app_id: res.app_id || '',
+            app_secret: res.app_secret || ''
+          };
+          var feishuOnboardName = getFingerprint() || res.app_id || 'feishu-share';
+          if (!sessionToken) {
+            api('POST', '/api/onboard', {source:'share', tenant_name: feishuOnboardName}).then(function(data){
+              if (data.session_token) {
+                sessionToken = data.session_token;
+                tenantId = data.tenant_id;
+                tenantName = data.tenant_name || feishuOnboardName;
+                setSession(sessionToken);
+              }
+              createPlatformBot('feishu');
+            }).catch(function(){
+              createPlatformBot('feishu');
+            });
+          } else {
+            tenantName = feishuOnboardName;
+            createPlatformBot('feishu');
+          }
+        } else if (res.status === 'expired') {
+          clearInterval(feishuPollTimer);
+          document.getElementById('feishu-hint').textContent = '授权已过期，请刷新页面重试';
+        }
+      }).catch(function(){});
+    }, 3000);
+  }
+
+  // ── Phase 2: DingTalk Auth ──
+  var dingtalkStarted = false;
+  var dingtalkSessionId = '';
+  var dingtalkPollTimer = null;
+  var dingtalkHandled = false;
+
+  function startDingtalkAuth() {
+    if (dingtalkStarted) return;
+    dingtalkStarted = true;
+    api('POST', '/api/bots/dingtalk/device-auth', {}).then(function(res){
+      dingtalkSessionId = res.session_id;
+      var authUrl = res.auth_url;
+      renderAuthLink('dingtalk-qr-img', authUrl);
+      var linkEl = document.getElementById('dingtalk-auth-link');
+      linkEl.href = authUrl;
+      linkEl.textContent = authUrl;
+      linkEl.classList.remove('hidden');
+      document.getElementById('dingtalk-hint').innerHTML = '<span class="pulse-dot"></span>请用钉钉扫描或点击链接授权';
+      pollDingtalkStatus();
+    }).catch(function(e){
+      document.getElementById('dingtalk-hint').textContent = '错误: ' + (e.message || '生成链接失败');
+    });
+  }
+
+  function pollDingtalkStatus() {
+    clearInterval(dingtalkPollTimer);
+    dingtalkHandled = false;
+    dingtalkPollTimer = setInterval(function(){
+      api('GET', '/api/bots/dingtalk/device-auth/poll?session_id=' + encodeURIComponent(dingtalkSessionId)).then(function(res){
+        if (res.status === 'success') {
+          if (dingtalkHandled) return;
+          dingtalkHandled = true;
+          clearInterval(dingtalkPollTimer);
+          document.getElementById('dingtalk-qr-area').classList.add('hidden');
+          document.getElementById('dingtalk-success').classList.remove('hidden');
+          platformCredentials.dingtalk = {
+            client_id: res.client_id || '',
+            client_secret: res.client_secret || ''
+          };
+          var dingtalkOnboardName = getFingerprint() || res.client_id || 'dingtalk-share';
+          if (!sessionToken) {
+            api('POST', '/api/onboard', {source:'share', tenant_name: dingtalkOnboardName}).then(function(data){
+              if (data.session_token) {
+                sessionToken = data.session_token;
+                tenantId = data.tenant_id;
+                tenantName = data.tenant_name || dingtalkOnboardName;
+                setSession(sessionToken);
+              }
+              createPlatformBot('dingtalk');
+            }).catch(function(){
+              createPlatformBot('dingtalk');
+            });
+          } else {
+            tenantName = dingtalkOnboardName;
+            createPlatformBot('dingtalk');
+          }
+        } else if (res.status === 'expired') {
+          clearInterval(dingtalkPollTimer);
+          document.getElementById('dingtalk-hint').textContent = '授权已过期，请刷新页面重试';
+        }
+      }).catch(function(){});
+    }, 3000);
+  }
+
+  // ── Create bot after platform auth ──
+  function createPlatformBot(platform) {
+    var payload = { name: tenantName || platform + '-share', platform: platform };
+    if (platform === 'weixin') {
+      payload.mode = 'ilink';
+      if (ilinkData.ilink_user_id) payload.ilink_user_id = ilinkData.ilink_user_id;
+      if (ilinkData.bot_token) payload.bot_token = ilinkData.bot_token;
+    } else if (platform === 'wecom') {
+      payload.mode = 'smartbot';
+      var creds = platformCredentials.wecom || {};
+      if (creds.bot_id) payload.bot_id = creds.bot_id;
+      if (creds.secret) payload.secret = creds.secret;
+    } else if (platform === 'feishu') {
+      var fc = platformCredentials.feishu || {};
+      if (fc.app_id) payload.app_id = fc.app_id;
+      if (fc.app_secret) payload.app_secret = fc.app_secret;
+      payload.brand = 'feishu';
+    } else if (platform === 'dingtalk') {
+      var dc = platformCredentials.dingtalk || {};
+      if (dc.client_id) payload.app_key = dc.client_id;
+      if (dc.client_secret) payload.app_secret = dc.client_secret;
+    }
+    api('POST', '/api/bots', payload).then(function(res){
+      currentBotId = res.bot_id || '';
       setTimeout(function(){ showPhase(3); loadAgentsAndHub(); }, 1200);
-    };
-    api('POST', '/api/bots', {
-      name: tenantName,
-      platform: 'weixin',
-      mode: 'ilink'
-    }).then(function(){
-      proceed();
-    }).catch(function(){
-      proceed();
+    }).catch(function(err){
+      alert('创建机器人失败: ' + (err.message || '未知错误') + '，请重试');
     });
   }
 
@@ -446,7 +833,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         btn.disabled = true;
       } else {
         btn.className = 'btn-small';
-        btn.textContent = '绑定微信';
+        btn.textContent = '绑定';
         btn.onclick = function(){ bindToAgent(agent); };
       }
       row.appendChild(btn);
@@ -456,24 +843,37 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
   function bindToAgent(agent) {
     if (!tenantName) {
-      alert('请先完成微信授权');
+      alert('请先完成平台授权');
       return;
     }
     var btn = event.target;
     btn.disabled = true;
     btn.textContent = '绑定中...';
 
-    api('POST', '/api/weixin/' + encodeURIComponent(tenantName) + '/bind', {
-      agent_name: agent.id || agent.name
-    }).then(function(data){
+    // Use platform-specific bind endpoint
+    var bindUrl;
+    if (activePlatform === 'weixin') {
+      bindUrl = '/api/weixin/' + encodeURIComponent(tenantName) + '/bind';
+    } else if (currentBotId) {
+      bindUrl = '/api/bots/' + encodeURIComponent(currentBotId) + '/bind';
+    } else {
+      alert('未找到当前平台机器人，请刷新重试');
+      btn.disabled = false;
+      btn.textContent = '绑定';
+      return;
+    }
+    var payload = { agent_name: agent.id || agent.name };
+
+    var method = activePlatform === 'weixin' ? 'POST' : 'PUT';
+    api(method, bindUrl, payload).then(function(data){
       btn.className = 'btn-small bound';
       btn.textContent = '已绑定';
       btn.disabled = true;
       agent.bind_agent = agent.id;
-      alert('微信已绑定到 ' + (agent.name || agent.id));
+      alert('已绑定到 ' + (agent.name || agent.id));
     }).catch(function(e){
       btn.disabled = false;
-      btn.textContent = '绑定微信';
+      btn.textContent = '绑定';
       alert('绑定失败: ' + e.message);
     });
   }
@@ -598,10 +998,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       setTimeout(function(){ activateStep(steps[2]); }, 1000);
       setTimeout(function(){
         activateStep(steps[3]);
-        if (tenantName && agentId) {
-          api('POST', '/api/weixin/' + encodeURIComponent(tenantName) + '/bind', {
-            agent_name: agentId
-          }).catch(function(){});
+        if (agentId) {
+          var bindUrl;
+          if (activePlatform === 'weixin' && tenantName) {
+            bindUrl = '/api/weixin/' + encodeURIComponent(tenantName) + '/bind';
+          } else if (currentBotId) {
+            bindUrl = '/api/bots/' + encodeURIComponent(currentBotId) + '/bind';
+          }
+          if (bindUrl) {
+            var m = activePlatform === 'weixin' ? 'POST' : 'PUT';
+            api(m, bindUrl, { agent_name: agentId }).catch(function(){});
+          }
         }
         showBirthDone(tpl, serial);
       }, 2200);
@@ -647,9 +1054,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     ctx.fillRect(0, 0, W, H);
 
     var bar = ctx.createLinearGradient(0, 0, W, 0);
-    bar.addColorStop(0, '#07c160');
-    bar.addColorStop(0.5, '#4cd964');
-    bar.addColorStop(1, '#07c160');
+    var pc = platformConfig[activePlatform] || platformConfig.weixin;
+    bar.addColorStop(0, pc.color);
+    bar.addColorStop(1, pc.color);
     ctx.fillStyle = bar;
     ctx.fillRect(0, 0, W, 8);
 
@@ -683,6 +1090,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     fields.push(['出生日期', now.getFullYear() + '年' + (now.getMonth()+1) + '月' + now.getDate() + '日']);
     fields.push(['出生时间', String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')]);
     fields.push(['分身类型', tpl.category || '通用']);
+    fields.push(['平台', platformConfig[activePlatform].label]);
     if (serial) fields.push(['编号', serial]);
 
     var y = 285;

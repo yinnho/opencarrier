@@ -90,10 +90,8 @@ pub async fn build_router(
         auth_enabled: state.kernel.config.auth.enabled,
         session_secret: if !api_key.is_empty() {
             api_key.clone()
-        } else if state.kernel.config.auth.enabled {
-            state.kernel.config.auth.password_hash.clone()
         } else {
-            String::new()
+            state.kernel.config.auth.password_hash.clone()
         },
     };
     let gcra_limiter = rate_limiter::create_rate_limiter();
