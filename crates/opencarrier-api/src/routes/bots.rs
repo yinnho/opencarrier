@@ -437,6 +437,8 @@ struct DeviceAuthSession {
     platform: String,
     // stored credentials after poll success
     credentials: Option<serde_json::Value>,
+    // Reuse the same HTTP client so cookies/session from init→begin→poll are preserved.
+    client: reqwest::Client,
 }
 
 static DEVICE_AUTH_SESSIONS: LazyLock<Mutex<HashMap<String, DeviceAuthSession>>> =
@@ -575,6 +577,7 @@ pub async fn feishu_device_auth_begin(
         expires_at: std::time::Instant::now() + std::time::Duration::from_secs(expires_in),
         platform: "feishu".to_string(),
         credentials: None,
+        client: http,
     };
 
     {
@@ -635,11 +638,10 @@ pub async fn feishu_device_auth_poll(
         "https://accounts.feishu.cn"
     };
 
-    let http = reqwest::Client::new();
     let poll_url = format!("{}/oauth/v1/app/registration", base_url);
     let poll_body = format!("action=poll&device_code={}", session.device_code);
 
-    let poll_res = match http
+    let poll_res = match session.client
         .post(&poll_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(poll_body)
@@ -811,6 +813,7 @@ pub async fn dingtalk_device_auth_begin() -> impl IntoResponse {
         expires_at: std::time::Instant::now() + std::time::Duration::from_secs(expires_in),
         platform: "dingtalk".to_string(),
         credentials: None,
+        client: http,
     };
 
     {
@@ -860,8 +863,7 @@ pub async fn dingtalk_device_auth_poll(
         );
     }
 
-    let http = reqwest::Client::new();
-    let poll_res = match http
+    let poll_res = match session.client
         .post("https://oapi.dingtalk.com/app/registration/poll")
         .json(&serde_json::json!({"device_code": session.device_code}))
         .send()
