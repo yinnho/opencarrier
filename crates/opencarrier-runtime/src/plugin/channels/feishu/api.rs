@@ -135,27 +135,40 @@ pub async fn get_ws_endpoint(
     base: &str,
 ) -> Result<WsEndpointResponse, String> {
     let url = format!("{base}/open-apis/callback/ws/endpoint");
+    let body = serde_json::json!({
+        "AppID": app_id,
+        "AppSecret": app_secret,
+    });
+
+    tracing::info!(
+        url = %url,
+        app_id = %app_id,
+        "Calling Feishu ws/endpoint"
+    );
 
     let resp = http
         .post(&url)
         .header("Content-Type", "application/json")
         .header("locale", "zh")
-        .json(&serde_json::json!({
-            "AppID": app_id,
-            "AppSecret": app_secret,
-        }))
+        .json(&body)
         .timeout(Duration::from_secs(15))
         .send()
         .await
         .map_err(|e| format!("Feishu ws/endpoint request failed: {e}"))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Feishu ws/endpoint HTTP {status}: {body}"));
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap_or_default();
+
+    tracing::info!(
+        status = %status,
+        body = %body_text,
+        "Feishu ws/endpoint response"
+    );
+
+    if !status.is_success() {
+        return Err(format!("Feishu ws/endpoint HTTP {status}: {body_text}"));
     }
 
-    resp.json::<WsEndpointResponse>()
-        .await
+    serde_json::from_str(&body_text)
         .map_err(|e| format!("Feishu ws/endpoint parse error: {e}"))
 }
