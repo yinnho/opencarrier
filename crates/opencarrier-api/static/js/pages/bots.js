@@ -71,7 +71,7 @@ function botsPage() {
     // Computed helpers
     // ------------------------------------------------------------------
 
-    get botsByPlatform() {
+    botsByPlatform() {
       const groups = {};
       for (const bot of this.bots) {
         const p = bot.platform || 'other';
@@ -95,6 +95,27 @@ function botsPage() {
       const m = { smartbot: 'SmartBot', app: '企业应用', kf: '客服', ilink: 'iLink' };
       return m[mode] || mode || '-';
     },
+
+    // -- Compatibility wrappers for existing HTML ----------------------------
+
+    platformLabel(p) { return this.platformConfig(p).label; },
+    platformIcon(p) { return this.platformConfig(p).icon; },
+
+    get channelPlugins() {
+      // Built-in channels are always "installed"
+      return [
+        { name: 'wecom',  displayName: '企业微信', installed: true, channels: ['wecom'] },
+        { name: 'feishu', displayName: '飞书',     installed: true, channels: ['feishu'] },
+        { name: 'weixin', displayName: '个人微信', installed: true, channels: ['weixin'] },
+      ];
+    },
+
+    selectPlugin(plugin) {
+      const platform = plugin.channels && plugin.channels[0] || plugin.name;
+      this.selectPlatform(platform);
+    },
+
+    installState: {},
 
     agentName(id) {
       if (!id) return null;
@@ -140,15 +161,19 @@ function botsPage() {
       this.weixinQrRaw = null;
       this.weixinQrStatus = null;
       this.weixinPolling = false;
+      this.createPlugin = null;
     },
 
     selectPlatform(platform) {
       this.botForm.platform = platform;
       this.createStep = 2;
+      const cfg = this.platformConfig(platform);
+      this.createPlugin = { displayName: cfg.label };
     },
 
     backToStep1() {
       this.createStep = 1;
+      this.createPlugin = null;
       this.stopSmartbotPoll();
       this.stopWeixinPoll();
     },

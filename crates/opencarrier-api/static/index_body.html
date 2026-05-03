@@ -170,6 +170,7 @@
                           </div>
                         </div>
                         <div class="bot-card-actions">
+                          <button class="btn btn-sm btn-ghost" @click="openEditModal(bot)" title="编辑">编辑</button>
                           <button class="btn btn-sm btn-ghost" @click="deleteBot(bot)" title="删除">删除</button>
                         </div>
                       </div>
@@ -364,6 +365,70 @@
             <div class="modal-footer" x-show="createStep === 2">
               <button class="btn btn-ghost" @click="showCreateModal = false; smartbotPolling = false; stopWeixinPoll(); if(smartbotPollTimer){clearInterval(smartbotPollTimer);smartbotPollTimer=null;}">取消</button>
               <button class="btn btn-primary" @click="createBot()" :disabled="createSaving || !botForm.name.trim()" x-text="createSaving ? '创建中...' : '创建'"></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Edit Bot Modal -->
+        <div class="modal-overlay" x-show="showEditModal" @click.self="closeEditModal()" x-transition>
+          <div class="modal-content" style="max-width:480px">
+            <div class="modal-header">
+              <h3>编辑机器人</h3>
+              <button class="btn btn-ghost btn-sm" @click="closeEditModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div style="margin-bottom:16px">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">名称</label>
+                <input class="input" x-model="botForm.name" placeholder="机器人名称" style="width:100%">
+              </div>
+              <div style="margin-bottom:16px" x-show="botForm.platform === 'wecom'">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">模式</label>
+                <select class="input" x-model="botForm.mode" style="width:100%">
+                  <option value="smartbot">SmartBot</option>
+                  <option value="app">企业应用</option>
+                  <option value="kf">客服</option>
+                </select>
+              </div>
+              <div style="margin-bottom:12px" x-show="botForm.platform === 'wecom'">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">企业 ID</label>
+                <input class="input" x-model="botForm.corp_id" placeholder="可选" style="width:100%">
+              </div>
+              <div style="margin-bottom:12px" x-show="botForm.platform === 'wecom'">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">Bot ID</label>
+                <input class="input" x-model="botForm.bot_id" placeholder="可选" style="width:100%">
+              </div>
+              <div style="margin-bottom:12px" x-show="botForm.platform === 'wecom'">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">Secret</label>
+                <input class="input" type="password" x-model="botForm.secret" placeholder="留空不修改" style="width:100%">
+              </div>
+              <div style="margin-bottom:12px" x-show="botForm.platform === 'feishu'">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">App ID</label>
+                <input class="input" x-model="botForm.app_id" placeholder="可选" style="width:100%">
+              </div>
+              <div style="margin-bottom:12px" x-show="botForm.platform === 'feishu'">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">App Secret</label>
+                <input class="input" type="password" x-model="botForm.app_secret" placeholder="留空不修改" style="width:100%">
+              </div>
+              <div style="margin-bottom:12px" x-show="botForm.platform === 'feishu'">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">品牌</label>
+                <select class="input" x-model="botForm.brand" style="width:100%">
+                  <option value="feishu">飞书</option>
+                  <option value="lark">Lark</option>
+                </select>
+              </div>
+              <div style="margin-bottom:16px">
+                <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">绑定分身</label>
+                <select class="input" x-model="botForm.bind_agent" style="width:100%">
+                  <option value="">不绑定</option>
+                  <template x-for="a in agents" :key="a.id">
+                    <option :value="a.name" x-text="a.name"></option>
+                  </template>
+                </select>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-ghost" @click="closeEditModal()">取消</button>
+              <button class="btn btn-primary" @click="saveEdit()" :disabled="editSaving" x-text="editSaving ? '保存中...' : '保存'"></button>
             </div>
           </div>
         </div>
