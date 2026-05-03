@@ -686,37 +686,49 @@ pub async fn feishu_device_auth_poll(
         "Feishu device-auth poll response"
     );
 
-    if status.eq_ignore_ascii_case("SUCCESS") {
-        let app_id = poll_res
-            .get("app_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let app_secret = poll_res
-            .get("app_secret")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+    // Feishu may return credentials directly without a status field, or with status=SUCCESS
+    let app_id = poll_res
+        .get("app_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let client_id = poll_res
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let app_secret = poll_res
+        .get("app_secret")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let client_secret = poll_res
+        .get("client_secret")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
-        if !app_id.is_empty() && !app_secret.is_empty() {
-            let result = serde_json::json!({
-                "status": "success",
-                "app_id": app_id,
-                "app_secret": app_secret,
-            });
+    let id = if !app_id.is_empty() { app_id } else { client_id };
+    let secret = if !app_secret.is_empty() { app_secret } else { client_secret };
 
-            let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
-            if let Some(s) = sessions.get_mut(&query.session_id) {
-                s.credentials = Some(result.clone());
-            }
+    if !id.is_empty() && !secret.is_empty() {
+        let result = serde_json::json!({
+            "status": "success",
+            "app_id": id,
+            "app_secret": secret,
+        });
 
-            return (StatusCode::OK, Json(result));
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        if let Some(s) = sessions.get_mut(&query.session_id) {
+            s.credentials = Some(result.clone());
         }
 
+        return (StatusCode::OK, Json(result));
+    }
+
+    if status.eq_ignore_ascii_case("SUCCESS") {
         // SUCCESS but missing credentials — surface it for debugging
         return (
             StatusCode::OK,
             Json(serde_json::json!({
                 "status": "pending",
-                "debug": "SUCCESS without app_id/app_secret",
+                "debug": "SUCCESS without app_id/app_secret/client_id/client_secret",
                 "raw": poll_res,
             })),
         );
