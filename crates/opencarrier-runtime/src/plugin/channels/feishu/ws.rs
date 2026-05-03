@@ -85,18 +85,21 @@ impl FeishuWsClient {
 
     /// Connect to the WebSocket and listen for events until disconnection.
     async fn connect_and_listen(&self, sender: &mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        // Get token
-        let token = self.token_cache.get_token().await?;
-
-        // Get WebSocket endpoint URL
-        let ws_resp = api::get_ws_endpoint(self.token_cache.http(), &token, self.token_cache.api_base()).await?;
+        // Get WebSocket endpoint URL using AppID + AppSecret (NOT Bearer token)
+        let ws_resp = api::get_ws_endpoint(
+            self.token_cache.http(),
+            self.token_cache.app_id(),
+            self.token_cache.app_secret(),
+            self.token_cache.api_base(),
+        )
+        .await?;
         if ws_resp.code != 0 {
             return Err(format!("ws/endpoint error: code={} msg={}", ws_resp.code, ws_resp.msg));
         }
         let ws_url = ws_resp
             .data
-            .and_then(|d| d.endpoint)
-            .ok_or("Missing endpoint in ws/endpoint response")?;
+            .and_then(|d| d.url)
+            .ok_or("Missing URL in ws/endpoint response")?;
 
         info!(tenant = %self.tenant_name, "Connecting to Feishu WebSocket...");
 

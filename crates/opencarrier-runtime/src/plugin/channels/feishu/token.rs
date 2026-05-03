@@ -98,4 +98,14 @@ impl TenantTokenCache {
     pub fn api_base(&self) -> &str {
         &self.api_base
     }
+
+    /// Get the app_id.
+    pub fn app_id(&self) -> &str {
+        &self.app_id
+    }
+
+    /// Get the app_secret.
+    pub fn app_secret(&self) -> &str {
+        &self.app_secret
+    }
 }

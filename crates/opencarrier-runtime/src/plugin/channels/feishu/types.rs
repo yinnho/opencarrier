@@ -89,7 +89,9 @@ pub struct WsEndpointResponse {
 /// WebSocket connection URL payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsEndpointData {
-    pub endpoint: Option<String>,
+    /// WebSocket URL (returned as "URL" in the API response).
+    #[serde(alias = "URL", alias = "endpoint")]
+    pub url: Option<String>,
     pub expire_at: Option<u64>,
 }
 

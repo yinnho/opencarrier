@@ -127,17 +127,24 @@ pub async fn reply_message(
 /// POST `/open-apis/callback/ws/endpoint`
 ///
 /// Get the WebSocket URL for long-connection event subscription.
+/// Uses AppID + AppSecret in body (NOT Bearer token auth).
 pub async fn get_ws_endpoint(
     http: &Client,
-    token: &str,
+    app_id: &str,
+    app_secret: &str,
     base: &str,
 ) -> Result<WsEndpointResponse, String> {
     let url = format!("{base}/open-apis/callback/ws/endpoint");
 
     let resp = http
         .post(&url)
-        .headers(feishu_headers(token))
-        .timeout(Duration::from_secs(10))
+        .header("Content-Type", "application/json")
+        .header("locale", "zh")
+        .json(&serde_json::json!({
+            "AppID": app_id,
+            "AppSecret": app_secret,
+        }))
+        .timeout(Duration::from_secs(15))
         .send()
         .await
         .map_err(|e| format!("Feishu ws/endpoint request failed: {e}"))?;
