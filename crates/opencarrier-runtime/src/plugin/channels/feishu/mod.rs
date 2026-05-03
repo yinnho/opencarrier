@@ -13,9 +13,11 @@ pub mod tools;
 pub mod types;
 pub mod ws;
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use dashmap::DashMap;
 use opencarrier_types::plugin::PluginMessage;
@@ -164,6 +166,104 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuTenantEntry> 
 }
 
 // ---------------------------------------------------------------------------
+// Feishu watcher loop — detects new bots at runtime and spawns channels
+// ---------------------------------------------------------------------------
+
+/// Background loop that monitors the Feishu plugin directory for new bots
+/// added at runtime and spawns WebSocket channels for each new tenant.
+fn feishu_watcher_loop(
+    plugin_dir: &Path,
+    sender: mpsc::Sender<PluginMessage>,
+    shutdown: Arc<AtomicBool>,
+) {
+    let mut spawned: HashSet<String> = HashSet::new();
+
+    // Spawn channels for bots that exist at startup
+    if let Some(configs) = scan_and_spawn(plugin_dir, &sender) {
+        for name in configs {
+            spawned.insert(name);
+        }
+    }
+
+    // Periodically check for new bots
+    loop {
+        if shutdown.load(Ordering::Relaxed) {
+            info!("Feishu watcher shutdown signal received");
+            return;
+        }
+
+        std::thread::sleep(Duration::from_secs(10));
+
+        if shutdown.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let configs = scan_bot_configs(plugin_dir);
+        for (_uuid, config) in configs {
+            let entry = match load_bot_config(&config) {
+                Some(e) => e,
+                None => continue,
+            };
+            let tenant_name = entry.config.name.clone();
+            if spawned.contains(&tenant_name) {
+                continue;
+            }
+
+            let token_cache = entry.token_cache.clone();
+            FEISHU_TENANTS.insert(tenant_name.clone(), entry);
+            spawned.insert(tenant_name.clone());
+
+            let tx = sender.clone();
+            std::thread::spawn(move || {
+                let mut ch = channel::FeishuChannel::new(tenant_name.clone(), token_cache);
+                if let Err(e) = ch.start(tx) {
+                    warn!(tenant = %tenant_name, "Feishu channel start error: {e}");
+                }
+            });
+        }
+    }
+}
+
+/// Scan plugin directory and spawn channels for all discovered bots.
+/// Returns the set of tenant names that were spawned.
+fn scan_and_spawn(
+    plugin_dir: &Path,
+    sender: &mpsc::Sender<PluginMessage>,
+) -> Option<HashSet<String>> {
+    let configs = scan_bot_configs(plugin_dir);
+    if configs.is_empty() {
+        info!("No Feishu bot configs found, watcher idle");
+        return None;
+    }
+
+    let mut spawned = HashSet::new();
+    for (_uuid, config) in configs {
+        let entry = match load_bot_config(&config) {
+            Some(e) => e,
+            None => continue,
+        };
+
+        let tenant_name = entry.config.name.clone();
+        let token_cache = entry.token_cache.clone();
+        FEISHU_TENANTS.insert(tenant_name.clone(), entry);
+
+        let tx = sender.clone();
+        let tn = tenant_name.clone();
+        std::thread::spawn(move || {
+            let mut ch = channel::FeishuChannel::new(tn.clone(), token_cache);
+            if let Err(e) = ch.start(tx) {
+                warn!(tenant = %tn, "Feishu channel start error: {e}");
+            }
+        });
+
+        spawned.insert(tenant_name);
+    }
+
+    info!("Feishu watcher loop started, monitoring for new bots");
+    Some(spawned)
+}
+
+// ---------------------------------------------------------------------------
 // FeishuWatcher — watches for feishu bots and spawns WS connections
 // ---------------------------------------------------------------------------
 
@@ -173,6 +273,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuTenantEntry> 
 /// `FEISHU_TENANTS`, and spawns a `FeishuChannel` for each bot.
 pub struct FeishuWatcher {
     shutdown: Arc<AtomicBool>,
+    thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Default for FeishuWatcher {
@@ -185,6 +286,7 @@ impl FeishuWatcher {
     pub fn new() -> Self {
         Self {
             shutdown: Arc::new(AtomicBool::new(false)),
+            thread_handle: None,
         }
     }
 }
@@ -206,31 +308,14 @@ impl BuiltinChannel for FeishuWatcher {
         let plugin_dir = find_plugin_dir()
             .ok_or_else(|| "Cannot find Feishu plugin directory".to_string())?;
 
-        let configs = scan_bot_configs(&plugin_dir);
-        if configs.is_empty() {
-            info!("No Feishu bot configs found, watcher idle");
-            return Ok(());
-        }
-
-        for (_uuid, config) in configs {
-            let entry = match load_bot_config(&config) {
-                Some(e) => e,
-                None => continue,
-            };
-
-            let tenant_name = entry.config.name.clone();
-            let token_cache = entry.token_cache.clone();
-            FEISHU_TENANTS.insert(tenant_name.clone(), entry);
-
-            let tx = sender.clone();
-            std::thread::spawn(move || {
-                let mut ch = channel::FeishuChannel::new(tenant_name.clone(), token_cache);
-                if let Err(e) = ch.start(tx) {
-                    warn!(tenant = %tenant_name, "Feishu channel start error: {e}");
-                }
-            });
-        }
-
+        let shutdown = self.shutdown.clone();
+        let handle = std::thread::Builder::new()
+            .name("feishu-watcher".to_string())
+            .spawn(move || {
+                feishu_watcher_loop(&plugin_dir, sender, shutdown);
+            })
+            .map_err(|e| format!("Failed to spawn Feishu watcher thread: {e}"))?;
+        self.thread_handle = Some(handle);
         info!("Feishu watcher started");
         Ok(())
     }
@@ -284,5 +369,15 @@ impl BuiltinChannel for FeishuWatcher {
 
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.thread_handle.take() {
+            match handle.join() {
+                Ok(()) => info!("Feishu watcher thread joined"),
+                Err(e) => {
+                    if let Some(s) = e.downcast_ref::<&str>() {
+                        warn!("Feishu watcher thread panicked: {s}");
+                    }
+                }
+            }
+        }
     }
 }
