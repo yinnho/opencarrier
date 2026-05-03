@@ -347,20 +347,35 @@ pub fn send_app_message(
         .to_string();
     let token = tenant.get_access_token()?;
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("Runtime error: {e}"))?;
-    rt.block_on(async {
-        let body = serde_json::json!({
-            "touser": user_id,
-            "msgtype": "text",
-            "agentid": agent_id,
-            "text": { "content": content }
-        });
-        wedoc_post(&tenant.http, "cgi-bin/message/send", &token, &body).await
-    })?;
+    let http = tenant.http.clone();
+    let user_id = user_id.to_string();
+    let content = content.to_string();
 
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = tx.send(Err(format!("Runtime error: {e}")));
+                return;
+            }
+        };
+        let result = rt.block_on(async {
+            let body = serde_json::json!({
+                "touser": &user_id,
+                "msgtype": "text",
+                "agentid": &agent_id,
+                "text": { "content": &content }
+            });
+            wedoc_post(&http, "cgi-bin/message/send", &token, &body).await
+        });
+        let _ = tx.send(result);
+    });
+
+    let _ = rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))??;
     Ok(())
 }
 
@@ -376,20 +391,35 @@ pub fn send_kf_message(
         .to_string();
     let token = tenant.get_access_token()?;
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("Runtime error: {e}"))?;
-    rt.block_on(async {
-        let body = serde_json::json!({
-            "touser": user_id,
-            "open_kfid": open_kfid,
-            "msgtype": "text",
-            "text": { "content": content }
-        });
-        wedoc_post(&tenant.http, "cgi-bin/kf/send_msg", &token, &body).await
-    })?;
+    let http = tenant.http.clone();
+    let user_id = user_id.to_string();
+    let content = content.to_string();
 
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = tx.send(Err(format!("Runtime error: {e}")));
+                return;
+            }
+        };
+        let result = rt.block_on(async {
+            let body = serde_json::json!({
+                "touser": &user_id,
+                "open_kfid": &open_kfid,
+                "msgtype": "text",
+                "text": { "content": &content }
+            });
+            wedoc_post(&http, "cgi-bin/kf/send_msg", &token, &body).await
+        });
+        let _ = tx.send(result);
+    });
+
+    let _ = rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))??;
     Ok(())
 }
 

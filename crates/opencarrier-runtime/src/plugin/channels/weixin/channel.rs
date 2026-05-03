@@ -101,23 +101,38 @@ impl BuiltinChannel for ILinkChannel {
         let baseurl = state.baseurl.clone();
         let http = state.http.clone();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("Failed to create send runtime: {e}"))?;
+        let user_id = user_id.to_string();
+        let context_token = context_token.to_string();
+        let text = text.to_string();
 
-        rt.block_on(async {
-            api::send_message(
-                &http,
-                &bot_token,
-                &baseurl,
-                user_id,
-                &context_token,
-                &client_id,
-                text,
-            )
-            .await
-        })
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Failed to create send runtime: {e}")));
+                    return;
+                }
+            };
+            let result = rt.block_on(async {
+                api::send_message(
+                    &http,
+                    &bot_token,
+                    &baseurl,
+                    &user_id,
+                    &context_token,
+                    &client_id,
+                    &text,
+                )
+                .await
+            });
+            let _ = tx.send(result);
+        });
+
+        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {
@@ -393,24 +408,38 @@ impl BuiltinChannel for TenantWatcher {
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();
         let http = state.http.clone();
+        let user_id = user_id.to_string();
+        let context_token = context_token.to_string();
+        let text = text.to_string();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("Failed to create send runtime: {e}"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Failed to create send runtime: {e}")));
+                    return;
+                }
+            };
+            let result = rt.block_on(async {
+                api::send_message(
+                    &http,
+                    &bot_token,
+                    &baseurl,
+                    &user_id,
+                    &context_token,
+                    &client_id,
+                    &text,
+                )
+                .await
+            });
+            let _ = tx.send(result);
+        });
 
-        rt.block_on(async {
-            api::send_message(
-                &http,
-                &bot_token,
-                &baseurl,
-                user_id,
-                &context_token,
-                &client_id,
-                text,
-            )
-            .await
-        })
+        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {

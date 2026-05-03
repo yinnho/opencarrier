@@ -577,67 +577,11 @@ pub async fn create_bot(
         );
     }
 
-    // Copy dylib if not already present
-    let has_dylib = std::fs::read_dir(&plugin_dir)
-        .map(|mut entries| {
-            entries.any(|e| {
-                e.ok()
-                    .and_then(|e| {
-                        e.path()
-                            .extension()
-                            .and_then(|ext| ext.to_str())
-                            .map(|s| s == "dylib" || s == "so" || s == "dll")
-                    })
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-
-    if !has_dylib {
-        let dylib_name = format!("libopencarrier_plugin_{platform}");
-        let ext = if cfg!(target_os = "macos") {
-            "dylib"
-        } else {
-            "so"
-        };
-        let candidates = [
-            std::env::var("OPENCARRIER_BUILD_DIR")
-                .ok()
-                .map(|d| std::path::PathBuf::from(d).join(format!("{dylib_name}.{ext}"))),
-            std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(|p| p.join(format!("{dylib_name}.{ext}")))),
-            std::env::current_exe().ok().and_then(|exe| {
-                exe.parent()
-                    .and_then(|p| p.parent())
-                    .map(|p| p.join("lib").join(format!("{dylib_name}.{ext}")))
-            }),
-        ];
-        let mut copied = false;
-        for candidate in candidates.iter().flatten() {
-            if candidate.exists() {
-                let dest = plugin_dir.join(candidate.file_name().unwrap());
-                if let Err(e) = std::fs::copy(candidate, &dest) {
-                    tracing::warn!("Failed to copy dylib: {e}");
-                } else {
-                    copied = true;
-                }
-                break;
-            }
-        }
-        if !copied {
-            tracing::warn!(
-                "No dylib found for {dylib_name} — copy it manually to {}",
-                plugin_dir.display()
-            );
-        }
-    }
-
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
             "status": "created",
-            "message": "机器人已创建，重启后生效",
+            "message": "机器人已创建",
             "bot_id": bot_uuid,
         })),
     )
@@ -911,6 +855,140 @@ fn update_bot_toml(
 // Router
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// GET /api/bots/{bot_uuid} — get single bot details
+// ---------------------------------------------------------------------------
+
+pub async fn get_bot(
+    State(state): State<Arc<AppState>>,
+    Path(bot_uuid): Path<String>,
+) -> impl IntoResponse {
+    let home = &state.kernel.config.home_dir;
+    let plugins_dir = home.join("plugins");
+
+    if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+        for entry in entries.flatten() {
+            let plugin_dir = entry.path();
+            if !plugin_dir.is_dir() {
+                continue;
+            }
+            let dir_name = plugin_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let toml_path = plugin_dir.join("plugin.toml");
+            if !toml_path.exists() {
+                continue;
+            }
+
+            let Ok(content) = std::fs::read_to_string(&toml_path) else {
+                continue;
+            };
+            let Ok(doc) = content.parse::<toml::Value>() else {
+                continue;
+            };
+
+            let platforms = detect_platform(&doc);
+            let platform = platforms
+                .first()
+                .copied()
+                .or_else(|| plugin_dir_to_platform(dir_name));
+            let Some(platform) = platform else { continue };
+
+            let bots = scan_bots(&plugin_dir, dir_name, platform);
+            if let Some(bot) = bots.into_iter().find(|b| {
+                b.get("id").and_then(|v| v.as_str()) == Some(&bot_uuid)
+            }) {
+                return (StatusCode::OK, Json(bot));
+            }
+        }
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "机器人不存在" })),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// PUT /api/bots/{bot_uuid} — update bot config
+// ---------------------------------------------------------------------------
+
+pub async fn update_bot(
+    State(state): State<Arc<AppState>>,
+    Path(bot_uuid): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let home = &state.kernel.config.home_dir;
+    let plugins_dir = home.join("plugins");
+
+    let entries = match std::fs::read_dir(&plugins_dir) {
+        Ok(e) => e,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "插件目录不存在" })),
+            );
+        }
+    };
+
+    for entry in entries.flatten() {
+        let plugin_dir = entry.path();
+        if !plugin_dir.is_dir() {
+            continue;
+        }
+        let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
+        let bot_toml = bot_dir.join("bot.toml");
+        if !bot_toml.exists() {
+            continue;
+        }
+
+        return match update_bot_toml(&bot_toml, |table| {
+            if let Some(v) = body.get("name").and_then(|v| v.as_str()) {
+                table.insert("name".into(), toml::Value::String(v.to_string()));
+            }
+            if let Some(v) = body.get("mode").and_then(|v| v.as_str()) {
+                table.insert("mode".into(), toml::Value::String(v.to_string()));
+            }
+            if let Some(v) = body.get("corp_id").and_then(|v| v.as_str()) {
+                table.insert("corp_id".into(), toml::Value::String(v.to_string()));
+            }
+            if let Some(v) = body.get("bot_id").and_then(|v| v.as_str()) {
+                table.insert("bot_id".into(), toml::Value::String(v.to_string()));
+            }
+            if let Some(v) = body.get("secret").and_then(|v| v.as_str()) {
+                table.insert("secret".into(), toml::Value::String(v.to_string()));
+            }
+            if let Some(v) = body.get("app_id").and_then(|v| v.as_str()) {
+                table.insert("app_id".into(), toml::Value::String(v.to_string()));
+            }
+            if let Some(v) = body.get("app_secret").and_then(|v| v.as_str()) {
+                table.insert("app_secret".into(), toml::Value::String(v.to_string()));
+            }
+            if let Some(v) = body.get("brand").and_then(|v| v.as_str()) {
+                table.insert("brand".into(), toml::Value::String(v.to_string()));
+            }
+        }) {
+            Ok(()) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "updated",
+                    "message": "机器人已更新",
+                })),
+            ),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            ),
+        };
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "机器人不存在" })),
+    )
+}
+
 pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
     use axum::routing;
     axum::Router::new()
@@ -923,7 +1001,7 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
             "/api/bots/wecom/smartbot/poll",
             routing::get(wecom_smartbot_poll),
         )
-        .route("/api/bots/{bot_uuid}", routing::delete(delete_bot))
+        .route("/api/bots/{bot_uuid}", routing::get(get_bot).put(update_bot).delete(delete_bot))
         .route(
             "/api/bots/{bot_uuid}/bind",
             routing::put(bind_bot).delete(unbind_bot),

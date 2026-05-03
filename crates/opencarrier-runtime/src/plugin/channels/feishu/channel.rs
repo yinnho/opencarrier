@@ -78,29 +78,42 @@ impl BuiltinChannel for FeishuChannel {
             .map_err(|e| format!("Token error: {e}"))?;
 
         let content = serde_json::json!({ "text": text }).to_string();
-        let http = self.token_cache.http();
+        let http = self.token_cache.http().clone();
         let base = self.token_cache.api_base().to_string();
+        let user_id = user_id.to_string();
 
-        // Build a temporary runtime for the async HTTP call
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("Failed to create send runtime: {e}"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(Err(format!(
+                        "Failed to create send runtime: {e}"
+                    )));
+                    return;
+                }
+            };
+            let result = rt.block_on(async {
+                let resp = crate::plugin::channels::feishu::api::send_message(
+                    &http, &token, &base, &user_id, "open_id", "text", &content,
+                )
+                .await?;
 
-        rt.block_on(async {
-            let resp = crate::plugin::channels::feishu::api::send_message(
-                http, &token, &base, user_id, "open_id", "text", &content,
-            )
-            .await?;
+                if resp.code != 0 {
+                    return Err(format!(
+                        "Feishu send error: code={} msg={}",
+                        resp.code, resp.msg
+                    ));
+                }
+                Ok(())
+            });
+            let _ = tx.send(result);
+        });
 
-            if resp.code != 0 {
-                return Err(format!(
-                    "Feishu send error: code={} msg={}",
-                    resp.code, resp.msg
-                ));
-            }
-            Ok(())
-        })
+        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {
