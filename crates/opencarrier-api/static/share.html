@@ -647,9 +647,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     });
   }
 
+  var feishuPollInterval = 5000;
   function pollFeishuStatus() {
     clearInterval(feishuPollTimer);
     feishuHandled = false;
+    feishuPollInterval = 5000;
     feishuPollTimer = setInterval(function(){
       api('GET', '/api/bots/feishu/device-auth/poll?session_id=' + encodeURIComponent(feishuSessionId)).then(function(res){
         if (res.status === 'success') {
@@ -682,9 +684,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         } else if (res.status === 'expired') {
           clearInterval(feishuPollTimer);
           document.getElementById('feishu-hint').textContent = '授权已过期，请刷新页面重试';
+        } else if (res.raw_feishu && res.raw_feishu.error === 'slow_down') {
+          // Back off and retry with longer interval
+          feishuPollInterval += 5000;
+          clearInterval(feishuPollTimer);
+          feishuPollTimer = setInterval(arguments.callee, feishuPollInterval);
         }
       }).catch(function(){});
-    }, 3000);
+    }, feishuPollInterval);
   }
 
   // ── Phase 2: DingTalk Auth ──
@@ -711,9 +718,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     });
   }
 
+  var dingtalkPollInterval = 5000;
   function pollDingtalkStatus() {
     clearInterval(dingtalkPollTimer);
     dingtalkHandled = false;
+    dingtalkPollInterval = 5000;
     dingtalkPollTimer = setInterval(function(){
       api('GET', '/api/bots/dingtalk/device-auth/poll?session_id=' + encodeURIComponent(dingtalkSessionId)).then(function(res){
         if (res.status === 'success') {
@@ -746,9 +755,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         } else if (res.status === 'expired') {
           clearInterval(dingtalkPollTimer);
           document.getElementById('dingtalk-hint').textContent = '授权已过期，请刷新页面重试';
+        } else if (res.raw_dingtalk && res.raw_dingtalk.error === 'slow_down') {
+          dingtalkPollInterval += 5000;
+          clearInterval(dingtalkPollTimer);
+          dingtalkPollTimer = setInterval(arguments.callee, dingtalkPollInterval);
         }
       }).catch(function(){});
-    }, 3000);
+    }, dingtalkPollInterval);
   }
 
   // ── Create bot after platform auth ──
