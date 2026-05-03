@@ -382,6 +382,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     try { localStorage.setItem('oc_share_session', s); } catch(e){}
   }
 
+  // ── Stop platform polls ──
+  function stopWeixinPoll() { clearInterval(weixinPollTimer); weixinPollTimer = null; }
+  function stopWecomPoll() { clearInterval(wecomPollTimer); wecomPollTimer = null; }
+  function stopFeishuPoll() { clearInterval(feishuPollTimer); feishuPollTimer = null; }
+  function stopDingtalkPoll() { clearInterval(dingtalkPollTimer); dingtalkPollTimer = null; }
+
   // ── Platform tab switching ──
   window.switchPlatform = function(platform) {
     activePlatform = platform;
@@ -391,6 +397,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     document.querySelectorAll('.auth-panel').forEach(function(p){
       p.classList.toggle('active', p.id === 'panel-' + platform);
     });
+    // Stop inactive platform polls to avoid background API spam
+    if (platform !== 'weixin') stopWeixinPoll();
+    if (platform !== 'wecom') stopWecomPoll();
+    if (platform !== 'feishu') stopFeishuPoll();
+    if (platform !== 'dingtalk') stopDingtalkPoll();
     // Start auth for this platform if not already started
     if (platform === 'weixin' && !weixinStarted) startWeixinAuth();
     if (platform === 'wecom' && !wecomStarted) startWecomAuth();

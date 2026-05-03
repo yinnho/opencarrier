@@ -301,7 +301,10 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 // ---------------------------------------------------------------------------
 
 pub async fn wecom_smartbot_generate() -> impl IntoResponse {
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let url = "https://work.weixin.qq.com/ai/qc/generate?source=wecom_cli_external&plat=1";
 
     match http.get(url).send().await {
@@ -367,7 +370,10 @@ pub async fn wecom_smartbot_poll(Query(query): Query<PollQuery>) -> impl IntoRes
         );
     }
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let url = format!(
         "https://work.weixin.qq.com/ai/qc/query_result?scode={}",
         query.scode
@@ -481,7 +487,10 @@ pub async fn feishu_device_auth_begin(
         "https://accounts.feishu.cn"
     };
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
 
     // Step 1: init
     let init_url = format!("{}/oauth/v1/app/registration", base_url);
@@ -701,6 +710,16 @@ pub async fn feishu_device_auth_poll(
 
             return (StatusCode::OK, Json(result));
         }
+
+        // SUCCESS but missing credentials — surface it for debugging
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "pending",
+                "debug": "SUCCESS without app_id/app_secret",
+                "raw": poll_res,
+            })),
+        );
     }
 
     if status.eq_ignore_ascii_case("EXPIRED") || status.eq_ignore_ascii_case("FAIL") {
@@ -712,9 +731,13 @@ pub async fn feishu_device_auth_poll(
         );
     }
 
+    // Unknown status — return the raw upstream response for debugging
     (
         StatusCode::OK,
-        Json(serde_json::json!({"status": "pending" })),
+        Json(serde_json::json!({
+            "status": "pending",
+            "raw_feishu": poll_res,
+        })),
     )
 }
 
@@ -730,7 +753,10 @@ pub struct DingtalkDeviceAuthPollQuery {
 pub async fn dingtalk_device_auth_begin() -> impl IntoResponse {
     cleanup_expired_sessions();
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let base_url = "https://oapi.dingtalk.com";
 
     // Step 1: init
