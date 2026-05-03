@@ -43,6 +43,35 @@ function agentsPage() {
       return this.agents.filter(function(a) { return a.state !== 'Running'; }).length;
     },
 
+    tenantNameFor(tid) {
+      if (!tid) return 'admin';
+      for (var i = 0; i < this.tenants.length; i++) {
+        if (this.tenants[i].id === tid) return this.tenants[i].name;
+      }
+      return tid.substring(0, 8);
+    },
+
+    get agentsByTenant() {
+      var groups = {};
+      var agents = this.filteredAgents;
+      for (var i = 0; i < agents.length; i++) {
+        var a = agents[i];
+        var tid = a.tenant_id || 'admin';
+        if (!groups[tid]) groups[tid] = { id: tid, name: this.tenantNameFor(tid), agents: [] };
+        groups[tid].agents.push(a);
+      }
+      var result = [];
+      // admin group first (empty tenant_id or 'admin')
+      var adminKeys = Object.keys(groups).filter(function(k) { return !k || k === 'admin'; });
+      for (var i = 0; i < adminKeys.length; i++) {
+        if (groups[adminKeys[i]]) { result.push(groups[adminKeys[i]]); delete groups[adminKeys[i]]; }
+      }
+      // remaining sorted by name
+      var keys = Object.keys(groups).sort(function(a, b) { return groups[a].name.localeCompare(groups[b].name); });
+      for (var i = 0; i < keys.length; i++) { result.push(groups[keys[i]]); }
+      return result;
+    },
+
 
     async init() {
       var self = this;

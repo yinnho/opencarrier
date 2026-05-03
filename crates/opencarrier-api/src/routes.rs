@@ -15,6 +15,7 @@ pub mod hub;
 pub mod kv;
 pub mod messaging;
 pub mod observability;
+pub mod onboard;
 pub mod plugin_toml;
 pub mod plugins;
 pub mod providers;

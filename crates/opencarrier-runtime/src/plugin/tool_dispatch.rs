@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use opencarrier_types::plugin::{PluginToolContext, PluginToolDef};
 use opencarrier_types::tool::ToolDefinition;
 
-use super::loader::LoadedPlugin;
+use super::instance::PluginInstance;
 
 // ---------------------------------------------------------------------------
 // Tool entry
@@ -19,7 +19,7 @@ struct PluginToolEntry {
     /// The tool definition (description + parameter schema).
     definition: PluginToolDef,
     /// Reference to the loaded plugin (for execution).
-    plugin: Arc<LoadedPlugin>,
+    plugin: Arc<dyn PluginInstance>,
 }
 
 // ---------------------------------------------------------------------------
@@ -40,13 +40,13 @@ impl PluginToolDispatcher {
     }
 
     /// Register all tools from a loaded plugin.
-    pub fn register(&self, plugin: Arc<LoadedPlugin>) {
-        for tool_def in &plugin.tools {
+    pub fn register(&self, plugin: Arc<dyn PluginInstance>) {
+        for tool_def in plugin.tools() {
             let tool_name = tool_def.name.clone();
             self.tools.insert(
                 tool_name,
                 PluginToolEntry {
-                    plugin_name: plugin.name.clone(),
+                    plugin_name: plugin.name().to_string(),
                     definition: tool_def.clone(),
                     plugin: plugin.clone(),
                 },

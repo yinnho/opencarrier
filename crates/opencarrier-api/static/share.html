@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>OpenCarrier — 获取你的 AI 助理</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:#f8faf9;color:#333;min-height:100vh;-webkit-font-smoothing:antialiased}
+
+/* ── Phase container ── */
+.phase{display:none;min-height:100vh}
+.phase.active{display:flex;flex-direction:column}
+
+/* ── Phase 1: Landing ── */
+.landing{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:linear-gradient(160deg,#f0faf3 0%,#e8f5eb 50%,#f8faf9 100%)}
+.landing .logo{font-size:48px;margin-bottom:8px}
+.landing h1{font-size:28px;font-weight:800;color:#1a1a1a;margin-bottom:4px;letter-spacing:-0.5px}
+.landing h1 span{color:#07c160}
+.landing .tagline{font-size:15px;color:#666;margin-bottom:40px;line-height:1.6}
+.features{display:flex;flex-direction:column;gap:16px;width:100%;max-width:340px;margin-bottom:40px;text-align:left}
+.feat{display:flex;align-items:flex-start;gap:12px;padding:16px;background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.feat .icon{font-size:28px;flex-shrink:0;width:40px;text-align:center}
+.feat h3{font-size:14px;font-weight:600;color:#333;margin-bottom:2px}
+.feat p{font-size:12px;color:#888;line-height:1.5}
+.btn-primary{background:#07c160;color:#fff;border:none;border-radius:24px;padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;letter-spacing:0.5px;transition:all .2s;box-shadow:0 4px 16px rgba(7,193,96,.3)}
+.btn-primary:hover{background:#06ad56;transform:translateY(-1px);box-shadow:0 6px 20px rgba(7,193,96,.35)}
+.btn-primary:active{transform:translateY(0)}
+.btn-primary:disabled{background:#ccc;box-shadow:none;cursor:not-allowed;transform:none}
+.btn-small{background:#07c160;color:#fff;border:none;border-radius:14px;padding:6px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-small:hover{background:#06ad56}
+.btn-small:disabled{background:#ccc;cursor:not-allowed}
+.btn-small.bound{background:#e8f8ef;color:#07c160;cursor:default}
+
+/* ── Phase 2: WeChat Auth ── */
+.auth{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:#fff}
+.auth h2{font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
+.auth .sub{font-size:14px;color:#888;margin-bottom:28px}
+.qr-wrap{background:#fff;border-radius:16px;padding:24px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:inline-block;margin-bottom:20px}
+.qr-wrap img{width:200px;height:200px;border-radius:8px;display:block}
+.qr-wrap canvas{border-radius:8px;display:block}
+.qr-hint{font-size:13px;color:#999;display:flex;align-items:center;justify-content:center;gap:6px}
+.qr-hint .dot{width:8px;height:8px;border-radius:50%;background:#07c160;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.auth-success{color:#07c160;font-size:16px;font-weight:600}
+.auth-success .check{font-size:48px;margin-bottom:8px;display:block}
+
+/* ── Phase 3: Hub Selection ── */
+.hub{background:#f8faf9}
+.hub-header{background:#fff;padding:16px 20px;border-bottom:1px solid #eee;flex-shrink:0}
+.hub-header h2{font-size:18px;font-weight:700;color:#1a1a1a}
+.hub-header p{font-size:13px;color:#888;margin-top:2px}
+.hub-list{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.clone-card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.05);cursor:pointer;transition:all .2s;display:flex;gap:14px;align-items:center}
+.clone-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.1);transform:translateY(-1px)}
+.clone-card:active{transform:translateY(0)}
+.clone-avatar{width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#07c160,#4cd964);display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;flex-shrink:0}
+.clone-info{flex:1;min-width:0}
+.clone-info h3{font-size:15px;font-weight:600;color:#333;margin-bottom:2px}
+.clone-info p{font-size:12px;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clone-meta{display:flex;gap:10px;margin-top:4px;font-size:11px;color:#bbb}
+.cat-tabs{display:flex;gap:8px;padding:12px 20px;background:#fff;border-bottom:1px solid #eee;flex-shrink:0;overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap}
+.cat-tab{padding:6px 14px;border-radius:16px;font-size:13px;font-weight:500;white-space:nowrap;cursor:pointer;background:#f0f0f0;color:#666;border:none;transition:all .2s}
+.cat-tab:hover{background:#e0e0e0}
+.cat-tab.active{background:#07c160;color:#fff}
+.clone-card .cat-badge{display:inline-block;font-size:11px;color:#07c160;background:#e8f8ef;border-radius:8px;padding:2px 8px;margin-top:4px}
+.badge-official{display:inline-block;font-size:11px;color:#b8860b;background:#fff8e1;border-radius:8px;padding:2px 8px;font-weight:600;margin-right:4px}
+.src-tabs{display:flex;gap:8px;padding:8px 20px 0;background:#fff;flex-shrink:0}
+.src-tab{padding:5px 12px;border-radius:14px;font-size:12px;font-weight:500;white-space:nowrap;cursor:pointer;background:#f5f5f5;color:#888;border:none;transition:all .2s}
+.src-tab:hover{background:#e8e8e8}
+.src-tab.active{background:#07c160;color:#fff}
+.hub-loading,.hub-empty{text-align:center;padding:60px 20px;color:#999;font-size:14px}
+.spinner{width:32px;height:32px;border:3px solid #e0e0e0;border-top-color:#07c160;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* My Agents section */
+.my-agents-wrap{background:#fff;border-radius:14px;padding:16px;margin:0 16px 12px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.my-agents-wrap h3{font-size:14px;font-weight:600;color:#333;margin-bottom:12px}
+.my-agents-wrap .agent-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #f5f5f5}
+.my-agents-wrap .agent-row:last-child{border-bottom:none}
+.my-agents-wrap .agent-row .agent-name{flex:1;font-size:14px;color:#333}
+.my-agents-wrap .agent-row .agent-desc{font-size:12px;color:#999}
+.my-agents-wrap .empty{text-align:center;padding:20px;color:#999;font-size:13px}
+.section-divider{display:flex;align-items:center;gap:12px;padding:8px 20px;font-size:13px;color:#999;font-weight:600}
+.section-divider::before,.section-divider::after{content:'';flex:1;height:1px;background:#e0e0e0}
+
+/* Detail overlay */
+.detail-overlay{display:none;position:fixed;inset:0;background:#fff;z-index:100;flex-direction:column;overflow-y:auto}
+.detail-overlay.active{display:flex}
+.detail-back{padding:16px 20px;border-bottom:1px solid #eee;flex-shrink:0}
+.detail-back button{background:none;border:none;font-size:14px;color:#07c160;cursor:pointer;display:flex;align-items:center;gap:4px;font-weight:500}
+.detail-body{flex:1;padding:24px 20px}
+.detail-body .avatar{width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,#07c160,#4cd964);display:flex;align-items:center;justify-content:center;font-size:36px;color:#fff;margin-bottom:16px}
+.detail-body h2{font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
+.detail-body .author{font-size:13px;color:#999;margin-bottom:16px}
+.detail-body .desc{font-size:14px;line-height:1.8;color:#555;margin-bottom:24px}
+.detail-body .stats{display:flex;gap:20px;margin-bottom:24px}
+.detail-body .stat{text-align:center}
+.detail-body .stat .val{font-size:18px;font-weight:700;color:#333}
+.detail-body .stat .label{font-size:11px;color:#999}
+.detail-footer{padding:16px 20px;border-top:1px solid #eee;flex-shrink:0}
+.detail-footer .btn-primary{width:100%;font-size:16px;padding:14px}
+
+/* ── Phase 4: Birth ── */
+.birth{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:linear-gradient(160deg,#f0faf3 0%,#e8f5eb 50%,#f8faf9 100%)}
+.birth-steps{width:100%;max-width:320px;text-align:left;margin-bottom:32px}
+.birth-step{display:flex;align-items:flex-start;gap:14px;padding:14px 0;opacity:.3;transition:all .4s}
+.birth-step.active{opacity:1}
+.birth-step.done{opacity:.7}
+.birth-step .step-icon{width:36px;height:36px;border-radius:50%;background:#e8e8e8;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;transition:all .4s}
+.birth-step.active .step-icon{background:#07c160;color:#fff;animation:stepPulse 1.2s infinite}
+.birth-step.done .step-icon{background:#07c160;color:#fff;animation:none}
+@keyframes stepPulse{0%,100%{box-shadow:0 0 0 0 rgba(7,193,96,.3)}50%{box-shadow:0 0 0 8px rgba(7,193,96,0)}}
+.birth-step .step-text h4{font-size:14px;font-weight:600;color:#333;margin-bottom:1px}
+.birth-step .step-text p{font-size:12px;color:#999}
+.birth-done{display:none;text-align:center}
+.birth-done.show{display:block;animation:fadeUp .6s ease-out}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.birth-done p{font-size:14px;color:#888;line-height:1.6;margin-top:16px}
+#cert-img{width:320px;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.12);display:block;margin:0 auto}
+
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+
+<!-- === Phase 1: Landing === -->
+<div id="p1" class="phase landing active">
+  <div class="logo">🤖</div>
+  <h1>Open<span>Carrier</span></h1>
+  <p class="tagline">你的专属 AI 助理，一个扫码就能拥有</p>
+  <div class="features">
+    <div class="feat"><div class="icon">💬</div><div><h3>智能对话</h3><p>理解你的需求，自然流畅地交流</p></div></div>
+    <div class="feat"><div class="icon">📚</div><div><h3>知识管理</h3><p>自动学习并记住你的偏好和知识</p></div></div>
+    <div class="feat"><div class="icon">📱</div><div><h3>多平台支持</h3><p>微信、企业微信、飞书，随处可用</p></div></div>
+  </div>
+  <button class="btn-primary" onclick="startAuth()">免费获取你的 AI 助理</button>
+</div>
+
+<!-- === Phase 2: WeChat Auth === -->
+<div id="p2" class="phase auth">
+  <h2>微信扫码授权</h2>
+  <p class="sub">用微信扫一扫，快速创建你的专属助理</p>
+  <div id="qr-area">
+    <div class="qr-wrap"><div id="qr-img"></div></div>
+    <p class="qr-hint" id="qr-hint"><span class="dot"></span>请用微信扫描二维码</p>
+  </div>
+  <div id="auth-success" class="auth-success hidden">
+    <span class="check">✅</span>
+    <p>授权成功</p>
+  </div>
+</div>
+
+<!-- === Phase 3: Agent Selection + Hub === -->
+<div id="p3" class="phase hub">
+  <div class="hub-header">
+    <h2>选择你的 AI 分身</h2>
+    <p>绑定已有分身，或从 Hub 安装新的</p>
+  </div>
+
+  <!-- My Agents -->
+  <div class="my-agents-wrap" id="my-agents-wrap" style="display:none">
+    <h3>我的分身</h3>
+    <div id="my-agents-list"></div>
+  </div>
+
+  <!-- Section divider -->
+  <div class="section-divider" id="hub-divider" style="display:none">Hub 模板</div>
+
+  <!-- Hub filters -->
+  <div class="src-tabs" id="src-tabs"></div>
+  <div class="cat-tabs" id="cat-tabs"></div>
+  <div class="hub-list" id="hub-list">
+    <div class="hub-loading"><div class="spinner"></div>加载中...</div>
+  </div>
+
+  <!-- Detail overlay (for Hub templates) -->
+  <div id="detail-overlay" class="detail-overlay">
+    <div class="detail-back"><button onclick="closeDetail()">&#8592; 返回列表</button></div>
+    <div class="detail-body" id="detail-body"></div>
+    <div class="detail-footer">
+      <button class="btn-primary" id="btn-install" onclick="confirmInstall()">安装分身</button>
+    </div>
+  </div>
+</div>
+
+<!-- === Phase 4: Birth === -->
+<div id="p4" class="phase birth">
+  <div class="birth-steps" id="birth-steps">
+    <div class="birth-step" id="bs-download">
+      <div class="step-icon">⬇</div>
+      <div class="step-text"><h4>正在下载分身</h4><p>从 Hub 获取分身数据</p></div>
+    </div>
+    <div class="birth-step" id="bs-install">
+      <div class="step-icon">📦</div>
+      <div class="step-text"><h4>正在安装知识库</h4><p>写入分身的记忆与技能</p></div>
+    </div>
+    <div class="birth-step" id="bs-activate">
+      <div class="step-icon">⚡</div>
+      <div class="step-text"><h4>正在激活 AI 引擎</h4><p>启动分身的推理能力</p></div>
+    </div>
+    <div class="birth-step" id="bs-done">
+      <div class="step-icon">🎉</div>
+      <div class="step-text"><h4>分身已就绪</h4><p>可以开始对话了</p></div>
+    </div>
+  </div>
+  <div id="birth-done" class="birth-done">
+    <img id="cert-img" alt="分身出生证">
+    <p>长按图片保存 · 去微信和你的助理对话吧</p>
+  </div>
+</div>
+
+<script>
+(function(){
+  var sessionToken = '';
+  var tenantId = '';
+  var tenantName = '';
+  var hubTemplates = [];
+  var selectedTemplate = null;
+  var installedAgents = [];
+
+  // ── Helpers ──
+  function showPhase(n) {
+    document.querySelectorAll('.phase').forEach(function(p){p.classList.remove('active')});
+    document.getElementById('p'+n).classList.add('active');
+    window.scrollTo(0,0);
+  }
+
+  function api(method, path, body) {
+    var opts = {
+      method: method,
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin'
+    };
+    if (body) opts.body = JSON.stringify(body);
+    if (sessionToken && path.indexOf('session=') < 0) {
+      var sep = path.indexOf('?') >= 0 ? '&' : '?';
+      path = path + sep + 'session=' + encodeURIComponent(sessionToken);
+    }
+    var controller = new AbortController();
+    opts.signal = controller.signal;
+    var timeout = setTimeout(function(){ controller.abort(); }, 30000);
+    return fetch(path, opts).then(function(r){
+      clearTimeout(timeout);
+      if (r.status === 401) throw new Error('Unauthorized');
+      if (r.status >= 400) throw new Error('HTTP ' + r.status);
+      return r.json().catch(function(){ return {}; });
+    }).catch(function(e){
+      clearTimeout(timeout);
+      throw e;
+    });
+  }
+
+  function setCookie(name, val, hours) {
+    var d = new Date();
+    d.setTime(d.getTime() + hours*3600000);
+    document.cookie = name + '=' + val + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax';
+  }
+
+  function setSession(s) {
+    sessionToken = s;
+    setCookie('opencarrier_session', s, 24);
+    try { localStorage.setItem('oc_share_session', s); } catch(e){}
+  }
+
+  // ── Phase 2: Auth ──
+  window.startAuth = function() {
+    showPhase(2);
+    api('GET', '/api/weixin/qrcode').then(function(data){
+      if (data.error) throw new Error(data.error);
+      renderQR(data);
+      tenantName = data.tenant || 'share';
+      pollQRStatus();
+    }).catch(function(e){
+      document.getElementById('qr-hint').textContent = '错误: ' + e.message;
+    });
+  };
+
+  function renderQR(data) {
+    var container = document.getElementById('qr-img');
+    container.innerHTML = '';
+    var d = data.data || {};
+    qrRawCode = d.qrcode || '';
+    var qrContent = d.qrcode_img_content || '';
+    if (!qrContent) {
+      container.textContent = '获取二维码失败';
+      return;
+    }
+    if (typeof qrcode === 'function') {
+      try {
+        var qr = qrcode(0, 'M');
+        qr.addData(qrContent);
+        qr.make();
+        var imgTag = qr.createImgTag(6, 8);
+        container.innerHTML = imgTag;
+        var img = container.querySelector('img');
+        if (img) {
+          img.style.width = '200px';
+          img.style.height = '200px';
+          img.style.imageRendering = 'pixelated';
+          img.style.borderRadius = '8px';
+        }
+      } catch(e) {
+        container.innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>';
+      }
+    } else {
+      container.innerHTML = '<p style="color:#999;font-size:13px">二维码库加载中...</p>';
+    }
+  }
+
+  var qrPollTimer = null;
+  var qrRawCode = '';
+  var ilinkData = {};
+
+  function pollQRStatus() {
+    clearInterval(qrPollTimer);
+    qrPollTimer = setInterval(function(){
+      var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(tenantName);
+      if (qrRawCode) url += '&qrcode=' + encodeURIComponent(qrRawCode);
+      api('GET', url).then(function(data){
+        var status = data.status || (data.data && data.data.status);
+        if (status === 'confirmed' || status === 'scaned_confirmed') {
+          clearInterval(qrPollTimer);
+          document.getElementById('qr-area').classList.add('hidden');
+          document.getElementById('auth-success').classList.remove('hidden');
+
+          if (data.existing) {
+            tenantName = data.tenant || tenantName;
+            if (data.session_token) {
+              sessionToken = data.session_token;
+              tenantId = data.tenant_id || data.tenant || tenantName;
+              setSession(sessionToken);
+            }
+            createWeixinBot();
+          } else {
+            ilinkData = {
+              ilink_bot_id: data.ilink_bot_id || '',
+              ilink_user_id: data.ilink_user_id || '',
+              bot_token: data.bot_token || '',
+              baseurl: data.baseurl || ''
+            };
+            api('POST', '/api/onboard', {source:'share'}).then(function(data){
+              if (!data.ok && !data.session_token) throw new Error(data.error || '创建失败');
+              sessionToken = data.session_token;
+              tenantId = data.tenant_id;
+              tenantName = data.tenant_name;
+              setSession(sessionToken);
+              api('POST', '/api/weixin/save-token', {
+                tenant_name: tenantName,
+                tenant_id: tenantId,
+                bot_token: ilinkData.bot_token,
+                ilink_bot_id: ilinkData.ilink_bot_id,
+                ilink_user_id: ilinkData.ilink_user_id,
+                baseurl: ilinkData.baseurl
+              }).catch(function(){});
+              createWeixinBot();
+            }).catch(function(e){
+              document.getElementById('qr-hint').textContent = '错误: ' + e.message;
+            });
+          }
+        } else if (status === 'scaned') {
+          document.getElementById('qr-hint').innerHTML = '<span class="dot"></span>已扫码，请在手机上确认';
+        } else if (status === 'expired') {
+          clearInterval(qrPollTimer);
+          document.getElementById('qr-hint').textContent = '二维码已过期，请刷新页面重试';
+        }
+      }).catch(function(){});
+    }, 3000);
+  }
+
+  function createWeixinBot() {
+    var proceed = function() {
+      setTimeout(function(){ showPhase(3); loadAgentsAndHub(); }, 1200);
+    };
+    api('POST', '/api/bots', {
+      name: tenantName,
+      platform: 'weixin',
+      mode: 'ilink'
+    }).then(function(){
+      proceed();
+    }).catch(function(){
+      proceed();
+    });
+  }
+
+  // ── Phase 3: My Agents + Hub ──
+  var currentCat = '';
+  var currentSrc = '';
+
+  function loadAgentsAndHub() {
+    var list = document.getElementById('hub-list');
+    list.innerHTML = '<div class="hub-loading"><div class="spinner"></div>加载中...</div>';
+
+    Promise.all([
+      api('GET', '/api/agents').catch(function(){ return []; }),
+      api('GET', '/api/hub/templates').catch(function(){ return {templates: []}; })
+    ]).then(function(results){
+      var agents = results[0] || [];
+      var data = results[1] || {};
+      var templates = data.templates || data;
+
+      installedAgents = Array.isArray(agents) ? agents : [];
+      hubTemplates = Array.isArray(templates) ? templates : [];
+
+      renderMyAgents();
+      renderHubFilters();
+      renderHubList();
+    }).catch(function(e){
+      list.innerHTML = '<div class="hub-empty">加载失败: ' + esc(e.message) + '</div>';
+    });
+  }
+
+  function renderMyAgents() {
+    var wrap = document.getElementById('my-agents-wrap');
+    var list = document.getElementById('my-agents-list');
+    var divider = document.getElementById('hub-divider');
+
+    if (installedAgents.length === 0) {
+      wrap.style.display = 'none';
+      divider.style.display = 'none';
+      return;
+    }
+
+    wrap.style.display = 'block';
+    divider.style.display = 'flex';
+    list.innerHTML = '';
+
+    installedAgents.forEach(function(agent){
+      var row = document.createElement('div');
+      row.className = 'agent-row';
+      var name = agent.name || agent.id || 'Unknown';
+      var desc = agent.description || agent.role || '';
+      var bound = !!agent.bind_agent;
+
+      row.innerHTML =
+        '<div class="clone-avatar" style="width:36px;height:36px;font-size:18px">' + emoji(name) + '</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="agent-name">' + esc(name) + '</div>' +
+          '<div class="agent-desc">' + esc(desc) + '</div>' +
+        '</div>';
+
+      var btn = document.createElement('button');
+      if (bound) {
+        btn.className = 'btn-small bound';
+        btn.textContent = '已绑定';
+        btn.disabled = true;
+      } else {
+        btn.className = 'btn-small';
+        btn.textContent = '绑定微信';
+        btn.onclick = function(){ bindToAgent(agent); };
+      }
+      row.appendChild(btn);
+      list.appendChild(row);
+    });
+  }
+
+  function bindToAgent(agent) {
+    if (!tenantName) {
+      alert('请先完成微信授权');
+      return;
+    }
+    var btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '绑定中...';
+
+    api('POST', '/api/weixin/' + encodeURIComponent(tenantName) + '/bind', {
+      agent_name: agent.id || agent.name
+    }).then(function(data){
+      btn.className = 'btn-small bound';
+      btn.textContent = '已绑定';
+      btn.disabled = true;
+      agent.bind_agent = agent.id;
+      alert('微信已绑定到 ' + (agent.name || agent.id));
+    }).catch(function(e){
+      btn.disabled = false;
+      btn.textContent = '绑定微信';
+      alert('绑定失败: ' + e.message);
+    });
+  }
+
+  function renderHubFilters() {
+    var srcTabs = document.getElementById('src-tabs');
+    srcTabs.innerHTML = '';
+    ['全部','官方','社区'].forEach(function(s){
+      var btn = document.createElement('button');
+      btn.className = 'src-tab' + (s === '全部' && !currentSrc ? ' active' : '') + (s === currentSrc ? ' active' : '');
+      btn.textContent = s;
+      btn.onclick = function(){
+        currentSrc = s === '全部' ? '' : s;
+        document.querySelectorAll('.src-tab').forEach(function(b){b.classList.remove('active')});
+        btn.classList.add('active');
+        renderHubList();
+      };
+      srcTabs.appendChild(btn);
+    });
+
+    var cats = ['全部'];
+    var catSet = {};
+    hubTemplates.forEach(function(t){
+      var c = t.category || '通用';
+      if (!catSet[c]) { catSet[c] = true; cats.push(c); }
+    });
+    var tabsEl = document.getElementById('cat-tabs');
+    tabsEl.innerHTML = '';
+    cats.forEach(function(c){
+      var btn = document.createElement('button');
+      btn.className = 'cat-tab' + (c === '全部' && !currentCat ? ' active' : '') + (c === currentCat ? ' active' : '');
+      btn.textContent = c;
+      btn.onclick = function(){
+        currentCat = c === '全部' ? '' : c;
+        document.querySelectorAll('.cat-tab').forEach(function(b){b.classList.remove('active')});
+        btn.classList.add('active');
+        renderHubList();
+      };
+      tabsEl.appendChild(btn);
+    });
+  }
+
+  function renderHubList() {
+    var list = document.getElementById('hub-list');
+    list.innerHTML = '';
+    var filtered = hubTemplates.filter(function(t){
+      if (!currentCat) return true;
+      return (t.category || '通用') === currentCat;
+    });
+    if (currentSrc === '官方') {
+      filtered = filtered.filter(function(t){ return t.is_official; });
+    } else if (currentSrc === '社区') {
+      filtered = filtered.filter(function(t){ return !t.is_official; });
+    }
+    if (filtered.length === 0) {
+      list.innerHTML = '<div class="hub-empty">该分类暂无分身</div>';
+      return;
+    }
+    filtered.forEach(function(t){
+      var card = document.createElement('div');
+      card.className = 'clone-card';
+      card.onclick = function(){ showDetail(t); };
+      var officialBadge = t.is_official ? '<span class="badge-official">官方</span>' : '';
+      var catBadge = t.category ? '<span class="cat-badge">' + esc(t.category) + '</span>' : '';
+      card.innerHTML =
+        '<div class="clone-avatar">' + emoji(t.name) + '</div>' +
+        '<div class="clone-info">' +
+          '<h3>' + esc(t.display_name || t.name) + '</h3>' +
+          '<p>' + esc(t.description || '') + '</p>' +
+          '<div>' + officialBadge + catBadge +
+            '<span class="clone-meta" style="display:inline-flex;gap:10px;margin-top:4px">' +
+              '<span style="font-size:11px;color:#bbb">⬇ ' + (t.download_count || 0) + '</span>' +
+            '</span>' +
+          '</div>' +
+        '</div>';
+      list.appendChild(card);
+    });
+  }
+
+  window.showDetail = function(t) {
+    selectedTemplate = t;
+    var body = document.getElementById('detail-body');
+    var officialBadge = t.is_official ? '<span class="badge-official" style="margin-bottom:12px">官方</span>' : '';
+    var catBadge = t.category ? '<span class="cat-badge" style="margin-bottom:12px">' + esc(t.category) + '</span>' : '';
+    body.innerHTML =
+      '<div class="avatar">' + emoji(t.name) + '</div>' +
+      '<h2>' + esc(t.display_name || t.name) + '</h2>' +
+      '<p class="author">by ' + esc(t.author || 'OpenCarrier') + ' · v' + (t.version || '1.0') + '</p>' +
+      '<div style="margin-bottom:12px">' + officialBadge + catBadge + '</div>' +
+      '<p class="desc">' + esc(t.description || '暂无详细介绍') + '</p>' +
+      '<div class="stats">' +
+        '<div class="stat"><div class="val">' + (t.download_count || 0) + '</div><div class="label">下载量</div></div>' +
+      '</div>';
+    document.getElementById('btn-install').disabled = false;
+    document.getElementById('btn-install').textContent = '安装分身';
+    document.getElementById('detail-overlay').classList.add('active');
+  };
+
+  window.closeDetail = function() {
+    document.getElementById('detail-overlay').classList.remove('active');
+    selectedTemplate = null;
+  };
+
+  window.confirmInstall = function() {
+    if (!selectedTemplate) return;
+    var tpl = selectedTemplate;
+    document.getElementById('btn-install').disabled = true;
+    document.getElementById('btn-install').textContent = '正在安装...';
+    document.getElementById('detail-overlay').classList.remove('active');
+    showPhase(4);
+    startBirth(tpl);
+  };
+
+  // ── Phase 4: Birth ──
+  function startBirth(tpl) {
+    var steps = ['bs-download','bs-install','bs-activate','bs-done'];
+    activateStep(steps[0]);
+    setTimeout(function(){ activateStep(steps[1]); }, 1500);
+    api('POST', '/api/hub/templates/' + encodeURIComponent(tpl.name) + '/install', {}).then(function(data){
+      var agentId = data.agent_id || '';
+      var serial = data.serial_number || '';
+      setTimeout(function(){ activateStep(steps[2]); }, 1000);
+      setTimeout(function(){
+        activateStep(steps[3]);
+        if (tenantName && agentId) {
+          api('POST', '/api/weixin/' + encodeURIComponent(tenantName) + '/bind', {
+            agent_name: agentId
+          }).catch(function(){});
+        }
+        showBirthDone(tpl, serial);
+      }, 2200);
+    }).catch(function(e){
+      var el = document.getElementById('bs-install');
+      if (el) el.querySelector('p').textContent = '安装失败: ' + e.message;
+      setTimeout(function(){ activateStep(steps[2]); }, 1000);
+      setTimeout(function(){
+        activateStep(steps[3]);
+        showBirthDone(tpl, '');
+      }, 2200);
+    });
+  }
+
+  function activateStep(id) {
+    var all = document.querySelectorAll('.birth-step');
+    var found = false;
+    all.forEach(function(el){
+      if (el.id === id) {
+        el.classList.add('active');
+        el.classList.remove('done');
+        found = true;
+      } else if (found) {
+        el.classList.remove('active','done');
+      } else {
+        el.classList.remove('active');
+        el.classList.add('done');
+      }
+    });
+  }
+
+  function showBirthDone(tpl, serial) {
+    var done = document.getElementById('birth-done');
+    var W = 640, H = 860;
+    var c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var ctx = c.getContext('2d');
+
+    var bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#fffdf7');
+    bg.addColorStop(1, '#fff8ee');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    var bar = ctx.createLinearGradient(0, 0, W, 0);
+    bar.addColorStop(0, '#07c160');
+    bar.addColorStop(0.5, '#4cd964');
+    bar.addColorStop(1, '#07c160');
+    ctx.fillStyle = bar;
+    ctx.fillRect(0, 0, W, 8);
+
+    ctx.font = '72px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji(tpl.name), W/2, 90);
+
+    var displayName = tpl.display_name || tpl.name;
+    ctx.font = 'bold 40px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#1a1a1a';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(displayName, W/2, 165);
+
+    var desc = tpl.description || 'AI 助理';
+    if (desc.length > 28) desc = desc.substring(0, 28) + '…';
+    ctx.font = '22px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#999';
+    ctx.fillText(desc, W/2, 200);
+
+    var divGrad = ctx.createLinearGradient(180, 0, 460, 0);
+    divGrad.addColorStop(0, 'rgba(212,197,160,0)');
+    divGrad.addColorStop(0.5, 'rgba(212,197,160,1)');
+    divGrad.addColorStop(1, 'rgba(212,197,160,0)');
+    ctx.strokeStyle = divGrad;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(180, 235); ctx.lineTo(460, 235); ctx.stroke();
+
+    var fields = [];
+    var now = new Date();
+    fields.push(['出生日期', now.getFullYear() + '年' + (now.getMonth()+1) + '月' + now.getDate() + '日']);
+    fields.push(['出生时间', String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')]);
+    fields.push(['分身类型', tpl.category || '通用']);
+    if (serial) fields.push(['编号', serial]);
+
+    var y = 285;
+    ctx.textBaseline = 'alphabetic';
+    fields.forEach(function(f) {
+      ctx.font = '26px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+      ctx.fillStyle = '#999';
+      ctx.textAlign = 'left';
+      ctx.fillText(f[0], 100, y);
+      ctx.font = '600 26px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+      ctx.fillStyle = '#333';
+      ctx.textAlign = 'right';
+      ctx.fillText(f[1], W - 100, y);
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = '#eee';
+      ctx.beginPath(); ctx.moveTo(100, y + 16); ctx.lineTo(W - 100, y + 16); ctx.stroke();
+      ctx.setLineDash([]);
+      y += 56;
+    });
+
+    var qrSize = 180;
+    var qrX = (W - qrSize) / 2;
+    var qrY = y + 20;
+    try {
+      var qr = qrcode(0, 'M');
+      qr.addData('https://carrier.yinnho.cn/share');
+      qr.make();
+      var moduleCount = qr.getModuleCount();
+      var cellSize = qrSize / moduleCount;
+      for (var row = 0; row < moduleCount; row++) {
+        for (var col = 0; col < moduleCount; col++) {
+          ctx.fillStyle = qr.isDark(row, col) ? '#333' : '#fffdf7';
+          ctx.fillRect(qrX + col * cellSize, qrY + row * cellSize, cellSize + 0.5, cellSize + 0.5);
+        }
+      }
+    } catch(e) {}
+
+    ctx.textAlign = 'center';
+    ctx.font = '20px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#bbb';
+    ctx.fillText('扫码获取你的 AI 助理', W/2, qrY + qrSize + 32);
+
+    ctx.font = '600 18px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#bbb';
+    ctx.fillText('OpenCarrier — Digital Clone Engine', W/2, H - 28);
+
+    var img = document.getElementById('cert-img');
+    img.src = c.toDataURL('image/png');
+    done.classList.add('show');
+  }
+
+  // ── Utilities ──
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+  }
+
+  function emoji(name) {
+    var map = {'customer-service':'🎧','writer':'✍️','analyst':'📊','assistant':'🤖','translator':'🌐','coder':'💻'};
+    var n = (name||'').toLowerCase();
+    for (var k in map) { if (n.indexOf(k) >= 0) return map[k]; }
+    var emojis = ['🤖','🧠','💡','🌟','🎯','🔮','🦾','✨'];
+    var h = 0;
+    for (var i = 0; i < n.length; i++) h = ((h << 5) - h + n.charCodeAt(i)) | 0;
+    return emojis[Math.abs(h) % emojis.length];
+  }
+})();
+</script>
+</body>
+</html>

@@ -150,7 +150,7 @@ pub async fn install_clone(
     }
 
     // Convert to AgentManifest
-    let mut manifest = convert_to_manifest(&clone_data);
+    let mut manifest = convert_to_manifest(&clone_data, None);
     manifest.workspace = Some(workspace_dir.clone());
 
     // Spawn agent (tenant-scoped)
@@ -739,6 +739,78 @@ pub async fn clone_verify(
         ),
     }
 }
+
+/// POST /api/clones/{name}/upgrade — Upgrade a clone from hub to latest version.
+pub async fn upgrade_clone(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+
+    // Verify the agent exists and is accessible
+    let entry = if ctx.is_admin() {
+        state.kernel.registry.find_by_name(&name)
+    } else {
+        ctx.tenant_id.as_ref().and_then(|tid| {
+            state
+                .kernel
+                .registry
+                .find_by_name_and_tenant(&name, tid.as_str())
+        })
+    };
+    let entry = match entry {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Clone not found"})),
+            )
+        }
+    };
+    if !can_access(&ctx, entry.tenant_id.as_str()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Access denied"})),
+        );
+    }
+
+    // Must be a clone with hub_template_id
+    if entry.manifest.clone_source.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Not a clone agent"})),
+        );
+    }
+    if entry
+        .manifest
+        .clone_source
+        .as_ref()
+        .and_then(|cs| cs.hub_template_id.as_ref())
+        .is_none()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Clone has no hub_template_id, cannot upgrade from hub"})),
+        );
+    }
+
+    match state.kernel.clone_upgrade(&name).await {
+        Ok(version) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "name": name,
+                "version": version,
+                "status": "upgraded"
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
 /// DELETE /api/clones/{name} — Uninstall a clone.
 pub async fn uninstall_clone(
     State(state): State<Arc<AppState>>,
@@ -823,5 +895,6 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/clones/{name}/rollback", routing::post(clone_rollback))
         .route("/api/clones/{name}/start", routing::post(start_clone))
         .route("/api/clones/{name}/stop", routing::post(stop_clone))
+        .route("/api/clones/{name}/upgrade", routing::post(upgrade_clone))
         .route("/api/clones/{name}/verify", routing::post(clone_verify))
 }

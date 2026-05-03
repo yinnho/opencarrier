@@ -275,6 +275,7 @@ pub async fn execute_tool(
         "agent_spawn" => tool_agent_spawn(input, kernel, caller_agent_id).await,
         "agent_list" => tool_agent_list(kernel, caller_agent_id),
         "agent_kill" => tool_agent_kill(input, kernel, caller_agent_id),
+        "agent_restart" => tool_agent_restart(input, kernel, caller_agent_id),
 
         // Memory tools (scoped to caller's agent namespace)
         "memory_store" => tool_memory_store(input, kernel, caller_agent_id),
@@ -851,6 +852,17 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "type": "object",
                 "properties": {
                     "agent_id": { "type": "string", "description": "The agent's UUID to kill" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "agent_restart".to_string(),
+            description: "Restart another agent by its ID. Cancels any running task and resets state to Running. Useful after modifying an agent's configuration to apply changes.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "The target agent's UUID or name" }
                 },
                 "required": ["agent_id"]
             }),
@@ -2800,6 +2812,28 @@ fn tool_agent_kill(
     }
     kh.kill_agent(target_id)?;
     Ok(format!("Agent {target_id} killed successfully."))
+}
+
+fn tool_agent_restart(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let caller_id = caller_agent_id.ok_or("Missing caller agent identity")?;
+    let target_id = input["agent_id"]
+        .as_str()
+        .ok_or("Missing 'agent_id' parameter")?;
+    // Tenant check: caller and target must share tenant
+    let caller_tenant = kh
+        .get_agent_tenant_id(caller_id)
+        .ok_or("Cannot determine caller tenant")?;
+    let target_tenant = kh.get_agent_tenant_id(target_id);
+    if target_tenant.as_ref() != Some(&caller_tenant) {
+        return Err("Access denied: target agent belongs to another tenant".to_string());
+    }
+    kh.restart_agent(target_id)?;
+    Ok(format!("Agent {target_id} restarted successfully."))
 }
 
 // ---------------------------------------------------------------------------

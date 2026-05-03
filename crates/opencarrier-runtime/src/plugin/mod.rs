@@ -8,9 +8,16 @@
 //! See `docs/PLUGIN-SYSTEM-DESIGN.md` for the full architecture.
 
 pub mod bridge;
+pub mod builtin;
+pub mod builtin_registry;
+pub mod channels;
+pub mod instance;
 pub mod loader;
 pub mod manager;
 pub mod tool_dispatch;
 
+pub use builtin::{BuiltinChannel, BuiltinPlugin};
+pub use builtin_registry::BuiltinPluginRegistry;
+pub use instance::PluginInstance;
 pub use loader::LoadedPlugin;
 pub use manager::PluginManager;

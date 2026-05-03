@@ -7,11 +7,13 @@ description = "Agent runtime and execution environment for OpenCarrier"
 
 [dependencies]
 opencarrier-types = { path = "../opencarrier-types" }
+opencarrier-plugin-sdk = { path = "../opencarrier-plugin-sdk" }
 opencarrier-clone = { path = "../opencarrier-clone" }
 opencarrier-memory = { path = "../opencarrier-memory" }
 opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
 tokio = { workspace = true }
+axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
@@ -27,7 +29,10 @@ tokio-stream = { workspace = true }
 wasmtime = { workspace = true }
 anyhow = { workspace = true }
 sha2 = { workspace = true }
+sha1 = { workspace = true }
 hex = { workspace = true }
+cbc = { workspace = true }
+roxmltree = { workspace = true }
 zeroize = { workspace = true }
 dashmap = { workspace = true }
 regex-lite = { workspace = true }
@@ -37,6 +42,10 @@ libloading = { workspace = true }
 toml = { workspace = true }
 tokio-tungstenite = "0.24"
 shlex = "1"
+rand = "0.8"
+aes = "0.8"
+md-5 = "0.10"
+urlencoding = "2"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

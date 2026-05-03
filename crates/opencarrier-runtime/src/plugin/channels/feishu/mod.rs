@@ -1,0 +1,274 @@
+//! Feishu/Lark built-in channel adapter and tools.
+//!
+//! Provides:
+//! - `FeishuWatcher` — scans bot.toml and spawns WebSocket connections
+//! - `FeishuChannel` — per-tenant WebSocket message receiver
+//! - 80+ Feishu Open API tools via `BuiltinPluginRegistry`
+
+pub mod api;
+pub mod api_ext;
+pub mod channel;
+pub mod token;
+pub mod tools;
+pub mod types;
+pub mod ws;
+
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use dashmap::DashMap;
+use opencarrier_types::plugin::PluginMessage;
+use tokio::sync::mpsc;
+use tracing::{info, warn};
+
+use crate::plugin::BuiltinChannel;
+
+// ---------------------------------------------------------------------------
+// Global tenant registry
+// ---------------------------------------------------------------------------
+
+/// Runtime entry stored in FEISHU_TENANTS — config + pre-built token cache.
+pub(crate) struct FeishuTenantEntry {
+    pub config: types::FeishuTenantConfig,
+    pub token_cache: Arc<token::TenantTokenCache>,
+}
+
+impl FeishuTenantEntry {
+    pub fn new(config: types::FeishuTenantConfig) -> Self {
+        let api_base = config.api_base().to_string();
+        let token_cache = Arc::new(token::TenantTokenCache::new(
+            config.app_id.clone(),
+            config.app_secret.clone(),
+            &api_base,
+        ));
+        Self { config, token_cache }
+    }
+}
+
+/// Global registry of all configured Feishu tenants.
+pub(crate) static FEISHU_TENANTS: std::sync::LazyLock<DashMap<String, FeishuTenantEntry>> =
+    std::sync::LazyLock::new(DashMap::new);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn find_plugin_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var("OPENCARRIER_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".opencarrier"))
+        })?;
+
+    for dir_name in ["feishu", "opencarrier-plugin-feishu"] {
+        let dir = home.join("plugins").join(dir_name);
+        if dir.exists() {
+            return Some(dir);
+        }
+    }
+
+    Some(home.join("plugins").join("feishu"))
+}
+
+fn scan_bot_configs(plugin_dir: &Path) -> Vec<(String, serde_json::Value)> {
+    let mut configs = Vec::new();
+    let bot_dir = plugin_dir.join("bot");
+
+    let entries = match std::fs::read_dir(&bot_dir) {
+        Ok(e) => e,
+        Err(_) => return configs,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let bot_uuid = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let bot_toml = path.join("bot.toml");
+        if !bot_toml.exists() {
+            continue;
+        }
+        match std::fs::read_to_string(&bot_toml) {
+            Ok(content) => {
+                if let Ok(mut val) = content.parse::<toml::Value>() {
+                    if let Some(table) = val.as_table_mut() {
+                        table.insert(
+                            "_bot_id".to_string(),
+                            toml::Value::String(bot_uuid.clone()),
+                        );
+                    }
+                    if let Ok(json) = serde_json::to_value(val) {
+                        configs.push((bot_uuid, json));
+                    }
+                }
+            }
+            Err(e) => warn!(path = %bot_toml.display(), "Failed to read bot.toml: {e}"),
+        }
+    }
+
+    configs
+}
+
+fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuTenantEntry> {
+    let bot_uuid = bot_config["_bot_id"].as_str().unwrap_or("").to_string();
+    let name = bot_config["name"].as_str().unwrap_or("").to_string();
+
+    if name.is_empty() || bot_uuid.is_empty() {
+        tracing::warn!("Skipping Feishu bot with empty name or bot_id");
+        return None;
+    }
+
+    // Read secret: try env var first, fall back to inline config value
+    let secret_env = bot_config["secret_env"].as_str().unwrap_or("FEISHU_APP_SECRET");
+    let app_secret = match std::env::var(secret_env) {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            let inline = bot_config["app_secret"].as_str().unwrap_or("").to_string();
+            if !inline.is_empty() {
+                tracing::warn!(
+                    bot = %name,
+                    env_var = %secret_env,
+                    "Using inline app_secret from config — consider setting env var instead"
+                );
+            }
+            inline
+        }
+    };
+
+    let app_id = bot_config["app_id"].as_str().unwrap_or("").to_string();
+    if app_id.is_empty() || app_secret.is_empty() {
+        tracing::warn!(bot = %name, "Skipping Feishu bot: missing app_id or app_secret");
+        return None;
+    }
+
+    let brand = bot_config["brand"].as_str().unwrap_or("feishu").to_string();
+
+    let cfg = types::FeishuTenantConfig {
+        name: name.clone(),
+        app_id,
+        app_secret,
+        brand,
+    };
+
+    tracing::info!(bot = %name, bot_uuid = %bot_uuid, brand = %cfg.brand, "Registered Feishu bot");
+    Some(FeishuTenantEntry::new(cfg))
+}
+
+// ---------------------------------------------------------------------------
+// FeishuWatcher — watches for feishu bots and spawns WS connections
+// ---------------------------------------------------------------------------
+
+/// Watcher for Feishu/Lark bots.
+///
+/// Scans `plugins/feishu/bot/<uuid>/bot.toml` on start, loads tenants into
+/// `FEISHU_TENANTS`, and spawns a `FeishuChannel` for each bot.
+pub struct FeishuWatcher {
+    shutdown: Arc<AtomicBool>,
+}
+
+impl Default for FeishuWatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FeishuWatcher {
+    pub fn new() -> Self {
+        Self {
+            shutdown: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl BuiltinChannel for FeishuWatcher {
+    fn channel_type(&self) -> &str {
+        "feishu"
+    }
+
+    fn name(&self) -> &str {
+        "Feishu Watcher"
+    }
+
+    fn tenant_id(&self) -> &str {
+        ""
+    }
+
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+        let plugin_dir = find_plugin_dir()
+            .ok_or_else(|| "Cannot find Feishu plugin directory".to_string())?;
+
+        let configs = scan_bot_configs(&plugin_dir);
+        if configs.is_empty() {
+            info!("No Feishu bot configs found, watcher idle");
+            return Ok(());
+        }
+
+        for (_uuid, config) in configs {
+            let entry = match load_bot_config(&config) {
+                Some(e) => e,
+                None => continue,
+            };
+
+            let tenant_name = entry.config.name.clone();
+            let token_cache = entry.token_cache.clone();
+            FEISHU_TENANTS.insert(tenant_name.clone(), entry);
+
+            let tx = sender.clone();
+            std::thread::spawn(move || {
+                let mut ch = channel::FeishuChannel::new(tenant_name.clone(), token_cache);
+                if let Err(e) = ch.start(tx) {
+                    warn!(tenant = %tenant_name, "Feishu channel start error: {e}");
+                }
+            });
+        }
+
+        info!("Feishu watcher started");
+        Ok(())
+    }
+
+    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+        let entry = FEISHU_TENANTS
+            .get(tenant_id)
+            .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
+
+        let token = entry
+            .token_cache
+            .get_token()
+            .map_err(|e| format!("Token error: {e}"))?;
+
+        let content = serde_json::json!({ "text": text }).to_string();
+        let http = entry.token_cache.http();
+        let base = entry.token_cache.api_base().to_string();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Runtime creation failed: {e}"))?;
+
+        rt.block_on(async {
+            let resp = api::send_message(http, &token, &base, user_id, "open_id", "text", &content)
+                .await?;
+
+            if resp.code != 0 {
+                return Err(format!(
+                    "Feishu send error: code={} msg={}",
+                    resp.code, resp.msg
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    fn stop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+}

@@ -32,6 +32,9 @@ pub struct PluginMeta {
     /// Author name.
     #[serde(default)]
     pub author: String,
+    /// Whether this plugin is built into the main binary (no .so needed).
+    #[serde(default)]
+    pub builtin: bool,
 }
 
 /// Full plugin configuration loaded from `plugin.toml`.
@@ -61,7 +64,8 @@ pub struct ChannelDescriptor {
     /// Human-readable name.
     #[serde(default)]
     pub name: String,
-    /// Bot UUID this channel is bound to (from bot.toml directory name).
+    /// Tenant identifier this channel belongs to.
+    #[serde(default)]
     pub tenant_id: String,
 }
 

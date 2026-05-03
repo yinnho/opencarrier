@@ -1,6 +1,6 @@
 //! Bot management API — unified management for WeCom/Feishu/DingTalk bots.
 //!
-//! Bots are stored as `<plugin>/<bot-uuid>/bot.toml` files.
+//! Bots are stored as `<plugin>/bot/<bot-uuid>/bot.toml` files.
 //! This module provides a bot-centric view and CRUD operations.
 
 use axum::extract::{Path, Query, State};
@@ -31,6 +31,9 @@ fn detect_platform(doc: &toml::Value) -> Vec<&str> {
             if ct.starts_with("dingtalk") && !platforms.contains(&"dingtalk") {
                 platforms.push("dingtalk");
             }
+            if ct == "weixin" && !platforms.contains(&"weixin") {
+                platforms.push("weixin");
+            }
         }
     }
     platforms
@@ -44,6 +47,8 @@ fn plugin_dir_to_platform(dir_name: &str) -> Option<&str> {
         Some("feishu")
     } else if dir_name.contains("dingtalk") {
         Some("dingtalk")
+    } else if dir_name.contains("weixin") {
+        Some("weixin")
     } else {
         None
     }
@@ -52,21 +57,23 @@ fn plugin_dir_to_platform(dir_name: &str) -> Option<&str> {
 /// Plugin directory names for each platform.
 fn platform_plugin_dir(platform: &str) -> Option<&str> {
     match platform {
-        "wecom" => Some("opencarrier-plugin-wecom"),
-        "feishu" => Some("opencarrier-plugin-feishu"),
-        "dingtalk" => Some("opencarrier-plugin-dingtalk"),
+        "wecom" | "wecom_smartbot" => Some("wecom"),
+        "feishu" => Some("feishu"),
+        "weixin" => Some("weixin"),
+        "dingtalk" => Some("dingtalk"),
         _ => None,
     }
 }
 
-/// Scan a plugin directory for bot.toml files in subdirectories.
+/// Scan a plugin directory for bot.toml files in `bot/<uuid>/bot.toml`.
 fn scan_bots(
     plugin_dir: &std::path::Path,
     dir_name: &str,
     platform: &str,
 ) -> Vec<serde_json::Value> {
     let mut bots = Vec::new();
-    let entries = match std::fs::read_dir(plugin_dir) {
+    let bot_root = plugin_dir.join("bot");
+    let entries = match std::fs::read_dir(&bot_root) {
         Ok(e) => e,
         Err(_) => return bots,
     };
@@ -210,6 +217,47 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
             let Some(platform) = platform else { continue };
 
             bots.extend(scan_bots(&plugin_dir, dir_name, platform));
+        }
+    }
+
+    // ── WeChat iLink bots from token files (fallback for bots without bot.toml) ──
+    let token_dir = home.join("weixin-tokens");
+    if token_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&token_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let name = tf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let ilink_bot_id = tf.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let bind_agent = tf.get("bind_agent").and_then(|v| v.as_str());
+                        let user_id = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
+
+                        // Deduplicate: skip if this tenant already has a bot.toml entry
+                        let already_exists = bots.iter().any(|b| {
+                            b.get("tenant_name").and_then(|v| v.as_str()) == Some(name)
+                        });
+                        if already_exists {
+                            continue;
+                        }
+
+                        bots.push(serde_json::json!({
+                            "id": user_id,
+                            "platform": "weixin",
+                            "plugin": "weixin",
+                            "tenant_name": name,
+                            "mode": "ilink",
+                            "bind_agent": bind_agent,
+                            "owner_id": null,
+                            "status": "configured",
+                            "ilink_bot_id": ilink_bot_id,
+                        }));
+                    }
+                }
+            }
         }
     }
 
@@ -472,9 +520,9 @@ pub async fn create_bot(
             let agent_uuid = if uuid::Uuid::parse_str(v).is_ok() {
                 v.to_string()
             } else {
-                let agents = state.kernel.list_agents("");
+                let agents = state.kernel.registry.list();
                 match agents.iter().find(|a| a.name == v) {
-                    Some(agent) => agent.id.clone(),
+                    Some(agent) => agent.id.to_string(),
                     None => {
                         return (
                             StatusCode::NOT_FOUND,
@@ -489,7 +537,7 @@ pub async fn create_bot(
 
     // Generate UUID for the bot
     let bot_uuid = uuid::Uuid::new_v4().to_string();
-    let bot_dir = plugin_dir.join(&bot_uuid);
+    let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
 
     // Check duplicate name
     for existing in scan_bots(&plugin_dir, plugin_dir_name, platform) {
@@ -622,7 +670,7 @@ pub async fn delete_bot(
         if !plugin_dir.is_dir() {
             continue;
         }
-        let bot_dir = plugin_dir.join(&bot_uuid);
+        let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
         let bot_toml = bot_dir.join("bot.toml");
         if bot_toml.exists() {
             match std::fs::remove_dir_all(&bot_dir) {
@@ -704,7 +752,7 @@ pub async fn bind_bot(
         if !plugin_dir.is_dir() {
             continue;
         }
-        let bot_dir = plugin_dir.join(&bot_uuid);
+        let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
         let bot_toml = bot_dir.join("bot.toml");
         if !bot_toml.exists() {
             continue;
@@ -713,14 +761,62 @@ pub async fn bind_bot(
         return match update_bot_toml(&bot_toml, |table| {
             table.insert("bind_agent".into(), toml::Value::String(agent_uuid.clone()));
         }) {
-            Ok(()) => (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "bound",
-                    "message": "分身已绑定，重启后生效",
-                    "bind_agent": agent_uuid,
-                })),
-            ),
+            Ok(()) => {
+                // Add dynamic bridge binding so messages route immediately
+                let dir_name = plugin_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                let platform = plugin_dir_to_platform(dir_name);
+                if let Some(platform) = platform {
+                    let tenant_name = std::fs::read_to_string(&bot_toml)
+                        .ok()
+                        .and_then(|c| c.parse::<toml::Value>().ok())
+                        .and_then(|d| {
+                            d.get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_default();
+
+                    let channel_type = match platform {
+                        "weixin" => "weixin",
+                        "wecom" => "wecom",
+                        "feishu" => "feishu",
+                        "dingtalk" => "dingtalk",
+                        _ => "",
+                    };
+
+                    if !channel_type.is_empty() && !tenant_name.is_empty() {
+                        // Set default plugin tenant
+                        state
+                            .kernel
+                            .set_default_plugin_tenant(&agent_uuid, &bot_uuid);
+                        // Add dynamic bridge bindings
+                        if let Some(ref pm) = state.plugin_manager {
+                            let pm = pm.lock().await;
+                            pm.add_channel_binding(channel_type, &bot_uuid, &agent_uuid);
+                            pm.add_channel_binding(channel_type, &tenant_name, &agent_uuid);
+                            pm.map_channel_tenant(channel_type, &tenant_name, &bot_uuid);
+                            tracing::info!(
+                                platform = %platform,
+                                tenant = %tenant_name,
+                                agent = %agent_uuid,
+                                "Dynamic bridge binding added"
+                            );
+                        }
+                    }
+                }
+
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "status": "bound",
+                        "message": "分身已绑定",
+                        "bind_agent": agent_uuid,
+                    })),
+                )
+            }
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e })),
@@ -760,7 +856,7 @@ pub async fn unbind_bot(
         if !plugin_dir.is_dir() {
             continue;
         }
-        let bot_dir = plugin_dir.join(&bot_uuid);
+        let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
         let bot_toml = bot_dir.join("bot.toml");
         if !bot_toml.exists() {
             continue;

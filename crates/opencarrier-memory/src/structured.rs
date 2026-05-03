@@ -449,10 +449,11 @@ impl StructuredStore {
                 }
             };
 
-            // Deduplicate: skip agents with names we've already seen
+            // Deduplicate: skip agents with same (tenant_id, name) we've already seen
             let name_lower = name.to_lowercase();
-            if !seen_names.insert(name_lower) {
-                tracing::info!(agent = %name, id = %id_str, "Skipping duplicate agent name");
+            let dedup_key = format!("{}:{}", tid_str.as_deref().unwrap_or(""), name_lower);
+            if !seen_names.insert(dedup_key) {
+                tracing::info!(agent = %name, id = %id_str, tenant = tid_str.as_deref().unwrap_or(""), "Skipping duplicate agent name");
                 continue;
             }
 

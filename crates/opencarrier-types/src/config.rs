@@ -884,6 +884,15 @@ pub struct KernelConfig {
     /// Each subdirectory should contain a plugin.toml and a shared library (.so/.dylib/.dll).
     #[serde(default)]
     pub plugins_dir: Option<PathBuf>,
+    /// External base URL for constructing download links (e.g. "https://carrier.yinnho.cn").
+    /// When set, the kernel appends output file download URLs to agent responses.
+    #[serde(default)]
+    pub external_url: Option<String>,
+    /// Tool whitelist — tools available to ALL agents without needing explicit declaration.
+    /// Non-whitelisted tools must be declared in the agent manifest's capabilities.tools
+    /// or via a ToolProfile. Default: empty (no free tools).
+    #[serde(default)]
+    pub whitelist_tools: Vec<String>,
 }
 
 /// Clone lifecycle configuration — controls post-conversation learning and knowledge evolution.
@@ -1065,6 +1074,8 @@ impl Default for KernelConfig {
             auth: AuthConfig::default(),
             clone_lifecycle: CloneLifecycleConfig::default(),
             plugins_dir: None,
+            external_url: None,
+            whitelist_tools: Vec::new(),
         }
     }
 }

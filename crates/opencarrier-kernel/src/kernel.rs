@@ -101,6 +101,8 @@ pub struct KernelRuntime {
     /// Per-agent message locks — serializes LLM calls for the same agent to prevent
     /// session corruption when multiple messages arrive concurrently.
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
+    /// File watcher handles for clone agents (stopped when dropped).
+    watcher_handles: std::sync::Mutex<Vec<opencarrier_lifecycle::watcher::WatcherHandle>>,
 }
 
 /// Cross-cutting coordination: capabilities, events, bindings, hooks, and process management.
@@ -1294,6 +1296,7 @@ impl OpenCarrierKernel {
                 running_tasks: dashmap::DashMap::new(),
                 wasm_sandbox,
                 agent_msg_locks: dashmap::DashMap::new(),
+                watcher_handles: std::sync::Mutex::new(Vec::new()),
             },
             coordination: KernelCoordination {
                 capabilities: CapabilityManager::new(),
@@ -2298,6 +2301,22 @@ impl OpenCarrierKernel {
             }
         }
 
+        // Snapshot output directory before the agent loop to detect new files
+        let output_dir_before = sender_id.as_ref().and_then(|sid| {
+            manifest.workspace.as_ref().map(|ws| {
+                let dir = ws.join("users").join(sid).join("output");
+                let existing = std::fs::read_dir(&dir)
+                    .ok()
+                    .map(|rd| {
+                        rd.filter_map(|e| e.ok())
+                            .map(|e| e.file_name().to_string_lossy().to_string())
+                            .collect::<std::collections::HashSet<String>>()
+                    })
+                    .unwrap_or_default();
+                (dir, existing)
+            })
+        });
+
         // Build link context from user message (auto-extract URLs for the agent)
         let message_with_links = if let Some(link_ctx) =
             opencarrier_runtime::link_understanding::build_link_context(message, &self.config.links)
@@ -2341,6 +2360,34 @@ impl OpenCarrierKernel {
         )
         .await
         .map_err(KernelError::OpenCarrier)?;
+
+        // Detect new output files and append download URLs to the response
+        let mut result = result;
+        if let (Some((dir, before)), Some(ref sid), Some(ref ext_url)) =
+            (&output_dir_before, &sender_id, &self.config.external_url)
+        {
+            let after: std::collections::HashSet<String> = std::fs::read_dir(dir)
+                .ok()
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let new_files: Vec<&String> = after.iter().filter(|f| !before.contains(*f)).collect();
+            if !new_files.is_empty() {
+                let base = ext_url.trim_end_matches('/');
+                let aid = agent_id.to_string();
+                let links: Vec<String> = new_files
+                    .iter()
+                    .map(|f| format!("{base}/api/agents/{aid}/output/{f}?sender_id={sid}"))
+                    .collect();
+                result.response.push_str("\n\n📎 生成的文件:\n");
+                for link in &links {
+                    result.response.push_str(&format!("- {link}\n"));
+                }
+            }
+        }
 
         // Evolution hook — post-conversation auto-learning for clones
         self.maybe_run_evolution(&manifest, message, &result.response);
@@ -3060,6 +3107,144 @@ impl OpenCarrierKernel {
     /// Start background loops for all non-reactive agents.
     ///
     /// Must be called after the kernel is wrapped in `Arc` (e.g., from the daemon).
+    /// Start file watchers for clone agents to auto-compile on knowledge changes.
+    fn start_clone_watchers(self: &Arc<Self>) {
+        if !self.config.clone_lifecycle.evolution_enabled {
+            return;
+        }
+
+        let agents = self.registry.list();
+        let kernel = Arc::clone(self);
+
+        for entry in &agents {
+            let Some(ref _cs) = entry.manifest.clone_source else { continue };
+            let Some(ref workspace) = entry.manifest.workspace else { continue };
+
+            let config = opencarrier_lifecycle::evolution_config::read_evolution_config(
+                workspace.as_path(),
+            );
+
+            if matches!(config.evolution_mode, opencarrier_lifecycle::evolution_config::EvolutionMode::Disabled) {
+                continue;
+            }
+
+            let driver = match kernel.resolve_driver(&entry.manifest) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!(agent = %entry.name, error = %e, "No LLM driver for watcher");
+                    continue;
+                }
+            };
+            let rt_handle = tokio::runtime::Handle::current();
+
+            let llm_call: Arc<opencarrier_lifecycle::watcher::LlmCallback> = Arc::new(
+                move |sys: &str, user: &str, max_tokens: u32| -> anyhow::Result<String> {
+                    let request = opencarrier_runtime::llm_driver::CompletionRequest {
+                        model: String::new(),
+                        messages: vec![opencarrier_types::message::Message {
+                            role: opencarrier_types::message::Role::User,
+                            content: opencarrier_types::message::MessageContent::Text(user.to_string()),
+                        }],
+                        tools: vec![],
+                        max_tokens,
+                        temperature: 0.3,
+                        system: Some(sys.to_string()),
+                        thinking: None,
+                    };
+                    rt_handle.block_on(async { driver.complete(request).await })
+                        .map(|r: opencarrier_runtime::llm_driver::CompletionResponse| r.text())
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                },
+            );
+
+            match opencarrier_lifecycle::watcher::spawn_watcher(
+                workspace.clone(),
+                config,
+                llm_call,
+                None,
+            ) {
+                Ok(handle) => {
+                    info!(agent = %entry.name, "Started knowledge file watcher");
+                    if let Ok(mut handles) = kernel.runtime.watcher_handles.lock() {
+                        handles.push(handle);
+                    }
+                }
+                Err(e) => {
+                    warn!(agent = %entry.name, error = %e, "Failed to start file watcher");
+                }
+            }
+        }
+    }
+
+    /// Check hub for clone template upgrades.
+    /// For each clone with `hub_template_id`, queries hub for latest version.
+    /// If newer and `auto_upgrade`, downloads and installs upgrade.
+    fn check_hub_upgrades(self: &Arc<Self>) {
+        let hub_url = match self.config.hub.url.as_str() {
+            "" | "none" => return,
+            url => url.to_string(),
+        };
+
+        let agents = self.registry.list();
+        let kernel = Arc::clone(self);
+        tokio::spawn(async move {
+            for entry in &agents {
+                let Some(ref cs) = entry.manifest.clone_source else { continue };
+                let Some(ref tid) = cs.hub_template_id else { continue };
+
+                let local_ver: i64 = match cs.agx_version.parse() {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                let url = format!("{}/api/templates/{}", hub_url.trim_end_matches('/'), tid);
+                let resp = match reqwest::get(&url).await {
+                    Ok(r) if r.status().is_success() => r,
+                    _ => continue,
+                };
+                let json: serde_json::Value = match resp.json().await {
+                    Ok(j) => j,
+                    Err(_) => continue,
+                };
+                let remote_ver: i64 = match json.get("latest_version").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()) {
+                    Some(v) => v,
+                    None => continue,
+                };
+
+                if remote_ver <= local_ver {
+                    continue;
+                }
+
+                info!(
+                    agent = %entry.name,
+                    hub_template = %tid,
+                    local = local_ver,
+                    remote = remote_ver,
+                    auto_upgrade = cs.auto_upgrade,
+                    "Hub template update available"
+                );
+
+                if !cs.auto_upgrade {
+                    continue;
+                }
+
+                let agent_name = entry.name.clone();
+                match kernel.clone_upgrade(&agent_name).await {
+                    Ok(ver) => info!(
+                        agent = %agent_name,
+                        new_version = %ver,
+                        "Auto-upgrade completed"
+                    ),
+                    Err(e) => warn!(
+                        agent = %agent_name,
+                        error = %e,
+                        "Auto-upgrade failed"
+                    ),
+                }
+            }
+        });
+    }
+
     /// Iterates the agent registry and starts background tasks for agents with
     /// `Continuous`, `Periodic`, or `Proactive` schedules.
     pub fn start_background_agents(self: &Arc<Self>) {
@@ -3218,6 +3403,12 @@ impl OpenCarrierKernel {
                 kernel.connect_mcp_servers().await;
             });
         }
+
+        // Check hub for clone template upgrades
+        self.check_hub_upgrades();
+
+        // Start file watchers for clone agents
+        self.start_clone_watchers();
 
         // Cron scheduler tick loop — fires due jobs every 15 seconds
         {
@@ -3825,27 +4016,28 @@ impl OpenCarrierKernel {
             .map(|e| e.manifest.capabilities.tools.clone())
             .unwrap_or_default();
 
-        // Check if the agent has unrestricted tool access:
-        // - capabilities.tools is empty (not specified → all tools)
-        // - capabilities.tools contains "*" (explicit wildcard)
-        let tools_unrestricted =
-            declared_tools.is_empty() || declared_tools.iter().any(|t| t == "*");
+        // Only explicit "*" wildcard means unrestricted.
+        // Empty declared_tools + no profile = only whitelist tools.
+        let tools_unrestricted = declared_tools.iter().any(|t| t == "*");
 
         // Step 1: Filter builtin tools.
-        // Priority: declared tools > ToolProfile > all builtins.
+        // Priority: declared tools > ToolProfile > whitelist only.
         let has_tool_all = entry.as_ref().is_some_and(|_| {
             let caps = self.coordination.capabilities.list(agent_id);
             caps.iter().any(|c| matches!(c, Capability::ToolAll))
         });
 
-        let mut all_tools: Vec<ToolDefinition> = if !tools_unrestricted {
+        let mut all_tools: Vec<ToolDefinition> = if tools_unrestricted {
+            // Explicit "*" — all builtins
+            all_builtins
+        } else if !declared_tools.is_empty() {
             // Agent declares specific tools — only include matching builtins
             all_builtins
                 .into_iter()
                 .filter(|t| declared_tools.iter().any(|d| d == &t.name))
                 .collect()
         } else {
-            // No specific tools declared — fall back to profile or all builtins
+            // No declared tools — fall back to profile or whitelist only
             match &tool_profile {
                 Some(profile)
                     if *profile != ToolProfile::Full && *profile != ToolProfile::Custom =>
@@ -3856,8 +4048,9 @@ impl OpenCarrierKernel {
                         .filter(|t| allowed.iter().any(|a| a == "*" || a == &t.name))
                         .collect()
                 }
-                _ if has_tool_all => all_builtins,
-                _ => all_builtins,
+                Some(_) if has_tool_all => all_builtins,
+                // No profile, no declared tools, no ToolAll — only whitelist tools
+                _ => vec![],
             }
         };
 
@@ -3976,6 +4169,33 @@ impl OpenCarrierKernel {
         });
         if exec_blocks_shell {
             all_tools.retain(|t| t.name != "shell_exec");
+        }
+
+        // Step 6: Union with global whitelist tools.
+        // Whitelist tools are always available regardless of declaration.
+        let whitelist = &self.config.whitelist_tools;
+        if !whitelist.is_empty() {
+            let existing_names: std::collections::HashSet<String> =
+                all_tools.iter().map(|t| t.name.clone()).collect();
+            let all_defs: Vec<ToolDefinition> = builtin_tool_definitions();
+            let mut added = Vec::new();
+            for def in all_defs {
+                if whitelist.iter().any(|w| w == &def.name)
+                    && !existing_names.contains(&def.name)
+                {
+                    added.push(def.name.clone());
+                    all_tools.push(def);
+                }
+            }
+            if !added.is_empty() {
+                tracing::info!(
+                    agent = %agent_id,
+                    ?added,
+                    "Whitelist tools added"
+                );
+            }
+        } else {
+            tracing::warn!(agent = %agent_id, "whitelist_tools is empty in config");
         }
 
         all_tools
@@ -4499,6 +4719,238 @@ impl OpenCarrierKernel {
             );
         }
     }
+
+    /// Upgrade a clone agent from hub by downloading latest .agx and selectively
+    /// replacing template files while preserving user data.
+    ///
+    /// Files replaced: agent.toml, SOUL.md, system_prompt.md, profile.md,
+    ///                 skills/, agents/, EVOLUTION.md, data/knowledge/
+    /// Files preserved: memory/, sessions/, logs/, users/, data/ (except knowledge/)
+    pub async fn clone_upgrade(&self, name: &str) -> Result<String, String> {
+        use opencarrier_clone::{convert_to_manifest, load_agx};
+
+        // 1. Find the agent and validate it's a hub clone
+        let entry = self
+            .registry
+            .find_by_name(name)
+            .ok_or_else(|| format!("Agent '{}' not found", name))?;
+
+        let cs = entry
+            .manifest
+            .clone_source
+            .as_ref()
+            .ok_or_else(|| format!("Agent '{}' is not a clone", name))?;
+
+        let hub_template_id = cs
+            .hub_template_id
+            .as_ref()
+            .ok_or_else(|| format!("Agent '{}' has no hub_template_id", name))?
+            .clone();
+
+        let workspace_str = self
+            .resolve_agent_workspace(name)
+            .ok_or_else(|| format!("Agent '{}' has no workspace", name))?;
+        let workspace = std::path::Path::new(&workspace_str);
+
+        // 2. Download latest .agx from hub
+        let hub_url = self.config.hub.url.trim_end_matches('/').to_string();
+        let download_url = format!(
+            "{}/api/templates/{}/download",
+            hub_url,
+            urlencoding::encode(&hub_template_id)
+        );
+
+        let resp = reqwest::get(&download_url)
+            .await
+            .map_err(|e| format!("Failed to download from hub: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Hub download failed {}: {} — {}", hub_template_id, status, body));
+        }
+
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read response: {e}"))?;
+
+        // 3. Parse the .agx
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "opencarrier-upgrade-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&tmp_dir)
+            .map_err(|e| format!("Failed to create temp dir: {e}"))?;
+        let tmp_path = tmp_dir.join("upgrade.agx");
+        std::fs::write(&tmp_path, &bytes)
+            .map_err(|e| format!("Failed to write temp file: {e}"))?;
+
+        let clone_data = load_agx(&tmp_path).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            format!("Failed to parse .agx: {e}")
+        })?;
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        // 4. Get the remote version from clone_data manifest
+        let remote_version: String = clone_data
+            .manifest
+            .as_ref()
+            .map(|m| m.version.clone())
+            .unwrap_or_default();
+
+        // 5. Selectively replace template files
+
+        // Write SOUL.md
+        if !clone_data.soul.is_empty() {
+            std::fs::write(workspace.join("SOUL.md"), &clone_data.soul)
+                .map_err(|e| format!("Failed to write SOUL.md: {e}"))?;
+        }
+
+        // Write system_prompt.md
+        if !clone_data.system_prompt.is_empty() {
+            std::fs::write(workspace.join("system_prompt.md"), &clone_data.system_prompt)
+                .map_err(|e| format!("Failed to write system_prompt.md: {e}"))?;
+        }
+
+        // Write profile.md
+        if !clone_data.profile.is_empty() {
+            std::fs::write(workspace.join("profile.md"), &clone_data.profile)
+                .map_err(|e| format!("Failed to write profile.md: {e}"))?;
+        }
+
+        // Write EVOLUTION.md
+        if !clone_data.evolution.is_empty() {
+            std::fs::write(workspace.join("EVOLUTION.md"), &clone_data.evolution)
+                .map_err(|e| format!("Failed to write EVOLUTION.md: {e}"))?;
+        }
+
+        // Replace skills/ directory
+        let skills_dir = workspace.join("skills");
+        if skills_dir.exists() {
+            let _ = std::fs::remove_dir_all(&skills_dir);
+        }
+        std::fs::create_dir_all(&skills_dir)
+            .map_err(|e| format!("Failed to create skills dir: {e}"))?;
+        for skill in &clone_data.skills {
+            let skill_dir = skills_dir.join(&skill.name);
+            std::fs::create_dir_all(&skill_dir)
+                .map_err(|e| format!("Failed to create skill dir: {e}"))?;
+
+            let tools_str = if skill.allowed_tools.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\nallowed_tools: {}",
+                    opencarrier_clone::format_string_array(&skill.allowed_tools)
+                )
+            };
+            let skill_md = format!(
+                "---\nname: {}\nwhen_to_use: {}{}\n---\n\n{}",
+                skill.name, skill.when_to_use, tools_str, skill.prompt
+            );
+            std::fs::write(skill_dir.join("SKILL.md"), skill_md)
+                .map_err(|e| format!("Failed to write skill: {e}"))?;
+
+            if !skill.scripts.is_empty() {
+                let scripts_dir = skill_dir.join("scripts");
+                std::fs::create_dir_all(&scripts_dir)
+                    .map_err(|e| format!("Failed to create scripts dir: {e}"))?;
+                for script in &skill.scripts {
+                    std::fs::write(
+                        scripts_dir.join(format!("{}.toml", script.name)),
+                        &script.toml_content,
+                    )
+                    .map_err(|e| format!("Failed to write script: {e}"))?;
+                }
+            }
+        }
+
+        // Replace agents/ directory
+        let agents_dir = workspace.join("agents");
+        if agents_dir.exists() {
+            let _ = std::fs::remove_dir_all(&agents_dir);
+        }
+        std::fs::create_dir_all(&agents_dir)
+            .map_err(|e| format!("Failed to create agents dir: {e}"))?;
+        for agent in &clone_data.agents {
+            let color_line = agent
+                .color
+                .as_ref()
+                .map(|c| format!("color: {}", c))
+                .unwrap_or_default();
+            let tools_line = if agent.tools.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\ntools: {}",
+                    opencarrier_clone::format_string_array(&agent.tools)
+                )
+            };
+            let model_line = if agent.model.is_empty() {
+                String::new()
+            } else {
+                format!("\nmodel: {}", agent.model)
+            };
+            let agent_md = format!(
+                "---\nname: {}\ndescription: {}{}{}\n{}\n---\n\n{}",
+                agent.name, agent.description, tools_line, model_line, color_line, agent.prompt,
+            );
+            std::fs::write(agents_dir.join(format!("{}.md", agent.name)), agent_md)
+                .map_err(|e| format!("Failed to write agent: {e}"))?;
+        }
+
+        // Replace data/knowledge/ files
+        let knowledge_dir = workspace.join("data").join("knowledge");
+        std::fs::create_dir_all(&knowledge_dir)
+            .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+        for (kname, content) in &clone_data.knowledge {
+            std::fs::write(knowledge_dir.join(kname), content)
+                .map_err(|e| format!("Failed to write knowledge: {e}"))?;
+        }
+
+        // 6. Write new agent.toml preserving clone_source with updated version
+        let mut new_manifest = convert_to_manifest(&clone_data, Some(hub_template_id.clone()));
+        new_manifest.name = name.to_string();
+        new_manifest.workspace = Some(workspace.to_path_buf());
+
+        // Preserve the original clone_source but update agx_version
+        if let Some(ref mut orig_cs) = new_manifest.clone_source {
+            orig_cs.agx_version = if remote_version.is_empty() {
+                let current: i64 = cs.agx_version.parse().unwrap_or(0);
+                (current + 1).to_string()
+            } else {
+                remote_version.clone()
+            };
+            orig_cs.auto_upgrade = cs.auto_upgrade;
+        }
+
+        let toml_str = toml::to_string_pretty(&new_manifest)
+            .map_err(|e| format!("Failed to serialize agent.toml: {e}"))?;
+        std::fs::write(workspace.join("agent.toml"), toml_str)
+            .map_err(|e| format!("Failed to write agent.toml: {e}"))?;
+
+        // 7. Update registry entry
+        let updated_cs = new_manifest.clone_source.clone().unwrap();
+        self.registry
+            .update_clone_source(entry.id, updated_cs)
+            .map_err(|e| format!("Failed to update registry: {e}"))?;
+
+        // 8. Restart the agent so it picks up new files
+        let _ = self.restart_agent(&entry.id.to_string());
+
+        info!(
+            agent = %name,
+            new_version = %if remote_version.is_empty() { "bumped" } else { &remote_version },
+            "Clone upgraded from hub"
+        );
+
+        Ok(if remote_version.is_empty() {
+            "upgraded".to_string()
+        } else {
+            remote_version
+        })
+    }
 }
 
 #[async_trait]
@@ -4617,6 +5069,19 @@ impl KernelHandle for OpenCarrierKernel {
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
         OpenCarrierKernel::kill_agent(self, id).map_err(|e| format!("Kill failed: {e}"))
+    }
+
+    fn restart_agent(&self, agent_id: &str) -> Result<(), String> {
+        let id: AgentId = agent_id
+            .parse()
+            .map_err(|_| "Invalid agent ID".to_string())?;
+        // Cancel any running task
+        self.stop_agent_run(id).map_err(|e| format!("Stop failed: {e}"))?;
+        // Reset state to Running
+        self.registry
+            .set_state(id, opencarrier_types::agent::AgentState::Running)
+            .map_err(|e| format!("State reset failed: {e}"))?;
+        Ok(())
     }
 
     fn memory_store(
@@ -5062,7 +5527,7 @@ impl KernelHandle for OpenCarrierKernel {
         })?;
 
         // Convert to AgentManifest
-        let mut manifest = convert_to_manifest(&clone_data);
+        let mut manifest = convert_to_manifest(&clone_data, Some(name.to_string()));
         manifest.name = clone_name.clone();
         manifest.workspace = Some(workspace_dir);
 

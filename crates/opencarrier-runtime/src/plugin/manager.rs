@@ -3,12 +3,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use opencarrier_types::plugin::PluginMessage;
 use opencarrier_types::tool::ToolDefinition;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use super::bridge::PluginBridgeManager;
+use super::builtin_registry::BuiltinPluginRegistry;
 use super::loader::PluginLoader;
 use super::tool_dispatch::PluginToolDispatcher;
 use crate::kernel_handle::KernelHandle;
@@ -26,9 +28,13 @@ pub struct PluginManager {
     /// Bridge message receiver (moved to bridge on start).
     message_rx: Option<mpsc::Receiver<PluginMessage>>,
     /// Successfully loaded plugins.
-    loaded_plugins: Vec<Arc<super::loader::LoadedPlugin>>,
+    loaded_plugins: Vec<Arc<dyn super::instance::PluginInstance>>,
     /// Kernel handle for bridge routing.
     kernel: Arc<dyn KernelHandle>,
+    /// Shared channel bindings (kept after start() for dynamic additions).
+    bridge_bindings: Option<Arc<DashMap<(String, String), String>>>,
+    /// Shared tenant-to-bot map (kept after start() for dynamic additions).
+    bridge_tenant_map: Option<Arc<DashMap<(String, String), String>>>,
 }
 
 impl PluginManager {
@@ -41,19 +47,24 @@ impl PluginManager {
             message_rx: Some(rx),
             loaded_plugins: Vec::new(),
             kernel,
+            bridge_bindings: None,
+            bridge_tenant_map: None,
         }
     }
 
     /// Load all plugins from the given directory.
     ///
-    /// Each subdirectory should contain `plugin.toml` and a shared library.
-    pub fn load_all(&mut self, plugins_dir: &Path) {
+    /// Loads external (.so) plugins and built-in plugins (compiled into the binary).
+    /// Built-in plugins are identified by `builtin = true` in `plugin.toml` and
+    /// constructed using the provided `BuiltinPluginRegistry`.
+    pub fn load_all(&mut self, plugins_dir: &Path, registry: &BuiltinPluginRegistry) {
+        // 1. Load external (.so) plugins
         let results = PluginLoader::load_all(plugins_dir, self.message_tx.clone());
 
         for result in results {
             match result {
                 Ok(plugin) => {
-                    let plugin_arc = Arc::new(plugin);
+                    let plugin_arc: Arc<dyn super::instance::PluginInstance> = Arc::new(plugin);
                     self.tool_dispatcher.register(plugin_arc.clone());
                     self.loaded_plugins.push(plugin_arc);
                 }
@@ -61,6 +72,18 @@ impl PluginManager {
                     error!(error = %e, "Failed to load plugin");
                 }
             }
+        }
+
+        // 2. Load built-in plugins
+        let builtins = PluginLoader::load_builtin_plugins(
+            plugins_dir,
+            self.message_tx.clone(),
+            registry,
+        );
+        for builtin in builtins {
+            let plugin_arc: Arc<dyn super::instance::PluginInstance> = Arc::new(builtin);
+            self.tool_dispatcher.register(plugin_arc.clone());
+            self.loaded_plugins.push(plugin_arc);
         }
 
         info!(
@@ -77,17 +100,17 @@ impl PluginManager {
     pub async fn start(&mut self, _plugins_dir: &Path) {
         // Start channel adapters
         for plugin in &self.loaded_plugins {
-            for channel in &plugin.channels {
+            for channel in plugin.channels() {
                 if let Err(e) = plugin.start_channel(channel) {
                     error!(
-                        plugin = %plugin.name,
+                        plugin = %plugin.name(),
                         channel = %channel.channel_type,
                         error = %e,
                         "Failed to start channel"
                     );
                 } else {
                     info!(
-                        plugin = %plugin.name,
+                        plugin = %plugin.name(),
                         channel = %channel.channel_type,
                         "Channel started"
                     );
@@ -101,10 +124,10 @@ impl PluginManager {
             bridge.add_plugin(plugin.clone());
 
             // Discover bots from <plugin-dir>/<uuid>/bot.toml
-            let plugin_dir = &plugin.path;
+            let plugin_dir = plugin.path();
             let bots = super::loader::PluginLoader::discover_bots(plugin_dir);
             let channels: Vec<String> = plugin
-                .channels
+                .channels()
                 .iter()
                 .map(|c| c.channel_type.clone())
                 .collect();
@@ -137,6 +160,32 @@ impl PluginManager {
                         );
                     }
 
+                    // Also bind using channel descriptor tenant_id (may differ from bot_uuid).
+                    // Plugins like weixin use the tenant name as tenant_id in messages.
+                    for channel in plugin.channels() {
+                        if channel.channel_type != "weixin" {
+                            continue;
+                        }
+                        if !channel.tenant_id.is_empty() && channel.tenant_id != *bot_uuid {
+                            bridge.bind_channel(
+                                channel.channel_type.clone(),
+                                channel.tenant_id.clone(),
+                                agent_uuid.clone(),
+                            );
+                            bridge.map_channel_tenant(
+                                channel.channel_type.clone(),
+                                channel.tenant_id.clone(),
+                                bot_uuid.clone(),
+                            );
+                            info!(
+                                channel = %channel.channel_type,
+                                tenant_id = %channel.tenant_id,
+                                agent_id = %agent_uuid,
+                                "Bound channel tenant_id to agent"
+                            );
+                        }
+                    }
+
                     // Set default plugin tenant for the agent (used when no channel context)
                     self.kernel.set_default_plugin_tenant(agent_uuid, bot_uuid);
                 } else {
@@ -149,11 +198,42 @@ impl PluginManager {
             }
         }
 
+        // Keep shared references for dynamic binding additions
+        self.bridge_bindings = Some(bridge.shared_bindings());
+        self.bridge_tenant_map = Some(bridge.shared_tenant_map());
+
         // Start bridge in a background task
         if let Some(rx) = self.message_rx.take() {
             tokio::spawn(async move {
                 bridge.run(rx).await;
             });
+        }
+    }
+
+    /// Dynamically add a channel binding (e.g., when a bot is bound to an agent via API).
+    /// This takes effect immediately without restarting the bridge.
+    pub fn add_channel_binding(&self, channel_type: &str, key: &str, agent_id: &str) {
+        if let Some(ref bindings) = self.bridge_bindings {
+            bindings.insert(
+                (channel_type.to_string(), key.to_string()),
+                agent_id.to_string(),
+            );
+            info!(
+                channel = %channel_type,
+                key = %key,
+                agent = %agent_id,
+                "Dynamically bound channel to agent"
+            );
+        }
+    }
+
+    /// Dynamically map a channel's tenant_id to its bot UUID.
+    pub fn map_channel_tenant(&self, channel_type: &str, tenant_id: &str, bot_uuid: &str) {
+        if let Some(ref map) = self.bridge_tenant_map {
+            map.insert(
+                (channel_type.to_string(), tenant_id.to_string()),
+                bot_uuid.to_string(),
+            );
         }
     }
 
@@ -172,11 +252,11 @@ impl PluginManager {
         self.loaded_plugins
             .iter()
             .map(|p| opencarrier_types::plugin::PluginStatus {
-                name: p.name.clone(),
-                version: p.version.clone(),
+                name: p.name().to_string(),
+                version: p.version().to_string(),
                 loaded: true,
-                channels: p.channels.iter().map(|c| c.channel_type.clone()).collect(),
-                tools: p.tools.iter().map(|t| t.name.clone()).collect(),
+                channels: p.channels().iter().map(|c| c.channel_type.clone()).collect(),
+                tools: p.tools().iter().map(|t| t.name.clone()).collect(),
                 tenant_count: 0,
                 last_error: None,
             })
@@ -186,7 +266,7 @@ impl PluginManager {
     /// Stop all plugins and release resources.
     pub fn stop_all(&self) {
         for plugin in &self.loaded_plugins {
-            info!(plugin = %plugin.name, "Stopping plugin");
+            info!(plugin = %plugin.name(), "Stopping plugin");
             plugin.stop();
         }
     }

@@ -335,6 +335,21 @@ impl AgentRegistry {
         Ok(())
     }
 
+    /// Update an agent's clone_source (e.g. agx_version after upgrade).
+    pub fn update_clone_source(
+        &self,
+        id: AgentId,
+        clone_source: opencarrier_types::agent::CloneSource,
+    ) -> OpenCarrierResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
+        entry.manifest.clone_source = Some(clone_source);
+        entry.last_active = chrono::Utc::now();
+        Ok(())
+    }
+
     /// Mark an agent's onboarding as complete.
     pub fn mark_onboarding_complete(&self, id: AgentId) -> OpenCarrierResult<()> {
         let mut entry = self

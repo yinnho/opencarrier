@@ -21,7 +21,7 @@ use crate::loader::CloneData;
 /// - skills → manifest.skills (names) + capabilities.tools (union of allowed_tools)
 /// - profile name → manifest.name
 /// - profile description → manifest.description
-pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
+pub fn convert_to_manifest(data: &CloneData, hub_template_id: Option<String>) -> AgentManifest {
     // Clone identity is stored as separate files in the workspace.
     // The prompt_builder reads SOUL.md, system_prompt.md, skills/, MEMORY.md,
     // and knowledge/ at runtime to dynamically build the system prompt.
@@ -80,7 +80,8 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
             .as_ref()
             .map(|m| m.version.clone())
             .unwrap_or_else(|| "1".to_string()),
-        hub_template_id: None,
+        hub_template_id,
+        auto_upgrade: false,
     };
 
     let knowledge_files: Vec<String> = data.knowledge.keys().cloned().collect();
@@ -147,7 +148,7 @@ pub fn convert_to_manifest(data: &CloneData) -> AgentManifest {
 /// - EVOLUTION.md
 /// - style/*.md
 pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<()> {
-    let manifest = convert_to_manifest(data);
+    let manifest = convert_to_manifest(data, None);
 
     // Create workspace directory structure
     std::fs::create_dir_all(workspace)

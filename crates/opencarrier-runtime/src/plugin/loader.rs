@@ -13,6 +13,7 @@ use libloading::Library;
 use opencarrier_types::plugin::{
     BotConfig, ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginToolDef, PLUGIN_ABI_VERSION,
 };
+use super::instance::PluginInstance;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -235,6 +236,63 @@ impl Drop for LoadedPlugin {
 }
 
 // ---------------------------------------------------------------------------
+// PluginInstance trait implementation (adapts FFI calls to unified interface)
+// ---------------------------------------------------------------------------
+
+impl super::instance::PluginInstance for LoadedPlugin {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn version(&self) -> &str {
+        &self.version
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn channels(&self) -> &[LoadedChannel] {
+        &self.channels
+    }
+
+    fn tools(&self) -> &[PluginToolDef] {
+        &self.tools
+    }
+
+    fn start_channel(&self, channel: &LoadedChannel) -> Result<(), String> {
+        self.start_channel(channel)
+    }
+
+    fn channel_send(
+        &self,
+        channel: &LoadedChannel,
+        tenant_id: &str,
+        user_id: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        self.channel_send(channel, tenant_id, user_id, text)
+    }
+
+    fn tool_execute(
+        &self,
+        tool_name: &str,
+        args_json: &str,
+        context_json: &str,
+    ) -> Result<String, String> {
+        self.tool_execute(tool_name, args_json, context_json)
+    }
+
+    fn stop(&self) {
+        LoadedPlugin::stop(self);
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.is_stopped()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin loader
 // ---------------------------------------------------------------------------
 
@@ -293,6 +351,88 @@ impl PluginLoader {
         }
 
         results
+    }
+
+    /// Load built-in plugins from the given directory.
+    ///
+    /// Scans subdirectories for `plugin.toml` with `builtin = true` and
+    /// constructs `BuiltinPlugin` instances using the registry factories.
+    pub fn load_builtin_plugins(
+        plugins_dir: &Path,
+        message_tx: mpsc::Sender<opencarrier_types::plugin::PluginMessage>,
+        registry: &super::builtin_registry::BuiltinPluginRegistry,
+    ) -> Vec<super::builtin::BuiltinPlugin> {
+        let mut builtins = Vec::new();
+
+        let entries = match std::fs::read_dir(plugins_dir) {
+            Ok(entries) => entries,
+            Err(_) => return builtins,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let plugin_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+
+            let config_path = path.join("plugin.toml");
+            if !config_path.exists() {
+                continue;
+            }
+
+            let config_content = match std::fs::read_to_string(&config_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let config: PluginConfig = match toml::from_str(&config_content) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            if !config.meta.builtin {
+                continue;
+            }
+
+            let Some(factories) = registry.get_plugin(plugin_name) else {
+                warn!(plugin = %plugin_name, "Built-in plugin registered in plugin.toml but no factories in registry");
+                continue;
+            };
+
+            let mut builtin = super::builtin::BuiltinPlugin::new(
+                config.meta.name.clone(),
+                config.meta.version.clone(),
+                path.clone(),
+            );
+
+            for factory in factories.channels {
+                let adapter = factory();
+                if let Err(e) = builtin.register_channel(adapter, message_tx.clone()) {
+                    warn!(plugin = %plugin_name, error = %e, "Failed to register built-in channel");
+                }
+            }
+
+            for factory in factories.tools {
+                let provider = factory();
+                builtin.register_tool(provider);
+            }
+
+            info!(
+                plugin = %plugin_name,
+                channels = builtin.channels().len(),
+                tools = builtin.tools().len(),
+                "Built-in plugin loaded"
+            );
+
+            builtins.push(builtin);
+        }
+
+        builtins
     }
 
     fn load_plugin(
@@ -432,10 +572,11 @@ impl PluginLoader {
         })
     }
 
-    /// Discover bot configs from `<plugin-dir>/<uuid>/bot.toml` subdirectories.
+    /// Discover bot configs from `<plugin-dir>/bot/<uuid>/bot.toml` subdirectories.
     pub fn discover_bots(plugin_dir: &Path) -> Vec<(String, BotConfig)> {
         let mut bots = Vec::new();
-        let entries = match std::fs::read_dir(plugin_dir) {
+        let bot_root = plugin_dir.join("bot");
+        let entries = match std::fs::read_dir(&bot_root) {
             Ok(e) => e,
             Err(_) => return bots,
         };

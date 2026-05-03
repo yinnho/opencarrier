@@ -192,7 +192,15 @@ pub async fn agent_ws(
             .and_then(|token| crate::session_auth::verify_session_token(&token, &session_secret))
             .is_some();
 
-        if !header_auth && !query_auth && !cookie_auth {
+        // Session query param auth (for share page WebSocket)
+        let query_session_auth = uri
+            .query()
+            .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("session=")))
+            .map(|t| urlencoding::decode(t).map(|s| s.to_string()).unwrap_or_default())
+            .and_then(|token| crate::session_auth::verify_session_token(&token, &session_secret))
+            .is_some();
+
+        if !header_auth && !query_auth && !cookie_auth && !query_session_auth {
             warn!("WebSocket upgrade rejected: invalid auth");
             return axum::http::StatusCode::UNAUTHORIZED.into_response();
         }

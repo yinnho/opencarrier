@@ -115,6 +115,7 @@ macro_rules! declare_plugin {
                 channel_descs.push($crate::ChannelDescriptor {
                     channel_type: adapter.channel_type().to_string(),
                     name: adapter.name().to_string(),
+                    tenant_id: adapter.tenant_id().to_string(),
                 });
                 channels.push(_OcChannelEntry { adapter });
             }
@@ -174,7 +175,7 @@ macro_rules! declare_plugin {
             }
             unsafe {
                 // Guard against double-stop: only proceed if this is the active state
-                if _OC_STATE.load(Ordering::Acquire) != handle {
+                if _OC_STATE.load(Ordering::Acquire) != handle as *mut _OcState {
                     return;
                 }
                 let state = Box::from_raw(handle as *mut _OcState);

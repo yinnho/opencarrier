@@ -18,6 +18,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,6 +298,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-padding"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -344,6 +364,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cbc"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26b52a9543ae338f279b96b0b9fed9c8093744685043739079ce85cd58f289a6"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -389,6 +418,16 @@ checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
 dependencies = [
  "chrono",
  "phf",
+]
+
+[[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common",
+ "inout",
 ]
 
 [[package]]
@@ -1665,6 +1704,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "block-padding",
+ "generic-array",
+]
+
+[[package]]
 name = "instability"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1922,6 +1971,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2151,6 +2210,7 @@ dependencies = [
 name = "opencarrier-kernel"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64",
  "chrono",
@@ -2182,6 +2242,7 @@ dependencies = [
  "toml 0.8.2",
  "tracing",
  "tracing-subscriber",
+ "urlencoding",
  "uuid",
  "zeroize",
 ]
@@ -2234,26 +2295,34 @@ dependencies = [
 name = "opencarrier-runtime"
 version = "0.2.0"
 dependencies = [
+ "aes",
  "anyhow",
  "async-trait",
+ "axum",
  "base64",
  "bytes",
+ "cbc",
  "chrono",
  "dashmap",
  "dirs",
  "futures",
  "hex",
  "libloading",
+ "md-5",
  "opencarrier-clone",
  "opencarrier-lifecycle",
  "opencarrier-memory",
+ "opencarrier-plugin-sdk",
  "opencarrier-skills",
  "opencarrier-types",
+ "rand 0.8.5",
  "regex-lite",
  "reqwest",
+ "roxmltree",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "shlex",
  "tempfile",
@@ -2264,6 +2333,7 @@ dependencies = [
  "tokio-tungstenite 0.24.0",
  "toml 0.8.2",
  "tracing",
+ "urlencoding",
  "uuid",
  "wasmtime",
  "zeroize",
@@ -2924,6 +2994,12 @@ dependencies = [
  "rmp",
  "serde",
 ]
+
+[[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rusqlite"

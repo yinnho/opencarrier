@@ -91,6 +91,7 @@ pub async fn auth(
     //   - Health check for external monitoring
     //   - Auth endpoints (login/logout/check) — must be public to authenticate
     let is_public = path == "/"
+        || path == "/share"
         || path == "/logo.png"
         || path == "/favicon.ico"
         || path == "/manifest.json"
@@ -100,7 +101,10 @@ pub async fn auth(
         || path == "/api/health"
         || path == "/api/auth/login"
         || path == "/api/auth/logout"
-        || (path == "/api/auth/check" && is_get);
+        || (path == "/api/auth/check" && is_get)
+        || path == "/api/onboard"
+        // Agent output files — must be public for WeChat direct download links
+        || (path.starts_with("/api/agents/") && path.contains("/output/") && is_get);
 
     if is_public {
         return next.run(request).await;
@@ -109,7 +113,31 @@ pub async fn auth(
     // If no API key configured (empty, whitespace-only, or missing), skip auth
     // entirely. Users who don't set api_key accept that all endpoints are open.
     // To secure the dashboard, set a non-empty api_key in config.toml.
+    // BUT: if a session token is present, honor it (for share/onboarding tenant context).
     let api_key_trimmed = auth_state.api_key.trim().to_string();
+
+    // Check ?session= and cookie session before the admin shortcut,
+    // so onboarding users get proper tenant-scoped context.
+    let query_session = request
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("session=")))
+        .map(|t| urlencoding::decode(t).map(|s| s.to_string()).unwrap_or_default());
+    let cookie_session = extract_session_cookie(&request);
+    let session_token = query_session.as_deref().or(cookie_session.as_deref());
+    if let Some(token) = session_token {
+        if let Some(info) =
+            crate::session_auth::verify_session_token(token, &auth_state.session_secret)
+        {
+            let ctx = opencarrier_types::tenant::TenantContext {
+                tenant_id: info.tenant_id,
+                role: opencarrier_types::tenant::TenantRole::from_role_str(&info.role),
+            };
+            request.extensions_mut().insert(ctx);
+            return next.run(request).await;
+        }
+    }
+
     if api_key_trimmed.is_empty() && !auth_state.auth_enabled {
         // No auth → admin context (backward compatible)
         request
@@ -168,22 +196,6 @@ pub async fn auth(
     }
 
     // Check session cookie (dashboard login sessions)
-    if auth_state.auth_enabled {
-        if let Some(token) = extract_session_cookie(&request) {
-            if let Some(info) =
-                crate::session_auth::verify_session_token(&token, &auth_state.session_secret)
-            {
-                // Inject TenantContext from session token
-                let ctx = opencarrier_types::tenant::TenantContext {
-                    tenant_id: info.tenant_id,
-                    role: opencarrier_types::tenant::TenantRole::from_role_str(&info.role),
-                };
-                request.extensions_mut().insert(ctx);
-                return next.run(request).await;
-            }
-        }
-    }
-
     // Determine error message: was a credential provided but wrong, or missing entirely?
     let credential_provided = header_auth.is_some() || query_auth.is_some();
     let error_msg = if credential_provided {

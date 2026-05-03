@@ -173,6 +173,14 @@ pub async fn webchat_page() -> impl IntoResponse {
     )
 }
 
+/// Serve the public share/onboarding page.
+pub async fn share_page() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        SHARE_HTML,
+    )
+}
+
 /// The embedded HTML/CSS/JS for the OpenCarrier Dashboard.
 ///
 /// Assembled at compile time from organized static files.
@@ -247,4 +255,13 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/vendor/alpine.min.js"),
     "\n</script>\n",
     "</body></html>"
+);
+
+/// Share page HTML — assembled at compile time with QR code library inlined.
+const SHARE_HTML: &str = concat!(
+    include_str!("../static/share.html"),
+    "<script>\n",
+    include_str!("../static/vendor/qrcode.min.js"),
+    "\n</script>\n",
+    "</body>\n</html>"
 );

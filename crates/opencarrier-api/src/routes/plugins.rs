@@ -20,43 +20,65 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
 
 /// List installed plugins.
 pub async fn list_plugins(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let plugin_statuses = if let Some(ref pm) = state.plugin_manager {
-        let pm = pm.lock().await;
-        let statuses = pm.status();
-        drop(pm);
-        statuses
-            .into_iter()
-            .map(|s| {
-                serde_json::json!({
-                    "name": s.name,
-                    "version": s.version,
-                    "loaded": s.loaded,
-                    "channels": s.channels,
-                    "tools": s.tools,
-                })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        let guard = state.kernel.plugins.plugin_tool_dispatcher.lock().unwrap();
-        if let Some(ref dispatcher) = *guard {
-            dispatcher
-                .definitions()
-                .into_iter()
-                .map(|t| {
-                    serde_json::json!({
-                        "name": t.name,
-                        "description": t.description,
-                    })
-                })
-                .collect()
-        } else {
-            vec![]
-        }
+    let mut result = Vec::new();
+
+    // Collect loaded plugins from runtime
+    let mut loaded_names = std::collections::HashSet::new();
+    let plugins_dir = match &state.kernel.config.plugins_dir {
+        Some(dir) => dir.clone(),
+        None => state.kernel.config.home_dir.join("plugins"),
     };
 
+    if let Some(ref pm) = state.plugin_manager {
+        let pm = pm.lock().await;
+        let statuses = pm.status();
+        for s in &statuses {
+            loaded_names.insert(s.name.clone());
+            // If runtime channels are empty, fall back to plugin.toml declaration
+            let channels = if s.channels.is_empty() {
+                let toml_path = plugins_dir.join(&s.name).join("plugin.toml");
+                read_channels_from_toml(&toml_path)
+            } else {
+                s.channels.clone()
+            };
+            result.push(serde_json::json!({
+                "name": s.name,
+                "version": s.version,
+                "loaded": true,
+                "channels": channels,
+                "tools": s.tools,
+            }));
+        }
+    }
+
+    // Scan filesystem for installed-but-not-loaded plugins
+    if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let name = match entry.file_name().to_str() {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if loaded_names.contains(&name) {
+                continue;
+            }
+            let toml_path = entry.path().join("plugin.toml");
+            let (channels, version) = read_toml_meta(&toml_path);
+            result.push(serde_json::json!({
+                "name": name,
+                "version": version,
+                "loaded": false,
+                "channels": channels,
+                "tools": [],
+            }));
+        }
+    }
+
     Json(serde_json::json!({
-        "plugins": plugin_statuses,
-        "count": plugin_statuses.len(),
+        "plugins": result,
+        "count": result.len(),
     }))
 }
 
@@ -91,16 +113,6 @@ pub async fn install_plugin(
             );
         }
     };
-
-    // Check if already installed
-    if opencarrier_clone::hub::is_plugin_installed(&plugins_dir, &body.name) {
-        return (
-            axum::http::StatusCode::OK,
-            Json(
-                serde_json::json!({"ok": true, "message": format!("Plugin '{}' already installed", body.name)}),
-            ),
-        );
-    }
 
     match opencarrier_clone::hub::install_plugin(
         &hub_url,
@@ -173,17 +185,7 @@ pub async fn search_plugins(
     let config = &state.kernel.config;
     let hub_url = config.hub.url.trim_end_matches('/').to_string();
     let api_key_env = &config.hub.api_key_env;
-    let api_key = match std::env::var(api_key_env) {
-        Ok(k) => k,
-        Err(_) => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": format!("Hub API key not set (env: {})", api_key_env)}),
-                ),
-            );
-        }
-    };
+    let api_key = std::env::var(api_key_env).unwrap_or_default();
 
     let query = params.get("q").map(|s| s.as_str()).unwrap_or("");
 
@@ -197,4 +199,48 @@ pub async fn search_plugins(
             Json(serde_json::json!({"error": format!("Hub search failed: {e}")})),
         ),
     }
+}
+
+fn read_channels_from_toml(path: &std::path::Path) -> Vec<String> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let doc = match content.parse::<toml::Value>() {
+        Ok(d) => d,
+        Err(_) => return vec![],
+    };
+    doc.get("channels")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.get("channel_type").and_then(|ct| ct.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn read_toml_meta(path: &std::path::Path) -> (Vec<String>, String) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return (vec![], "0.1.0".to_string()),
+    };
+    let doc = match content.parse::<toml::Value>() {
+        Ok(d) => d,
+        Err(_) => return (vec![], "0.1.0".to_string()),
+    };
+    let channels = doc.get("channels")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.get("channel_type").and_then(|ct| ct.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let version = doc.get("plugin")
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("0.1.0")
+        .to_string();
+    (channels, version)
 }

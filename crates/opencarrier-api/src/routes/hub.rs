@@ -163,19 +163,35 @@ pub async fn install_hub_template(
         .clone_install(&name, &agx_bytes, target_tenant.as_deref().unwrap_or(""))
         .await
     {
-        Ok((agent_id, agent_name)) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "agent_id": agent_id,
-                "name": agent_name,
-                "size": agx_bytes.len(),
-            })),
-        ),
+        Ok((agent_id, agent_name)) => {
+            let serial = allocate_serial_number(&state.kernel.config.data_dir);
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "agent_id": agent_id,
+                    "name": agent_name,
+                    "size": agx_bytes.len(),
+                    "serial_number": serial,
+                })),
+            )
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
         ),
     }
+}
+
+/// Allocate a globally unique serial number (OC-XXXXXX) using a persistent counter file.
+fn allocate_serial_number(data_dir: &std::path::Path) -> String {
+    let counter_path = data_dir.join("install_counter");
+    let current = std::fs::read_to_string(&counter_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    let next = current + 1;
+    let _ = std::fs::write(&counter_path, next.to_string());
+    format!("OC-{:06}", next)
 }
 
 /// Build a router with all routes for this module.

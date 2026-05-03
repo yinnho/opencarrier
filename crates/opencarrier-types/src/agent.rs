@@ -430,6 +430,9 @@ pub struct CloneSource {
     /// Hub template ID (if installed from Hub).
     #[serde(default)]
     pub hub_template_id: Option<String>,
+    /// Whether to auto-upgrade when hub has a newer version. Default: false.
+    #[serde(default)]
+    pub auto_upgrade: bool,
 }
 
 fn default_true() -> bool {

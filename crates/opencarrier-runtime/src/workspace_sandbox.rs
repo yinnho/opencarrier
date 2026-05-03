@@ -5,6 +5,25 @@
 
 use std::path::{Path, PathBuf};
 
+/// Check if a relative path is an internal workspace path that should NOT be
+/// auto-routed to the user's output directory.
+fn is_internal_path(rel: &str) -> bool {
+    matches!(
+        rel,
+        "agent.toml"
+            | "SOUL.md"
+            | "system_prompt.md"
+            | "profile.md"
+            | "style.md"
+            | "evolution.md"
+    ) || rel.starts_with("knowledge/")
+        || rel.starts_with("skills/")
+        || rel.starts_with("sessions/")
+        || rel.starts_with("memory/")
+        || rel.starts_with("users/")
+        || rel.starts_with("data/")
+}
+
 /// Resolve a user-supplied path within a workspace sandbox.
 ///
 /// - Rejects `..` components outright.
@@ -141,6 +160,7 @@ pub fn resolve_sandbox_path_for_write(
     }
 
     // Rewrite output/ to per-user output when sender_id is present
+    // Non-internal paths are auto-routed to users/{sender_id}/output/
     let effective_path = if let Some(sid) = sender_id {
         if rel_str.starts_with("output/") || rel_str == "output" {
             let rest = rel_str.strip_prefix("output").unwrap_or("");
@@ -150,8 +170,10 @@ pub fn resolve_sandbox_path_for_write(
             } else {
                 format!("users/{}/output/{}", sid, rest)
             }
-        } else {
+        } else if is_internal_path(&rel_str) {
             rel_str.to_string()
+        } else {
+            format!("users/{}/output/{}", sid, rel_str)
         }
     } else {
         rel_str.to_string()

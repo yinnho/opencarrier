@@ -28,6 +28,13 @@ function botsPage() {
     smartbotResult: null,
     smartbotPollTimer: null,
 
+    // Weixin QR flow
+    weixinQrCode: null,
+    weixinQrRaw: null,
+    weixinQrStatus: null,
+    weixinPolling: false,
+    weixinPollTimer: null,
+
     // Bot form
     botForm: {
       name: '',
@@ -98,28 +105,25 @@ function botsPage() {
         }
       }
 
-      // Known channel plugins from hub (not yet installed locally)
-      var knownChannels = {
-        'opencarrier-plugin-wecom': { display: '企业微信', channels: ['wecom'] },
-        'opencarrier-plugin-feishu': { display: '飞书', channels: ['feishu'] },
-        'opencarrier-plugin-weixin': { display: '个人微信', channels: ['weixin'] },
-      };
-
+      // Hub plugins with channel_types (not yet installed locally)
       for (var i = 0; i < this.hubPlugins.length; i++) {
         var hp = this.hubPlugins[i];
-        if (!localNames[hp.name]) {
-          var known = knownChannels[hp.name];
-          if (known) {
-            map[hp.name] = {
-              name: hp.name,
-              displayName: known.display,
-              description: hp.description || '',
-              channels: known.channels,
-              installed: false,
-              local: false,
-            };
-          }
+        if (localNames[hp.name]) continue;
+        // Parse channel_types — may be JSON string or array
+        var ctypes = hp.channel_types;
+        if (typeof ctypes === 'string') {
+          try { ctypes = JSON.parse(ctypes); } catch(e) { ctypes = []; }
         }
+        if (!Array.isArray(ctypes) || ctypes.length === 0) continue;
+
+        map[hp.name] = {
+          name: hp.name,
+          displayName: this.pluginDisplayName(hp.name),
+          description: hp.description || '',
+          channels: ctypes,
+          installed: false,
+          local: false,
+        };
       }
 
       this.channelPlugins = Object.values(map);
@@ -127,6 +131,9 @@ function botsPage() {
 
     pluginDisplayName(name) {
       var m = {
+        'wecom': '企业微信',
+        'feishu': '飞书',
+        'weixin': '个人微信',
         'opencarrier-plugin-wecom': '企业微信',
         'opencarrier-plugin-feishu': '飞书',
         'opencarrier-plugin-weixin': '个人微信',
@@ -222,8 +229,9 @@ function botsPage() {
         if (!plugin.installed) return; // install failed
       }
       this.createPlugin = plugin;
-      // Derive platform from channel type
+      // Derive platform from channel type — normalize wecom_smartbot → wecom
       var ch = plugin.channels && plugin.channels[0] || '';
+      if (ch.indexOf('wecom') === 0) ch = 'wecom';
       this.botForm.platform = ch;
       this.createStep = 2;
     },
@@ -233,6 +241,7 @@ function botsPage() {
       this.createPlugin = null;
       this.smartbotPolling = false;
       if (this.smartbotPollTimer) { clearInterval(this.smartbotPollTimer); this.smartbotPollTimer = null; }
+      this.stopWeixinPoll();
     },
 
     // ---- WeCom SmartBot flow ----
@@ -308,6 +317,84 @@ function botsPage() {
       }
     },
 
+    renderWeixinQR() {
+      var el = document.getElementById('weixin-qr');
+      if (!el || !this.weixinQrCode) return;
+      var content = this.weixinQrCode;
+      // If it's a URL, generate QR image from it
+      if (content.indexOf('http') === 0) {
+        el.innerHTML = '';
+        try {
+          var qr = qrcode(0, 'M');
+          qr.addData(content);
+          qr.make();
+          var imgTag = qr.createImgTag(6, 8);
+          el.innerHTML = imgTag;
+          var img = el.querySelector('img');
+          if (img) { img.style.width = '200px'; img.style.height = '200px'; img.style.imageRendering = 'pixelated'; }
+        } catch(e) {
+          el.innerHTML = '<p style="color:var(--danger);font-size:12px">二维码生成失败</p>';
+        }
+      } else {
+        el.innerHTML = '';
+      }
+    },
+
+    // ---- Weixin QR login flow ----
+    async startWeixinQrLogin() {
+      this.weixinQrCode = null;
+      this.weixinQrRaw = null;
+      this.weixinQrStatus = null;
+      this.weixinPolling = true;
+      try {
+        var res = await OpenCarrierAPI.get('/api/weixin/qrcode?tenant=' + encodeURIComponent(this.botForm.name.trim()));
+        if (res.data && res.data.qrcode_img_content) {
+          this.weixinQrCode = res.data.qrcode_img_content;
+          this.weixinQrRaw = res.data.qrcode || null;
+          this.weixinQrStatus = 'pending';
+          // URL → render as QR image; base64 → use directly
+          var self = this;
+          requestAnimationFrame(function() {
+            setTimeout(function() { self.renderWeixinQR(); }, 50);
+          });
+          this.pollWeixinQrStatus();
+        } else {
+          OpenCarrierToast.error('获取二维码失败');
+          this.weixinPolling = false;
+        }
+      } catch(e) {
+        OpenCarrierToast.error('获取二维码失败: ' + (e.message || e));
+        this.weixinPolling = false;
+      }
+    },
+
+    async pollWeixinQrStatus() {
+      if (!this.weixinPolling) return;
+      try {
+        var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(this.botForm.name.trim());
+        if (this.weixinQrRaw) url += '&qrcode=' + encodeURIComponent(this.weixinQrRaw);
+        var res = await OpenCarrierAPI.get(url);
+        this.weixinQrStatus = res.status;
+        if (res.status === 'confirmed') {
+          this.weixinPolling = false;
+          OpenCarrierToast.success('微信授权成功！');
+          return;
+        }
+        if (res.status === 'expired') {
+          this.weixinPolling = false;
+          OpenCarrierToast.error('二维码已过期，请重新获取');
+          return;
+        }
+      } catch(e) { /* retry */ }
+      var self = this;
+      this.weixinPollTimer = setTimeout(function() { self.pollWeixinQrStatus(); }, 3000);
+    },
+
+    stopWeixinPoll() {
+      this.weixinPolling = false;
+      if (this.weixinPollTimer) { clearTimeout(this.weixinPollTimer); this.weixinPollTimer = null; }
+    },
+
     // ---- Create bot ----
     async createBot() {
       if (!this.botForm.name.trim()) {
@@ -341,7 +428,7 @@ function botsPage() {
 
       try {
         await OpenCarrierAPI.post('/api/bots', payload);
-        OpenCarrierToast.success('机器人已创建，重启后生效');
+        OpenCarrierToast.success('机器人已创建');
         this.showCreateModal = false;
         this.loadData();
       } catch(e) {
@@ -354,7 +441,7 @@ function botsPage() {
     async bindAgent(bot, agentName) {
       try {
         await OpenCarrierAPI.put('/api/bots/' + bot.id + '/bind', { agent_name: agentName });
-        OpenCarrierToast.success('已绑定到 ' + agentName + '，重启后生效');
+        OpenCarrierToast.success('已绑定到 ' + agentName);
         this.loadData();
       } catch(e) {
         OpenCarrierToast.error(e.message || '绑定失败');
@@ -364,7 +451,7 @@ function botsPage() {
     async unbindAgent(bot) {
       try {
         await OpenCarrierAPI.del('/api/bots/' + bot.id + '/bind');
-        OpenCarrierToast.success('已解绑，重启后生效');
+        OpenCarrierToast.success('已解绑');
         this.loadData();
       } catch(e) {
         OpenCarrierToast.error(e.message || '解绑失败');
@@ -376,7 +463,7 @@ function botsPage() {
       if (!confirm('确定删除机器人 "' + bot.tenant_name + '"？此操作不可撤销。')) return;
       try {
         await OpenCarrierAPI.del('/api/bots/' + bot.id);
-        OpenCarrierToast.success('已删除，重启后生效');
+        OpenCarrierToast.success('已删除');
         this.loadData();
       } catch(e) {
         OpenCarrierToast.error(e.message || '删除失败');

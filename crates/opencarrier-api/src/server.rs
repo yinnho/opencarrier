@@ -7,7 +7,7 @@ use crate::routes::state::AppState;
 use crate::webchat;
 use crate::ws;
 use axum::Router;
-use opencarrier_kernel::OpenCarrierKernel;
+use opencarrier_kernel::{KernelHandle, OpenCarrierKernel};
 use opencarrier_runtime::plugin::PluginManager;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -103,6 +103,7 @@ pub async fn build_router(
         .route("/logo.png", axum::routing::get(webchat::logo_png))
         .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
+        .route("/share", axum::routing::get(webchat::share_page))
         .route("/sw.js", axum::routing::get(webchat::sw_js))
         .route(
             "/katex-fonts/{name}",
@@ -120,6 +121,7 @@ pub async fn build_router(
         .merge(routes::files::router())
         .merge(routes::hub::router())
         .merge(routes::kv::router())
+        .merge(routes::onboard::router())
         .merge(routes::plugins::router())
         .merge(routes::messaging::router())
         .merge(routes::observability::router())
@@ -177,7 +179,37 @@ pub async fn run_daemon(
             let kernel_handle: Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle> =
                 kernel.clone();
             let mut pm = PluginManager::new(kernel_handle);
-            pm.load_all(&resolved);
+            let mut registry = opencarrier_runtime::plugin::BuiltinPluginRegistry::new();
+            // Register built-in WeChat channel adapters and tools
+            registry.register_channel("weixin", || {
+                Box::new(opencarrier_runtime::plugin::channels::weixin::TenantWatcher::new())
+            });
+            registry.register_tool("weixin", || Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinQrLoginTool));
+            registry.register_tool("weixin", || Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinSendMessageTool));
+            registry.register_tool("weixin", || Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinStatusTool));
+
+            // Register built-in WeCom channel adapters and tools
+            registry.register_channel("wecom", || {
+                Box::new(opencarrier_runtime::plugin::channels::wecom::WeComAppKfWatcher::new())
+            });
+            registry.register_channel("wecom", || {
+                Box::new(opencarrier_runtime::plugin::channels::wecom::WeComSmartBotWatcher::new())
+            });
+            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::SendMessageTool));
+            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::BotGenerateTool));
+            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::BotPollTool));
+            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::QrCodeTool));
+            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::BotRegisterTool));
+            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::BotBindTool));
+            opencarrier_runtime::plugin::channels::wecom::mcp::register_mcp_tools(&mut registry);
+
+            // Register built-in Feishu channel adapter and tools
+            registry.register_channel("feishu", || {
+                Box::new(opencarrier_runtime::plugin::channels::feishu::FeishuWatcher::new())
+            });
+            opencarrier_runtime::plugin::channels::feishu::tools::register_feishu_tools(&mut registry);
+
+            pm.load_all(&resolved, &registry);
             pm.start(&resolved).await;
 
             // Inject tool dispatcher into kernel
@@ -185,6 +217,42 @@ pub async fn run_daemon(
                 let dispatcher = pm.tool_dispatcher();
                 let mut guard = kernel.plugins.plugin_tool_dispatcher.lock().unwrap();
                 *guard = Some(dispatcher);
+            }
+
+            // Register WeChat bindings from token files (weixin uses token files,
+            // not bot.toml, so the plugin manager never discovers them at startup)
+            {
+                let token_dir = kernel.config.home_dir.join("weixin-tokens");
+                if token_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(&token_dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                                continue;
+                            }
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                if let Ok(tf) =
+                                    serde_json::from_str::<serde_json::Value>(&content)
+                                {
+                                    if let (Some(name), Some(agent)) = (
+                                        tf.get("name").and_then(|v| v.as_str()),
+                                        tf.get("bind_agent").and_then(|v| v.as_str()),
+                                    ) {
+                                        if uuid::Uuid::parse_str(agent).is_ok() {
+                                            pm.add_channel_binding("weixin", name, agent);
+                                            kernel.set_default_plugin_tenant(agent, name);
+                                            info!(
+                                                tenant = %name,
+                                                agent = %agent,
+                                                "Registered WeChat binding from token file"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             let tool_count = pm.tool_definitions().len();

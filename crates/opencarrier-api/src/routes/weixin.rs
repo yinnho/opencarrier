@@ -2,7 +2,8 @@
 
 use crate::routes::plugin_toml::*;
 use crate::routes::state::AppState;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use opencarrier_kernel::KernelHandle;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -174,72 +175,135 @@ pub async fn weixin_qrcode_status(
             .unwrap_or("");
         let ilink_user_id = data.get("ilink_user_id").and_then(|v| v.as_str());
 
-        // Validate baseurl to prevent stored SSRF
+        // Check if this WeChat user already has a tenant (dedup by user_id)
+        let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
+        if let Some(uid) = ilink_user_id {
+            if let Ok(entries) = std::fs::read_dir(&token_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                        continue;
+                    }
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
+                            let existing_uid = tf.get("user_id").and_then(|v| v.as_str());
+                            if existing_uid == Some(uid) {
+                                let existing_tenant = tf
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or(tenant)
+                                    .to_string();
+                                let existing_bind = tf.get("bind_agent").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                                tracing::info!(
+                                    new_tenant = %tenant,
+                                    existing_tenant = %existing_tenant,
+                                    user_id = %uid,
+                                    "WeChat user already has a tenant, reusing"
+                                );
+
+                                // Update the existing token file with new bot_token/expires
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs() as i64;
+                                let mut updated = tf.clone();
+                                updated["bot_token"] = serde_json::Value::String(bot_token.to_string());
+                                updated["baseurl"] = serde_json::Value::String(raw_baseurl.to_string());
+                                updated["ilink_bot_id"] =
+                                    serde_json::Value::String(ilink_bot_id.to_string());
+                                updated["expires_at"] = serde_json::Value::Number(
+                                    serde_json::Number::from(now + 86400),
+                                );
+
+                                // Look up real tenant_id (UUID) from tenant store
+                                let real_tenant_id = state.kernel.memory.tenant()
+                                    .get_tenant_by_name(&existing_tenant)
+                                    .ok()
+                                    .flatten()
+                                    .map(|t| t.id)
+                                    .unwrap_or_else(|| existing_tenant.clone());
+
+                                // Ensure token file has tenant_id
+                                updated["tenant_id"] = serde_json::Value::String(real_tenant_id.clone());
+
+                                if let Ok(json) = serde_json::to_string_pretty(&updated) {
+                                    let _ = atomic_write(&path, &json);
+                                }
+
+                                // Register dynamic bridge binding if bind_agent exists
+                                if let Some(ref agent_id) = existing_bind {
+                                    if !agent_id.is_empty() && uuid::Uuid::parse_str(agent_id).is_ok() {
+                                        if let Some(ref pm_arc) = state.plugin_manager {
+                                            let pm = pm_arc.lock().await;
+                                            pm.add_channel_binding("weixin", &existing_tenant, agent_id);
+                                            state.kernel.set_default_plugin_tenant(agent_id, &existing_tenant);
+                                            tracing::info!(
+                                                tenant = %existing_tenant,
+                                                agent = %agent_id,
+                                                "Dynamically bound WeChat bot to agent (rebind)"
+                                            );
+                                        }
+                                    }
+                                }
+
+                                // Create session token with real tenant_id
+                                let api_key = state.kernel.config.api_key.trim().to_string();
+                                let secret = if !api_key.is_empty() {
+                                    api_key
+                                } else {
+                                    state.kernel.config.auth.password_hash.clone()
+                                };
+                                let session_token = crate::session_auth::create_session_token(
+                                    Some(&real_tenant_id), "tenant", &existing_tenant, &secret, 24,
+                                );
+
+                                return (
+                                    StatusCode::OK,
+                                    Json(serde_json::json!({
+                                        "tenant": existing_tenant,
+                                        "tenant_id": real_tenant_id,
+                                        "status": "confirmed",
+                                        "existing": true,
+                                        "bind_agent": existing_bind,
+                                        "session_token": session_token,
+                                        "data": data,
+                                    })),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // New user — don't save token here, return iLink data for frontend to save after onboard
         let baseurl = if weixin_validate_baseurl(raw_baseurl) {
             raw_baseurl
         } else {
-            tracing::warn!(
-                tenant,
-                raw_baseurl,
-                "iLink returned unexpected baseurl, falling back to default"
-            );
             WEIXIN_ILINK_BASE
         };
 
-        if !bot_token.is_empty() && !ilink_bot_id.is_empty() {
-            // Save token to disk so plugin can pick it up on restart
-            let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
-            if let Err(e) = std::fs::create_dir_all(&token_dir) {
-                tracing::error!(tenant, "Failed to create weixin token dir: {e}");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(
-                        serde_json::json!({ "error": format!("Failed to create token directory: {e}") }),
-                    ),
-                );
-            }
+        tracing::info!(
+            tenant,
+            ilink_bot_id,
+            user_id = ?ilink_user_id,
+            "WeChat iLink QR scan confirmed — new user, returning ilink data"
+        );
 
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            let token_file = serde_json::json!({
-                "name": tenant,
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "tenant": tenant,
+                "status": "confirmed",
+                "existing": false,
+                "ilink_bot_id": ilink_bot_id,
+                "ilink_user_id": ilink_user_id,
                 "bot_token": bot_token,
                 "baseurl": baseurl,
-                "ilink_bot_id": ilink_bot_id,
-                "user_id": ilink_user_id,
-                "expires_at": now + 86400, // 24h
-                "bind_agent": null,
-            });
-            let path = token_dir.join(format!("{tenant}.json"));
-            match serde_json::to_string_pretty(&token_file) {
-                Ok(json) => {
-                    if let Err(e) = atomic_write(&path, &json) {
-                        tracing::error!(tenant, "Failed to write weixin token file: {e}");
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(
-                                serde_json::json!({ "error": format!("Failed to save token: {e}") }),
-                            ),
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(tenant, "Failed to serialize token file: {e}");
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": "Internal serialization error" })),
-                    );
-                }
-            }
-
-            tracing::info!(
-                tenant,
-                ilink_bot_id,
-                "WeChat iLink QR scan confirmed — token saved"
-            );
-        }
+                "data": data,
+            })),
+        );
     }
 
     (
@@ -251,6 +315,101 @@ pub async fn weixin_qrcode_status(
         })),
     )
 }
+
+/// POST `/api/weixin/save-token` — save ilink token for a new user after onboard.
+pub async fn weixin_save_token(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let tenant_name = match body.get("tenant_name").and_then(|v| v.as_str()) {
+        Some(n) => n.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "missing tenant_name"})),
+            );
+        }
+    };
+    let tenant_id = body.get("tenant_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let bot_token = body.get("bot_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let ilink_bot_id = body.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let ilink_user_id = body.get("ilink_user_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let baseurl = body.get("baseurl").and_then(|v| v.as_str()).unwrap_or(WEIXIN_ILINK_BASE).to_string();
+
+    if bot_token.is_empty() || ilink_bot_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing bot_token or ilink_bot_id"})),
+        );
+    }
+
+    let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
+    if let Err(e) = std::fs::create_dir_all(&token_dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create token dir: {e}")})),
+        );
+    }
+
+    let bind_agent = body.get("bind_agent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let token_data = serde_json::json!({
+        "name": tenant_name,
+        "tenant_id": tenant_id,
+        "bot_token": bot_token,
+        "baseurl": baseurl,
+        "ilink_bot_id": ilink_bot_id,
+        "user_id": ilink_user_id,
+        "expires_at": now + 86400,
+        "bind_agent": if bind_agent.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(bind_agent.clone()) },
+    });
+
+    // Use ilink_user_id as filename for dedup; fallback to tenant_name
+    let filename = ilink_user_id.as_deref().unwrap_or(&tenant_name);
+    let path = token_dir.join(format!("{filename}.json"));
+    match serde_json::to_string_pretty(&token_data) {
+        Ok(json) => {
+            if let Err(e) = atomic_write(&path, &json) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("Failed to save token: {e}")})),
+                );
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Serialization error: {e}")})),
+            );
+        }
+    }
+
+    // Register dynamic bridge binding if bind_agent is provided
+    if !bind_agent.is_empty() && uuid::Uuid::parse_str(&bind_agent).is_ok() {
+        if let Some(ref pm_arc) = state.plugin_manager {
+            let pm = pm_arc.lock().await;
+            pm.add_channel_binding("weixin", &tenant_name, &bind_agent);
+            state.kernel.set_default_plugin_tenant(&bind_agent, &tenant_name);
+            tracing::info!(
+                tenant = %tenant_name,
+                agent = %bind_agent,
+                "Dynamically bound WeChat bot to agent"
+            );
+        }
+    }
+
+    tracing::info!(tenant = %tenant_name, ilink_bot_id, "WeChat ilink token saved");
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"ok": true})),
+    )
+}
+
 /// GET `/api/weixin/status` — list all bound WeChat accounts with expiry info.
 pub async fn weixin_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
@@ -391,8 +550,9 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
                 continue;
             }
 
-            // Scan <uuid>/bot.toml files
-            if let Ok(sub_entries) = std::fs::read_dir(&plugin_dir) {
+            // Scan bot/<uuid>/bot.toml files
+            let bot_root = plugin_dir.join("bot");
+            if let Ok(sub_entries) = std::fs::read_dir(&bot_root) {
                 for sub_entry in sub_entries.flatten() {
                     let bot_dir = sub_entry.path();
                     if !bot_dir.is_dir() {
@@ -748,14 +908,16 @@ fn weixin_validate_baseurl(url: &str) -> bool {
         || url.starts_with("https://ilinkai.weixin.qq.com/")
 }
 
-/// Create a new bot.toml file in <plugin_dir>/<uuid>/bot.toml.
+/// Create a new bot.toml file in <plugin_dir>/bot/<uuid>/bot.toml.
 fn create_bot_toml(
     plugin_dir: &std::path::Path,
     tenant_name: &str,
     fields: toml::value::Table,
 ) -> Result<(), String> {
+    let bot_root = plugin_dir.join("bot");
+
     // Check duplicate name
-    if let Ok(entries) = std::fs::read_dir(plugin_dir) {
+    if let Ok(entries) = std::fs::read_dir(&bot_root) {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
@@ -776,7 +938,7 @@ fn create_bot_toml(
     }
 
     let bot_uuid = uuid::Uuid::new_v4().to_string();
-    let bot_dir = plugin_dir.join(&bot_uuid);
+    let bot_dir = bot_root.join(&bot_uuid);
     std::fs::create_dir_all(&bot_dir).map_err(|e| format!("Failed to create bot dir: {e}"))?;
 
     let content = toml::to_string_pretty(&toml::Value::Table(fields))
@@ -788,6 +950,91 @@ fn create_bot_toml(
     Ok(())
 }
 
+/// POST `/api/weixin/{name}/bind` — bind a WeChat bot to an agent.
+pub async fn weixin_bind_bot(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let agent_input = match body.get("agent_name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "缺少 agent_name 字段"})),
+            );
+        }
+    };
+
+    // Resolve agent_name to UUID
+    let agent_uuid = if uuid::Uuid::parse_str(&agent_input).is_ok() {
+        agent_input.clone()
+    } else {
+        let agents = state.kernel.list_agents("");
+        match agents.iter().find(|a| a.name == agent_input) {
+            Some(agent) => agent.id.clone(),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": format!("分身 '{agent_input}' 不存在")})),
+                );
+            }
+        }
+    };
+
+    let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
+    let entries = match std::fs::read_dir(&token_dir) {
+        Ok(e) => e,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "微信机器人不存在"})),
+            );
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(mut tf) = serde_json::from_str::<serde_json::Value>(&content) {
+                let token_name = tf.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                if token_name != name {
+                    continue;
+                }
+
+                tf["bind_agent"] = serde_json::Value::String(agent_uuid.clone());
+                if let Ok(json) = serde_json::to_string_pretty(&tf) {
+                    let _ = atomic_write(&path, &json);
+                }
+
+                // Register dynamic binding
+                if let Some(ref pm_arc) = state.plugin_manager {
+                    let pm = pm_arc.lock().await;
+                    pm.add_channel_binding("weixin", &name, &agent_uuid);
+                    state.kernel.set_default_plugin_tenant(&agent_uuid, &name);
+                }
+
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "status": "bound",
+                        "message": "微信机器人已绑定",
+                        "bind_agent": agent_uuid,
+                    })),
+                );
+            }
+        }
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "微信机器人不存在"})),
+    )
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
@@ -797,7 +1044,9 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
             "/api/weixin/qrcode-status",
             routing::get(weixin_qrcode_status),
         )
+        .route("/api/weixin/save-token", routing::post(weixin_save_token))
         .route("/api/weixin/status", routing::get(weixin_status))
+        .route("/api/weixin/{name}/bind", routing::post(weixin_bind_bot))
         .route("/api/channels/status", routing::get(channels_status))
         .route(
             "/api/channels/wecom/tenants",

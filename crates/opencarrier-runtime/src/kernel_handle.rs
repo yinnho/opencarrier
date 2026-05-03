@@ -57,6 +57,9 @@ pub trait KernelHandle: Send + Sync {
     /// Kill an agent by ID.
     fn kill_agent(&self, agent_id: &str) -> Result<(), String>;
 
+    /// Restart an agent by ID (reset state, re-read manifest from workspace).
+    fn restart_agent(&self, agent_id: &str) -> Result<(), String>;
+
     /// Store a key-value pair in the agent's own memory namespace.
     fn memory_store(
         &self,

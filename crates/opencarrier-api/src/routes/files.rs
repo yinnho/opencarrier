@@ -2,7 +2,7 @@
 
 use crate::routes::common::*;
 use crate::routes::state::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -576,6 +576,186 @@ pub async fn serve_upload(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Agent Output File endpoints
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+pub struct OutputQuery {
+    pub sender_id: String,
+}
+
+/// GET /api/agents/{id}/output — List output files for a specific user.
+///
+/// Requires `?sender_id=xxx` query param. No fallback — sender_id is mandatory.
+pub async fn list_output_files(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Path(id): Path<String>,
+    Query(params): Query<OutputQuery>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let (_agent_id, entry) =
+        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
+
+    let workspace = match entry.manifest.workspace {
+        Some(ref ws) => ws.clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Agent has no workspace"})),
+            );
+        }
+    };
+
+    let output_dir = workspace
+        .join("users")
+        .join(&params.sender_id)
+        .join("output");
+
+    if !output_dir.exists() {
+        return (StatusCode::OK, Json(serde_json::json!({"files": []})));
+    }
+
+    // Verify output_dir is inside workspace (path safety)
+    let ws_canonical = match workspace.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Workspace path error"})),
+            );
+        }
+    };
+    match output_dir.canonicalize() {
+        Ok(p) if p.starts_with(&ws_canonical) => {}
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Invalid path"})),
+            );
+        }
+    }
+
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&output_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let modified = std::fs::metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            files.push(serde_json::json!({
+                "name": name,
+                "size_bytes": size,
+                "modified_at": modified,
+            }));
+        }
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({"files": files})))
+}
+
+/// GET /api/agents/{id}/output/{*path} — Download a single output file.
+///
+/// Requires `?sender_id=xxx` query param. No fallback.
+pub async fn serve_output_file(
+    State(state): State<Arc<AppState>>,
+    _extensions: axum::http::Extensions,
+    Path((id, file_path)): Path<(String, String)>,
+    Query(params): Query<OutputQuery>,
+) -> axum::response::Response {
+    let err = |status: StatusCode, msg: &str| -> axum::response::Response {
+        (
+            status,
+            [(axum::http::header::CONTENT_TYPE, "application/json".to_string())],
+            format!("{{\"error\":\"{}\"}}", msg).into_bytes(),
+        )
+            .into_response()
+    };
+
+    // Public download endpoint — skip tenant check. Path-based auth via sender_id
+    // is sufficient: files are scoped to workspace/users/{sender_id}/output/.
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(pair) => pair,
+        Err((status, _)) => {
+            let msg = if status == StatusCode::BAD_REQUEST {
+                "Invalid agent ID"
+            } else {
+                "Agent not found"
+            };
+            return err(status, msg);
+        }
+    };
+
+    let workspace = match entry.manifest.workspace {
+        Some(ref ws) => ws.clone(),
+        None => return err(StatusCode::NOT_FOUND, "Agent has no workspace"),
+    };
+
+    // Build the safe base: workspace/users/{sender_id}/output/
+    let safe_base = workspace
+        .join("users")
+        .join(&params.sender_id)
+        .join("output");
+
+    // Reject any ".." in file_path
+    if file_path.contains("..") {
+        return err(StatusCode::FORBIDDEN, "Path traversal denied");
+    }
+
+    let target = safe_base.join(&file_path);
+
+    // Canonicalize and verify target stays inside safe_base AND workspace
+    let base_canonical = match safe_base.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::NOT_FOUND, "Output directory not found"),
+    };
+    let ws_canonical = match workspace.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "Workspace path error"),
+    };
+    let target_canonical = match target.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
+    };
+
+    if !target_canonical.starts_with(&base_canonical) || !target_canonical.starts_with(&ws_canonical) {
+        return err(StatusCode::FORBIDDEN, "Path traversal denied");
+    }
+
+    let data = match std::fs::read(&target_canonical) {
+        Ok(d) => d,
+        Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
+    };
+
+    // Extract filename for Content-Disposition
+    let filename = file_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(&file_path);
+
+    // Force download — never execute/render in browser
+    let resp = axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+        .header("content-disposition", format!("attachment; filename=\"{}\"", filename))
+        .header("x-content-type-options", "nosniff")
+        .body(data.into())
+        .unwrap();
+    resp
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
@@ -587,4 +767,6 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         )
         .route("/api/agents/{id}/upload", routing::post(upload_file))
         .route("/api/uploads/{file_id}", routing::get(serve_upload))
+        .route("/api/agents/{id}/output", routing::get(list_output_files))
+        .route("/api/agents/{id}/output/{*path}", routing::get(serve_output_file))
 }

@@ -328,10 +328,6 @@
                   <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">机器人名称</label>
                   <input class="input" x-model="botForm.name" placeholder="例如: my-wechat" style="width:100%">
                 </div>
-                <div style="background:var(--midground);border-radius:8px;padding:16px;margin-bottom:16px">
-                  <p style="font-size:13px;font-weight:600;margin-bottom:8px">个人微信授权</p>
-                  <p style="font-size:12px;opacity:0.7">创建后，启动 daemon 时会显示二维码，用微信扫码即可授权登录。无需填写其他参数。</p>
-                </div>
                 <div style="margin-bottom:16px">
                   <label style="font-size:13px;opacity:0.7;display:block;margin-bottom:4px">绑定分身（可选）</label>
                   <select class="input" x-model="botForm.bind_agent" style="width:100%">
@@ -341,10 +337,32 @@
                     </template>
                   </select>
                 </div>
+                <!-- Weixin QR Authorization -->
+                <div style="background:var(--midground);border-radius:8px;padding:16px;margin-bottom:16px;text-align:center">
+                  <p style="font-size:13px;font-weight:600;margin-bottom:12px">个人微信授权</p>
+                  <!-- Before QR: show button -->
+                  <div x-show="!weixinQrCode && !weixinPolling">
+                    <button class="btn btn-primary btn-sm" @click="startWeixinQrLogin()" :disabled="!botForm.name.trim()">获取二维码</button>
+                    <p style="font-size:11px;opacity:0.6;margin-top:8px">点击后用微信扫码授权</p>
+                  </div>
+                  <!-- Polling / waiting -->
+                  <div x-show="weixinPolling && !weixinQrCode" style="padding:20px">
+                    <p style="font-size:12px;opacity:0.7">正在获取二维码...</p>
+                  </div>
+                  <!-- QR code displayed -->
+                  <div x-show="weixinQrCode">
+                    <div id="weixin-qr" style="display:inline-block"></div>
+                    <img x-show="weixinQrCode && weixinQrCode.indexOf('data:') === 0" :src="weixinQrCode" style="width:200px;height:200px;image-rendering:pixelated;border-radius:8px">
+                    <p x-show="weixinPolling" style="font-size:12px;opacity:0.7;margin-top:8px">等待扫码中...</p>
+                    <p x-show="weixinQrStatus === 'confirmed'" style="font-size:12px;color:var(--success);margin-top:8px">授权成功</p>
+                    <p x-show="weixinQrStatus === 'expired'" style="font-size:12px;color:var(--danger);margin-top:8px">二维码已过期</p>
+                    <button x-show="!weixinPolling" class="btn btn-ghost btn-sm" style="margin-top:8px" @click="startWeixinQrLogin()">重新获取</button>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="modal-footer" x-show="createStep === 2">
-              <button class="btn btn-ghost" @click="showCreateModal = false; smartbotPolling = false; if(smartbotPollTimer){clearInterval(smartbotPollTimer);smartbotPollTimer=null;}">取消</button>
+              <button class="btn btn-ghost" @click="showCreateModal = false; smartbotPolling = false; stopWeixinPoll(); if(smartbotPollTimer){clearInterval(smartbotPollTimer);smartbotPollTimer=null;}">取消</button>
               <button class="btn btn-primary" @click="createBot()" :disabled="createSaving || !botForm.name.trim()" x-text="createSaving ? '创建中...' : '创建'"></button>
             </div>
           </div>
@@ -782,41 +800,36 @@
         </div>
         <div class="page-body" style="overflow-y:auto;padding:24px">
 
-          <!-- Tenant selector (admin only) -->
-          <div x-show="$store.app.isAdmin() && tenants.length > 0" style="margin-bottom:14px;display:flex;align-items:center;gap:8px">
-            <label class="text-xs text-dim" style="white-space:nowrap">Assigned to:</label>
-            <select class="form-select" style="width:220px;font-size:12px" x-model="selectedTenantId">
-              <option value="">All tenants</option>
-              <template x-for="t in tenants" :key="t.id">
-                <option :value="t.id" x-text="t.name + (t.enabled !== false ? '' : ' (disabled)')"></option>
-              </template>
-            </select>
-          </div>
-
-          <!-- Running agents — click to chat -->
+          <!-- Running agents — grouped by tenant -->
           <div x-show="filteredAgents.length" style="margin-bottom:28px">
-            <div class="text-sm font-bold mb-2" style="color:var(--text-dim);letter-spacing:0.5px;font-size:11px;text-transform:uppercase">Your Agents</div>
-            <div style="display:flex;flex-wrap:wrap;gap:10px">
-              <template x-for="agent in filteredAgents" :key="agent.id">
-                <div class="agent-chip" @click="chatWithAgent(agent)" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:12px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);transition:all 0.2s var(--ease-spring, ease);min-width:200px;box-shadow:var(--shadow-xs)" @mouseenter="$el.style.borderColor='var(--accent)';$el.style.transform='translateY(-2px)';$el.style.boxShadow='var(--shadow-md)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.transform='';$el.style.boxShadow='var(--shadow-xs)'">
-                  <div style="width:36px;height:36px;border-radius:50%;background:var(--accent-subtle);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                    <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:18px"></span>
-                    <svg x-show="!agent.identity || !agent.identity.emoji" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  </div>
-                  <div style="min-width:0;flex:1">
-                    <div style="display:flex;align-items:center;gap:6px">
-                      <span class="font-bold" style="font-size:13px" x-text="agent.name"></span>
-                      <span class="badge badge-dim" style="font-size:9px;padding:0 4px;line-height:16px" x-show="$store.app.isAdmin() && agent.tenant_id" x-text="(agent.tenant_id || '').substring(0, 8) + '...'"></span>
-                    </div>
-                    <div class="text-xs text-dim font-mono" style="font-size:11px" x-text="agent.model_provider + ':' + agent.model_name"></div>
-                  </div>
-                  <span class="badge" :class="'badge-' + agent.state.toLowerCase()" x-text="agent.state" style="font-size:10px"></span>
-                  <button @click.stop="deleteAgent(agent)" title="删除分身" style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all 0.15s;flex-shrink:0" @mouseenter="$el.style.borderColor='var(--error)';$el.style.color='var(--error)';$el.style.background='var(--surface2)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.color='var(--text-dim)';$el.style.background='transparent'">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                  </button>
+            <template x-for="group in agentsByTenant" :key="group.id">
+              <div style="margin-bottom:18px">
+                <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;display:flex;align-items:center;gap:6px" x-show="agentsByTenant.length > 1">
+                  <span x-text="group.name"></span>
+                  <span style="opacity:0.5" x-text="'(' + group.agents.length + ')'"></span>
                 </div>
-              </template>
-            </div>
+                <div style="display:flex;flex-wrap:wrap;gap:10px">
+                  <template x-for="agent in group.agents" :key="agent.id">
+                    <div class="agent-chip" @click="chatWithAgent(agent)" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:12px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);transition:all 0.2s var(--ease-spring, ease);min-width:200px;box-shadow:var(--shadow-xs)" @mouseenter="$el.style.borderColor='var(--accent)';$el.style.transform='translateY(-2px)';$el.style.boxShadow='var(--shadow-md)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.transform='';$el.style.boxShadow='var(--shadow-xs)'">
+                      <div style="width:36px;height:36px;border-radius:50%;background:var(--accent-subtle);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                        <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:18px"></span>
+                        <svg x-show="!agent.identity || !agent.identity.emoji" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      </div>
+                      <div style="min-width:0;flex:1">
+                        <div style="display:flex;align-items:center;gap:6px">
+                          <span class="font-bold" style="font-size:13px" x-text="agent.name"></span>
+                        </div>
+                        <div class="text-xs text-dim font-mono" style="font-size:11px" x-text="agent.model_provider + ':' + agent.model_name"></div>
+                      </div>
+                      <span class="badge" :class="'badge-' + agent.state.toLowerCase()" x-text="agent.state" style="font-size:10px"></span>
+                      <button @click.stop="deleteAgent(agent)" title="删除分身" style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all 0.15s;flex-shrink:0" @mouseenter="$el.style.borderColor='var(--error)';$el.style.color='var(--error)';$el.style.background='var(--surface2)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.color='var(--text-dim)';$el.style.background='transparent'">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                      </button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
           </div>
 
           <!-- Custom spawn modal still available -->
@@ -1267,81 +1280,117 @@
 
     <!-- Page: Team -->
     <template x-if="page === 'team'">
-      <div x-data="tenantsPage">
+      <div x-data="tenantsPage()" x-init="loadTenants()">
         <div class="page-header"><h2>团队</h2></div>
-        <div class="page-body" x-init="loadTenants()">
+        <div class="page-body">
+          <!-- Loading -->
+          <div x-show="loading" style="padding:24px;text-align:center;color:var(--text-dim)">加载中...</div>
+          <!-- Error -->
+          <div x-show="loadError" class="card" style="padding:16px;color:var(--error);margin-bottom:16px" x-text="loadError"></div>
+
+          <template x-if="!loading">
+            <div>
+              <!-- Header -->
+              <div class="info-card" style="display:flex;justify-content:space-between;align-items:center">
+                <div>
+                  <h4>租户管理</h4>
+                  <p style="font-size:12px;color:var(--text-dim)">创建租户，为用户提供独立的工作空间。</p>
                 </div>
-                <div x-show="!bindingsLoading && bindings.length === 0" style="font-size:12px;color:var(--text-dim);padding:4px 0">No agent bindings configured yet.</div>
-                <div x-show="bindingsLoading" style="font-size:12px;color:var(--text-dim);padding:4px 0">Loading bindings...</div>
+                <button class="btn btn-primary btn-sm" @click="showCreateModal = true">
+                  <span>+ 添加租户</span>
+                </button>
               </div>
+
+              <!-- Empty -->
+              <div x-show="tenants.length === 0" class="empty-state" style="margin-top:16px">
+                <p style="color:var(--text-dim)">暂无租户</p>
+              </div>
+
+              <!-- Tenant list -->
+              <div x-show="tenants.length > 0" class="card" style="margin-top:12px">
+                <table style="width:100%;font-size:12px;border-collapse:collapse">
+                  <thead>
+                    <tr style="border-bottom:1px solid var(--border)">
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">名称</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">角色</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">状态</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">创建时间</th>
+                      <th style="text-align:right;padding:6px 4px;font-weight:600;width:120px">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="t in tenants" :key="t.id">
+                      <tr style="border-bottom:1px solid var(--border-light)">
+                        <td style="padding:8px 4px">
+                          <div style="font-weight:600" x-text="t.name"></div>
+                          <div style="font-size:10px;color:var(--text-dim);font-family:var(--font-mono)" x-text="t.id.substring(0,12)+'...'"></div>
+                        </td>
+                        <td style="padding:8px 4px">
+                          <span class="badge badge-secondary" style="font-size:10px;text-transform:capitalize" x-text="t.role || 'tenant'"></span>
+                        </td>
+                        <td style="padding:8px 4px">
+                          <span class="badge" :class="t.enabled !== false ? 'badge-running' : 'badge-crashed'" style="font-size:10px" x-text="t.enabled !== false ? '活跃' : '禁用'"></span>
+                        </td>
+                        <td style="padding:8px 4px;font-size:11px;color:var(--text-dim)" x-text="formatDate(t.created_at)"></td>
+                        <td style="padding:8px 4px;text-align:right;white-space:nowrap">
+                          <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px" @click="openEdit(t)">编辑</button>
+                          <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--error)" x-show="t.role !== 'admin'" @click="deleteTenant(t.id, t.name)">删除</button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Create tenant modal -->
+        <div class="modal-overlay" x-show="showCreateModal" x-transition @click.self="showCreateModal = false" @keydown.escape.window="showCreateModal = false">
+          <div class="modal" style="max-width:420px">
+            <div class="modal-header">
+              <h3>创建租户</h3>
+              <button class="modal-close" @click="showCreateModal = false">&times;</button>
+            </div>
+            <div class="form-group">
+              <label>名称</label>
+              <input class="form-input" x-model="createForm.name" placeholder="租户名称" autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label>密码</label>
+              <input class="form-input" type="password" x-model="createForm.password" placeholder="安全密码..." autocomplete="off">
+            </div>
+            <div class="flex gap-2 justify-end" style="margin-top:16px">
+              <button class="btn btn-ghost btn-sm" @click="showCreateModal = false">取消</button>
+              <button class="btn btn-primary btn-sm" @click="createTenant()" :disabled="saving" x-text="saving ? '创建中...' : '创建'"></button>
             </div>
           </div>
+        </div>
 
-          <!-- Tenants tab -->
-          <div >
-            <div class="info-card" style="display:flex;justify-content:space-between;align-items:center">
-              <div>
-                <h4>租户管理</h4>
-                <p style="font-size:12px;color:var(--text-dim)">创建租户，为用户提供独立的工作空间。</p>
-              </div>
-              <button class="btn btn-primary btn-sm" @click="showTenantModal = true">
-                <span>+ 添加租户</span>
-              </button>
+        <!-- Edit tenant modal -->
+        <div class="modal-overlay" x-show="showEditModal" x-transition @click.self="showEditModal = false" @keydown.escape.window="showEditModal = false">
+          <div class="modal" style="max-width:420px">
+            <div class="modal-header">
+              <h3>编辑租户</h3>
+              <button class="modal-close" @click="showEditModal = false">&times;</button>
             </div>
-            <div x-show="tenantsList.length === 0 && tenantsLoaded" class="empty-state" style="margin-top:16px">
-              <p style="color:var(--text-dim)">暂无租户</p>
+            <div class="form-group">
+              <label>名称</label>
+              <input class="form-input" x-model="editForm.name" placeholder="租户名称" autocomplete="off">
             </div>
-            <div x-show="tenantsList.length > 0" class="card" style="margin-top:12px">
-              <table style="width:100%;font-size:12px;border-collapse:collapse">
-                <thead>
-                  <tr style="border-bottom:1px solid var(--border)">
-                    <th style="text-align:left;padding:6px 4px;font-weight:600">名称</th>
-                    <th style="text-align:left;padding:6px 4px;font-weight:600">角色</th>
-                    <th style="text-align:left;padding:6px 4px;font-weight:600">状态</th>
-                    <th style="text-align:left;padding:6px 4px;font-weight:600">创建时间</th>
-                    <th style="text-align:right;padding:6px 4px;font-weight:600;width:100px">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <template x-for="t in tenantsList" :key="t.id">
-                    <tr style="border-bottom:1px solid var(--border-light)">
-                      <td style="padding:8px 4px">
-                        <div style="font-weight:600" x-text="t.name"></div>
-                        <div style="font-size:10px;color:var(--text-dim);font-family:var(--font-mono)" x-text="t.id.substring(0,12)+'...'"></div>
-                      </td>
-                      <td style="padding:8px 4px">
-                        <span class="badge badge-secondary" style="font-size:10px;text-transform:capitalize" x-text="t.role || 'tenant'"></span>
-                      </td>
-                      <td style="padding:8px 4px">
-                        <span class="badge" :class="t.enabled !== false ? 'badge-running' : 'badge-crashed'" style="font-size:10px" x-text="t.enabled !== false ? '活跃' : '禁用'"></span>
-                      </td>
-                      <td style="padding:8px 4px;font-size:11px;color:var(--text-dim)" x-text="t.created_at ? new Date(t.created_at).toLocaleDateString() : '-'"></td>
-                      <td style="padding:8px 4px;text-align:right">
-                        <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--error)" @click="deleteTenant(t.id, t.name)">删除</button>
-                      </td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
+            <div class="form-group">
+              <label>新密码（留空不修改）</label>
+              <input class="form-input" type="password" x-model="editForm.password" placeholder="新密码..." autocomplete="off">
             </div>
-            <!-- Create tenant modal -->
-            <div class="modal-overlay" x-show="showTenantModal" x-transition @click.self="showTenantModal = false" @keydown.escape.window="showTenantModal = false">
-              <div class="modal" style="max-width:420px">
-                <div class="modal-header">
-                  <h3>创建租户</h3>
-                  <button class="modal-close" @click="showTenantModal = false">&times;</button>
-                </div>
-                <div class="form-group">
-                  <label>名称</label>
-                  <input class="form-input" x-model="newTenantName" placeholder="租户名称" autocomplete="off">
-                </div>
-                <div class="form-group">
-                  <label>密码</label>
-                  <input class="form-input" type="password" x-model="newTenantPass" placeholder="安全密码..." autocomplete="off">
-                </div>
-                <div class="flex gap-2 justify-end" style="margin-top:16px">
-                  <button class="btn btn-ghost btn-sm" @click="showTenantModal = false">取消</button>
-
+            <div class="form-group" style="display:flex;align-items:center;gap:8px">
+              <input type="checkbox" x-model="editForm.enabled" id="edit-enabled">
+              <label for="edit-enabled">启用</label>
+            </div>
+            <div class="flex gap-2 justify-end" style="margin-top:16px">
+              <button class="btn btn-ghost btn-sm" @click="showEditModal = false">取消</button>
+              <button class="btn btn-primary btn-sm" @click="updateTenant()" :disabled="saving" x-text="saving ? '保存中...' : '保存'"></button>
+            </div>
+          </div>
         </div>
       </div>
     </template>
