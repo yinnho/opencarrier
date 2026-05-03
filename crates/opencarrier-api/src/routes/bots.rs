@@ -670,7 +670,14 @@ pub async fn feishu_device_auth_poll(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    if status == "SUCCESS" {
+    tracing::info!(
+        session_id = %query.session_id,
+        raw_status = %status,
+        raw_response = %poll_res,
+        "Feishu device-auth poll response"
+    );
+
+    if status.eq_ignore_ascii_case("SUCCESS") {
         let app_id = poll_res
             .get("app_id")
             .and_then(|v| v.as_str())
@@ -696,7 +703,7 @@ pub async fn feishu_device_auth_poll(
         }
     }
 
-    if status == "EXPIRED" || status == "FAIL" {
+    if status.eq_ignore_ascii_case("EXPIRED") || status.eq_ignore_ascii_case("FAIL") {
         let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
         sessions.remove(&query.session_id);
         return (
