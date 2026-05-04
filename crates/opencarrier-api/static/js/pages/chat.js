@@ -852,17 +852,17 @@ function chatPage() {
       if (!this.currentAgent) return;
       var self = this;
       var name = this.currentAgent.name;
-      OpenCarrierToast.confirm('Stop Agent', 'Stop agent "' + name + '"? The agent will be shut down.', async function() {
+      OpenCarrierToast.confirm('暂停分身', '暂停分身 "' + name + '"？可以随时重新启动。', async function() {
         try {
-          await OpenCarrierAPI.del('/api/agents/' + self.currentAgent.id);
+          await OpenCarrierAPI.post('/api/agents/' + self.currentAgent.id + '/suspend');
           OpenCarrierAPI.wsDisconnect();
           self._wsAgent = null;
           self.currentAgent = null;
           self.messages = [];
-          OpenCarrierToast.success('Agent "' + name + '" stopped');
+          OpenCarrierToast.success('分身 "' + name + '" 已暂停');
           Alpine.store('app').refreshAgents();
         } catch(e) {
-          OpenCarrierToast.error('Failed to stop agent: ' + e.message);
+          OpenCarrierToast.error('暂停失败: ' + e.message);
         }
       });
     },

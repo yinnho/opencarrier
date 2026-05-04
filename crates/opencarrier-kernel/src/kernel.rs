@@ -1344,9 +1344,12 @@ impl OpenCarrierKernel {
                         .scheduler
                         .register(agent_id, entry.manifest.resources.clone());
 
-                    // Re-register in the in-memory registry (set state back to Running)
+                    // Re-register in the in-memory registry.
+                    // Respect persisted state — only promote Created → Running.
                     let mut restored_entry = entry;
-                    restored_entry.state = AgentState::Running;
+                    if restored_entry.state == AgentState::Created {
+                        restored_entry.state = AgentState::Running;
+                    }
 
                     // Inherit kernel exec_policy for agents that lack one
                     if restored_entry.manifest.exec_policy.is_none() {

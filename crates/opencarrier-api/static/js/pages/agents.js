@@ -120,6 +120,21 @@ function agentsPage() {
       OpenCarrierAPI.wsDisconnect();
     },
 
+    async toggleAgent(agent) {
+      try {
+        if (agent.state === 'Running') {
+          await OpenCarrierAPI.post('/api/agents/' + agent.id + '/suspend');
+          OpenCarrierToast.success('分身 "' + agent.name + '" 已暂停');
+        } else {
+          await OpenCarrierAPI.post('/api/agents/' + agent.id + '/resume');
+          OpenCarrierToast.success('分身 "' + agent.name + '" 已启动');
+        }
+        await Alpine.store('app').refreshAgents();
+      } catch(e) {
+        OpenCarrierToast.error('操作失败: ' + e.message);
+      }
+    },
+
     deleteAgent(agent) {
       var self = this;
       OpenCarrierToast.confirm('删除分身', '确定永久删除分身 "' + agent.name + '" 吗？此操作不可撤销。', async function() {

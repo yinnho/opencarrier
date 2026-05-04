@@ -917,6 +917,14 @@
                         <div class="text-xs text-dim font-mono" style="font-size:11px" x-text="agent.model_provider + ':' + agent.model_name"></div>
                       </div>
                       <span class="badge" :class="'badge-' + agent.state.toLowerCase()" x-text="agent.state" style="font-size:10px"></span>
+                      <button @click.stop="toggleAgent(agent)" :title="agent.state === 'Running' ? '暂停分身' : '启动分身'" style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all 0.15s;flex-shrink:0" @mouseenter="$el.style.borderColor='var(--warning)';$el.style.color='var(--warning)';$el.style.background='var(--surface2)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.color='var(--text-dim)';$el.style.background='transparent'">
+                        <template x-if="agent.state === 'Running'">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                        </template>
+                        <template x-if="agent.state === 'Suspended'">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,3 20,12 6,21"/></svg>
+                        </template>
+                      </button>
                       <button @click.stop="deleteAgent(agent)" title="删除分身" style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all 0.15s;flex-shrink:0" @mouseenter="$el.style.borderColor='var(--error)';$el.style.color='var(--error)';$el.style.background='var(--surface2)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.color='var(--text-dim)';$el.style.background='transparent'">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                       </button>

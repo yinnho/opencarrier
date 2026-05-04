@@ -488,6 +488,87 @@ pub async fn stop_agent(
         ),
     }
 }
+
+/// POST /api/agents/{id}/suspend — Suspend an agent (keep DB + workspace, stop processing).
+pub async fn suspend_agent(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let entry = match state.kernel.registry.get(agent_id) {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            )
+        }
+    };
+    if let Err(e) = state
+        .kernel
+        .registry
+        .set_state(agent_id, opencarrier_types::agent::AgentState::Suspended)
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        );
+    }
+    if let Some(updated) = state.kernel.registry.get(agent_id) {
+        let _ = state.kernel.memory.save_agent(&updated);
+    }
+    // Cancel any active run
+    let _ = state.kernel.stop_agent_run(agent_id);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "suspended", "name": entry.name})),
+    )
+}
+
+/// POST /api/agents/{id}/resume — Resume a suspended agent.
+pub async fn resume_agent(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let entry = match state.kernel.registry.get(agent_id) {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            )
+        }
+    };
+    if let Err(e) = state
+        .kernel
+        .registry
+        .set_state(agent_id, opencarrier_types::agent::AgentState::Running)
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        );
+    }
+    if let Some(updated) = state.kernel.registry.get(agent_id) {
+        let _ = state.kernel.memory.save_agent(&updated);
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "running", "name": entry.name})),
+    )
+}
+
 /// PUT /api/agents/{id}/model — Switch an agent's model.
 pub async fn set_model(
     State(state): State<Arc<AppState>>,
@@ -894,4 +975,6 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/agents/{id}/restart", routing::post(restart_agent))
         .route("/api/agents/{id}/start", routing::post(restart_agent))
         .route("/api/agents/{id}/stop", routing::post(stop_agent))
+        .route("/api/agents/{id}/suspend", routing::post(suspend_agent))
+        .route("/api/agents/{id}/resume", routing::post(resume_agent))
 }
