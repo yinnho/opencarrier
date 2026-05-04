@@ -166,6 +166,7 @@ impl WsAck {
 #[serde(rename_all = "camelCase")]
 pub struct DingTalkInboundMessage {
     pub sender_id: Option<String>,
+    pub sender_staff_id: Option<String>,
     pub sender_nick: Option<String>,
     pub conversation_type: Option<String>,
     pub conversation_id: Option<String>,

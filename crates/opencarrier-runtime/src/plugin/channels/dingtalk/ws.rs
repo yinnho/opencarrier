@@ -316,7 +316,15 @@ impl DingTalkWsClient {
             self.dedup.insert(message_id.to_string(), Instant::now());
         }
 
+        // sender_staff_id is the plaintext userId (needed for send API);
+        // sender_id is encrypted and cannot be used for batchSend
+        let sender_staff_id = msg.sender_staff_id.clone();
         let sender_id = msg.sender_id.clone().unwrap_or_default();
+        let user_id = sender_staff_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&sender_id)
+            .to_string();
         let sender_nick = msg.sender_nick.clone().unwrap_or_else(|| sender_id.clone());
         let is_group = msg.conversation_type.as_deref() == Some("2");
         let conversation_id = msg.conversation_id.clone();
@@ -324,6 +332,8 @@ impl DingTalkWsClient {
         info!(
             tenant = %self.tenant_name,
             from = %sender_id,
+            staff_id = ?sender_staff_id,
+            user_id = %user_id,
             nick = %sender_nick,
             is_group,
             text_len = content.len(),
@@ -338,7 +348,7 @@ impl DingTalkWsClient {
         let plugin_msg = PluginMessage {
             channel_type: "dingtalk".to_string(),
             platform_message_id: message_id.to_string(),
-            sender_id: sender_id.clone(),
+            sender_id: user_id.clone(),
             sender_name: sender_nick,
             tenant_id: self.tenant_name.clone(),
             content: PluginContent::Text(content),
