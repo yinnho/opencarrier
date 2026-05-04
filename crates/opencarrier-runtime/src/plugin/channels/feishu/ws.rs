@@ -147,7 +147,8 @@ impl FeishuWsClient {
                             return Ok(());
                         }
                         Some(Ok(Message::Binary(data))) => {
-                            info!(tenant = %self.tenant_name, len = data.len(), "WS binary frame received");
+                            let hex_preview: Vec<String> = data.iter().take(50).map(|b| format!("{b:02x}")).collect();
+                            info!(tenant = %self.tenant_name, len = data.len(), hex = %hex_preview.join(""), "WS binary frame received");
                             self.handle_binary_frame(&data, &mut write, &mut fragments, sender).await;
                         }
                         Some(Ok(Message::Text(text))) => {
@@ -173,10 +174,12 @@ impl FeishuWsClient {
                 }
                 _ = ping_interval.tick() => {
                     let ping = Pbbp2Frame::ping(service_id);
-                    if let Err(e) = write.send(Message::Binary(ping.encode().into())).await {
+                    let encoded = ping.encode();
+                    let hex: Vec<String> = encoded.iter().map(|b| format!("{b:02x}")).collect();
+                    info!(tenant = %self.tenant_name, len = encoded.len(), hex = %hex.join(""), "Sending app-level ping");
+                    if let Err(e) = write.send(Message::Binary(encoded.into())).await {
                         return Err(format!("WS ping send failed: {e}"));
                     }
-                    info!(tenant = %self.tenant_name, "Sent app-level ping");
                 }
             }
         }

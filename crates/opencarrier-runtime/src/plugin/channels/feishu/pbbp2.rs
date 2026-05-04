@@ -373,3 +373,30 @@ impl FragmentCache {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ping_frame_roundtrip() {
+        let ping = Pbbp2Frame::ping(33554678);
+        let encoded = ping.encode();
+        let decoded = Pbbp2Frame::decode(&encoded).expect("decode failed");
+
+        assert_eq!(decoded.service, 33554678);
+        assert_eq!(decoded.method, METHOD_CONTROL);
+        assert_eq!(decoded.header("type"), Some("ping"));
+        assert!(decoded.payload.is_empty());
+    }
+
+    #[test]
+    fn test_ping_frame_bytes() {
+        let ping = Pbbp2Frame::ping(33554678);
+        let encoded = ping.encode();
+        // Log the hex for manual verification
+        let hex: Vec<String> = encoded.iter().map(|b| format!("{b:02x}")).collect();
+        eprintln!("Ping frame hex: {}", hex.join(" "));
+        eprintln!("Ping frame len: {}", encoded.len());
+    }
+}
