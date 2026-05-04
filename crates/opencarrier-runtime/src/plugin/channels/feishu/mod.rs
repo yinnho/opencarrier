@@ -8,6 +8,7 @@
 pub mod api;
 pub mod api_ext;
 pub mod channel;
+pub mod pbbp2;
 pub mod token;
 pub mod tools;
 pub mod types;

@@ -1,27 +1,37 @@
-//! WebSocket event listener for Feishu/Lark.
+//! WebSocket event listener for Feishu/Lark (v2 binary protocol).
 //!
-//! Connects to the Feishu WebSocket endpoint, receives real-time events,
-//! parses `im.message.receive_v1` messages, and dispatches them to the host.
+//! Connects to the Feishu WebSocket endpoint, receives real-time events
+//! encoded as protobuf `pbbp2.Frame` binary messages, parses
+//! `im.message.receive_v1` events, and dispatches them to the host.
+//!
+//! Protocol: All frames are binary protobuf (not JSON text).
+//! - Application-level ping/pong (method=0, header type=ping/pong)
+//! - Event data frames (method=1) must be ACKed
+//! - Large events may be fragmented (message_id + seq + sum headers)
 
 use crate::plugin::channels::feishu::api;
+use crate::plugin::channels::feishu::pbbp2::*;
 use crate::plugin::channels::feishu::token::TenantTokenCache;
 use crate::plugin::channels::feishu::types::*;
 use dashmap::DashMap;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use opencarrier_types::plugin::{PluginContent, PluginMessage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
 /// Message deduplication map: message_id → received_at.
-/// Entries older than 5 minutes are evicted on read.
 const DEDUP_TTL: Duration = Duration::from_secs(300);
 
 /// Maximum reconnection backoff.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Default ping interval (server may override via pong payload).
+const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(120);
 
 pub struct FeishuWsClient {
     tenant_name: String,
@@ -56,7 +66,6 @@ impl FeishuWsClient {
 
             match self.connect_and_listen(sender).await {
                 Ok(()) => {
-                    // Clean disconnect (shutdown or server close)
                     if self.shutdown.load(Ordering::Relaxed) {
                         return;
                     }
@@ -78,14 +87,12 @@ impl FeishuWsClient {
                 waited += check_interval;
             }
 
-            // Exponential backoff
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
     }
 
     /// Connect to the WebSocket and listen for events until disconnection.
     async fn connect_and_listen(&self, sender: &mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        // Get WebSocket endpoint URL using AppID + AppSecret (NOT Bearer token)
         let ws_resp = api::get_ws_endpoint(
             self.token_cache.http(),
             self.token_cache.app_id(),
@@ -93,95 +100,230 @@ impl FeishuWsClient {
             self.token_cache.api_base(),
         )
         .await?;
+
         if ws_resp.code != 0 {
             return Err(format!("ws/endpoint error: code={} msg={}", ws_resp.code, ws_resp.msg));
         }
+
         let ws_url = ws_resp
             .data
             .and_then(|d| d.url)
             .ok_or("Missing URL in ws/endpoint response")?;
 
-        info!(tenant = %self.tenant_name, "Connecting to Feishu WebSocket...");
+        // Extract service_id from URL query params (needed for ping frames).
+        let service_id = parse_service_id(&ws_url).unwrap_or(0);
 
-        // Connect WebSocket
+        info!(
+            tenant = %self.tenant_name,
+            service_id,
+            "Connecting to Feishu WebSocket..."
+        );
+
         let (ws_stream, _response) = connect_async(&ws_url)
             .await
             .map_err(|e| format!("WebSocket connect failed: {e}"))?;
 
         info!(tenant = %self.tenant_name, "Feishu WebSocket connected");
 
-        let (_write, mut read) = ws_stream.split();
+        let (mut write, mut read) = ws_stream.split();
 
-        // Reset backoff on successful connection
-        while let Some(msg_result) = read.next().await {
+        let mut ping_interval = tokio::time::interval(DEFAULT_PING_INTERVAL);
+        ping_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+        let mut fragments = FragmentCache::new();
+
+        loop {
             if self.shutdown.load(Ordering::Relaxed) {
                 info!(tenant = %self.tenant_name, "Shutdown during WS listen");
+                let _ = write.close().await;
                 return Ok(());
             }
 
-            match msg_result {
-                Ok(Message::Text(text)) => {
-                    self.handle_frame(&text, sender);
+            tokio::select! {
+                msg_result = read.next() => {
+                    match msg_result {
+                        None => {
+                            warn!(tenant = %self.tenant_name, "WS stream ended");
+                            return Ok(());
+                        }
+                        Some(Ok(Message::Binary(data))) => {
+                            self.handle_binary_frame(&data, &mut write, &mut fragments, sender).await;
+                        }
+                        Some(Ok(Message::Text(text))) => {
+                            info!(tenant = %self.tenant_name, len = text.len(), "Unexpected WS text frame (expected binary)");
+                        }
+                        Some(Ok(Message::Ping(_))) => {
+                            // tungstenite auto-replies pings
+                        }
+                        Some(Ok(Message::Pong(_))) => {}
+                        Some(Ok(Message::Close(_))) => {
+                            warn!(tenant = %self.tenant_name, "WebSocket close frame received");
+                            return Ok(());
+                        }
+                        Some(Err(e)) => {
+                            return Err(format!("WebSocket read error: {e}"));
+                        }
+                        _ => {}
+                    }
                 }
-                Ok(Message::Ping(data)) => {
-                    // tungstenite auto-replies pings
-                    let _ = data;
+                _ = ping_interval.tick() => {
+                    let ping = Pbbp2Frame::ping(service_id);
+                    if let Err(e) = write.send(Message::Binary(ping.encode().into())).await {
+                        return Err(format!("WS ping send failed: {e}"));
+                    }
+                    info!(tenant = %self.tenant_name, "Sent app-level ping");
                 }
-                Ok(Message::Close(_)) => {
-                    warn!(tenant = %self.tenant_name, "WebSocket close frame received");
-                    return Ok(());
-                }
-                Err(e) => {
-                    return Err(format!("WebSocket read error: {e}"));
-                }
-                _ => {}
             }
         }
-
-        Ok(())
     }
 
-    /// Parse a WebSocket text frame and dispatch messages.
-    fn handle_frame(&self, text: &str, sender: &mpsc::Sender<PluginMessage>) {
-        let frame: WsEventFrame = match serde_json::from_str(text) {
-            Ok(f) => f,
-            Err(_) => return, // Non-event frames (e.g. heartbeat ack)
-        };
-
-        let header = match frame.header {
-            Some(ref h) => h,
-            None => return,
-        };
-
-        let event_type = match header.event_type.as_deref() {
-            Some(t) => t,
-            None => return,
-        };
-
-        // Only handle message receive events in Phase 1
-        if event_type != "im.message.receive_v1" {
-            return;
-        }
-
-        let payload_str = match frame.payload.as_deref() {
-            Some(p) => p,
-            None => return,
-        };
-
-        let event: MessageReceiveEvent = match serde_json::from_str(payload_str) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(tenant = %self.tenant_name, "Failed to parse message event: {e}");
+    /// Handle a binary frame (protobuf pbbp2.Frame).
+    async fn handle_binary_frame(
+        &self,
+        data: &[u8],
+        write: &mut futures::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            Message,
+        >,
+        fragments: &mut FragmentCache,
+        sender: &mpsc::Sender<PluginMessage>,
+    ) {
+        let frame = match Pbbp2Frame::decode(data) {
+            Some(f) => f,
+            None => {
+                warn!(tenant = %self.tenant_name, len = data.len(), "Failed to decode binary frame as pbbp2.Frame");
                 return;
             }
         };
 
-        let message = match event.message {
-            Some(ref m) => m,
+        match frame.method {
+            METHOD_CONTROL => self.handle_control(&frame),
+            METHOD_DATA => {
+                self.handle_data(&frame, write, fragments, sender).await;
+            }
+            _ => {
+                warn!(tenant = %self.tenant_name, method = frame.method, "Unknown frame method");
+            }
+        }
+    }
+
+    /// Handle control frame (pong, handshake).
+    fn handle_control(&self, frame: &Pbbp2Frame) {
+        let frame_type = frame.header("type").unwrap_or("");
+
+        match frame_type {
+            "pong" => {
+                let payload_str = String::from_utf8_lossy(&frame.payload);
+                info!(
+                    tenant = %self.tenant_name,
+                    payload = %payload_str,
+                    "WS pong received"
+                );
+            }
+            "" => {
+                // Handshake response — check status
+                if let Some(status) = frame.header("handshake-status") {
+                    let msg = frame.header("handshake-msg").unwrap_or("");
+                    info!(
+                        tenant = %self.tenant_name,
+                        status,
+                        msg,
+                        "WS handshake"
+                    );
+                }
+            }
+            other => {
+                info!(tenant = %self.tenant_name, frame_type = other, "Unknown control frame type");
+            }
+        }
+    }
+
+    /// Handle data frame (event delivery).
+    async fn handle_data(
+        &self,
+        frame: &Pbbp2Frame,
+        write: &mut futures::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            Message,
+        >,
+        fragments: &mut FragmentCache,
+        sender: &mpsc::Sender<PluginMessage>,
+    ) {
+        let start = std::time::Instant::now();
+
+        let message_id = frame.header("message_id").unwrap_or("").to_string();
+        let seq: usize = frame
+            .header("seq")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let sum: usize = frame
+            .header("sum")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+
+        let payload = match fragments.add(&message_id, seq, sum, frame.payload.clone()) {
+            Some(p) => p,
+            None => {
+                // Still collecting fragments — send ACK for this part
+                let ack = Pbbp2Frame::ack_for(frame, start.elapsed().as_millis() as i64);
+                if let Err(e) = write.send(Message::Binary(ack.encode().into())).await {
+                    warn!(tenant = %self.tenant_name, "ACK send failed: {e}");
+                }
+                return;
+            }
+        };
+
+        // Send ACK for complete event
+        let ack = Pbbp2Frame::ack_for(frame, start.elapsed().as_millis() as i64);
+        if let Err(e) = write.send(Message::Binary(ack.encode().into())).await {
+            warn!(tenant = %self.tenant_name, "ACK send failed: {e}");
+        }
+
+        let payload_str = String::from_utf8_lossy(&payload);
+        info!(
+            tenant = %self.tenant_name,
+            payload_len = payload.len(),
+            payload_preview = %&payload_str[..payload_str.len().min(300)],
+            "WS event data received"
+        );
+
+        self.dispatch_event(&payload_str, sender);
+    }
+
+    /// Parse event payload and dispatch to handler.
+    fn dispatch_event(&self, payload_str: &str, sender: &mpsc::Sender<PluginMessage>) {
+        let event: serde_json::Value = match serde_json::from_str(payload_str) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(tenant = %self.tenant_name, "Failed to parse event JSON: {e}");
+                return;
+            }
+        };
+
+        // The SDK wraps the event in {"event": {...}, "header": {...}}
+        // but the payload from pbbp2.Frame IS the event body directly.
+        // Check for im.message.receive_v1 structure.
+        let header = event.get("header");
+        let event_type = header
+            .and_then(|h| h.get("event_type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if event_type != "im.message.receive_v1" {
+            info!(tenant = %self.tenant_name, event_type, "Ignoring non-message event");
+            return;
+        }
+
+        let message = match event.get("event").and_then(|e| e.get("message")) {
+            Some(m) => m,
             None => return,
         };
 
-        let msg_id = match message.message_id.as_deref() {
+        let msg_id = match message.get("message_id").and_then(|v| v.as_str()) {
             Some(id) if !id.is_empty() => id,
             _ => return,
         };
@@ -193,34 +335,36 @@ impl FeishuWsClient {
         self.evict_old_entries();
         self.dedup.insert(msg_id.to_string(), Instant::now());
 
-        // Only handle text messages in Phase 1
-        if message.msg_type.as_deref() != Some("text") {
+        if message.get("message_type").or_else(|| message.get("msg_type")).and_then(|v| v.as_str()) != Some("text") {
             return;
         }
 
-        // Extract text content
         let text = message
-            .content
-            .as_deref()
+            .get("content")
+            .and_then(|c| c.as_str())
             .and_then(|c| serde_json::from_str::<TextContent>(c).ok())
             .and_then(|tc| tc.text)
             .unwrap_or_default();
 
-        // Get sender info
-        let (sender_id, sender_name) = match event.sender.as_ref().and_then(|s| s.sender_id.as_ref()) {
-            Some(sid) => (
-                sid.open_id.clone().unwrap_or_default(),
-                sid.open_id.clone().unwrap_or_default(),
-            ),
+        let sender_obj = event.get("event").and_then(|e| e.get("sender"));
+        let sender_id_obj = sender_obj.and_then(|s| s.get("sender_id"));
+        let (sender_id, sender_name) = match sender_id_obj {
+            Some(sid) => {
+                let open_id = sid.get("open_id").and_then(|v| v.as_str()).unwrap_or("");
+                (open_id.to_string(), open_id.to_string())
+            }
             None => return,
         };
 
-        let chat_type = message.chat_type.as_deref().unwrap_or("p2p");
+        let chat_type = message
+            .get("chat_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("p2p");
         let is_group = chat_type == "group";
 
         let create_time_ms = message
-            .create_time
-            .as_deref()
+            .get("create_time")
+            .and_then(|v| v.as_str())
             .and_then(|t| t.parse::<u64>().ok())
             .unwrap_or_else(|| {
                 std::time::SystemTime::now()
@@ -246,7 +390,7 @@ impl FeishuWsClient {
             content: PluginContent::Text(text),
             timestamp_ms: create_time_ms,
             is_group,
-            thread_id: message.chat_id.clone(),
+            thread_id: message.get("chat_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
             metadata: Default::default(),
         };
 
@@ -259,4 +403,13 @@ impl FeishuWsClient {
         self.dedup
             .retain(|_, received_at| now.duration_since(*received_at) < DEDUP_TTL);
     }
+}
+
+/// Parse `service_id` from the WS URL query parameters.
+fn parse_service_id(url: &str) -> Option<i32> {
+    url.split("service_id=")
+        .nth(1)?
+        .split('&')
+        .next()
+        .and_then(|v| v.parse().ok())
 }
