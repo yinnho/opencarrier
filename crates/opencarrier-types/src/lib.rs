@@ -13,6 +13,7 @@ pub mod error;
 pub mod event;
 pub mod manifest_signing;
 pub mod media;
+pub mod mcp_manifest;
 pub mod memory;
 pub mod message;
 pub mod model_catalog;

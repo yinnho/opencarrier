@@ -113,7 +113,7 @@ pub async fn execute_tool(
     allowed_tools: Option<&[String]>,
     caller_agent_id: Option<&str>,
     skill_registry: Option<&SkillRegistry>,
-    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+    mcp_connections: Option<&dashmap::DashMap<String, mcp::McpConnection>>,
     web_ctx: Option<&WebToolsContext>,
     browser_ctx: Option<&crate::browser::BrowserManager>,
     allowed_env_vars: Option<&[String]>,
@@ -421,18 +421,41 @@ pub async fn execute_tool(
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
             if mcp::is_mcp_tool(other) {
+                // Depth restriction: subagents (depth > 0) need explicit MCP tool
+                // permission via allowed_tools. Top-level agents are unrestricted.
+                let current_depth = AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0);
+                if current_depth > 0 {
+                    let explicitly_allowed = allowed_tools
+                        .map(|a| a.iter().any(|t| t == other))
+                        .unwrap_or(false);
+                    if !explicitly_allowed {
+                        warn!(
+                            tool = other,
+                            depth = current_depth,
+                            "MCP tool denied for subagent: not in explicit allow list"
+                        );
+                        return ToolResult {
+                            tool_use_id: tool_use_id.to_string(),
+                            content: format!(
+                                "Permission denied: MCP tool '{other}' not available at subagent depth {current_depth}"
+                            ),
+                            is_error: true,
+                        };
+                    }
+                }
                 if let Some(mcp_conns) = mcp_connections {
-                    let mut conns = mcp_conns.lock().await;
-                    let known_names: Vec<String> =
-                        conns.iter().map(|c| c.name().to_string()).collect();
-                    let known_refs: Vec<&str> = known_names.iter().map(|s| s.as_str()).collect();
-                    if let Some(server_name) =
+                    // Collect known server keys from DashMap for name resolution
+                    let known_keys: Vec<String> =
+                        mcp_conns.iter().map(|e| e.key().clone()).collect();
+                    let known_refs: Vec<&str> = known_keys.iter().map(|s| s.as_str()).collect();
+                    if let Some(server_key) =
                         mcp::extract_mcp_server_from_known(other, &known_refs)
                     {
-                        if let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) {
+                        // O(1) lookup by normalized server name — no global lock
+                        if let Some(mut conn) = mcp_conns.get_mut(&server_key.to_string()) {
                             debug!(
                                 tool = other,
-                                server = server_name,
+                                server = server_key,
                                 "Dispatching to MCP server"
                             );
                             match conn.call_tool(other, input).await {
@@ -440,7 +463,7 @@ pub async fn execute_tool(
                                 Err(e) => Err(format!("MCP tool call failed: {e}")),
                             }
                         } else {
-                            Err(format!("MCP server '{server_name}' not connected"))
+                            Err(format!("MCP server '{server_key}' not connected"))
                         }
                     } else {
                         Err(format!("Invalid MCP tool name: {other}"))

@@ -168,8 +168,9 @@ enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-    /// Start MCP (Model Context Protocol) server over stdio.
-    Mcp,
+    /// MCP server management (serve, install, uninstall, list) [*].
+    #[command(subcommand)]
+    Mcp(McpCommands),
     /// ACP mode (auto-detected: used when stdin is a pipe, not a terminal).
     #[command(hide = true)]
     Acp,
@@ -251,6 +252,56 @@ enum HubCommands {
         /// Specific version (default: latest).
         #[arg(short, long)]
         version: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpCommands {
+    /// Start MCP server over stdio (exposes agents as MCP tools).
+    Serve,
+    /// Install an MCP server from a .mcp.json file or Hub.
+    Install {
+        /// Path to .mcp.json file, or server name to download from Hub.
+        source: String,
+    },
+    /// Uninstall an MCP server.
+    Uninstall {
+        /// Server name to uninstall.
+        name: String,
+    },
+    /// List installed MCP servers.
+    List {
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Start a Docker-type MCP server.
+    Start {
+        /// Server name.
+        name: String,
+    },
+    /// Stop a Docker-type MCP server.
+    Stop {
+        /// Server name.
+        name: String,
+    },
+    /// Restart a Docker-type MCP server.
+    Restart {
+        /// Server name.
+        name: String,
+    },
+    /// Show Docker container status for an MCP server.
+    Status {
+        /// Server name.
+        name: String,
+    },
+    /// View Docker container logs for an MCP server.
+    Logs {
+        /// Server name.
+        name: String,
+        /// Number of lines to show.
+        #[arg(long, default_value = "50")]
+        lines: usize,
     },
 }
 
@@ -593,7 +644,17 @@ fn main() {
         Commands::Doctor { json, repair } => cmd_doctor(json, repair),
         Commands::Dashboard => cmd_dashboard(),
         Commands::Completion { shell } => cmd_completion(shell),
-        Commands::Mcp => mcp::run_mcp_server(cli.config),
+        Commands::Mcp(sub) => match sub {
+            McpCommands::Serve => mcp::run_mcp_server(cli.config),
+            McpCommands::Install { source } => cmd_mcp_install(&source),
+            McpCommands::Uninstall { name } => cmd_mcp_uninstall(&name),
+            McpCommands::List { json } => cmd_mcp_list(json),
+            McpCommands::Start { name } => cmd_mcp_docker_start(&name),
+            McpCommands::Stop { name } => cmd_mcp_docker_stop(&name),
+            McpCommands::Restart { name } => cmd_mcp_docker_restart(&name),
+            McpCommands::Status { name } => cmd_mcp_docker_status(&name),
+            McpCommands::Logs { name, lines } => cmd_mcp_docker_logs(&name, lines),
+        },
         Commands::Acp => serve::run_acp_mode(cli.config),
         // ── New commands ────────────────────────────────────────────────
         Commands::Models(sub) => match sub {
@@ -4168,6 +4229,8 @@ async fn cmd_hub(cmd: HubCommands) {
                         clone_name,
                         workspace_dir.display()
                     );
+                    // Check MCP server dependencies
+                    check_mcp_deps(&workspace_dir);
                     println!("运行 'opencarrier agent spawn {}' 启动分身", clone_name);
                 }
                 Err(e) => eprintln!("安装失败: {e}"),
@@ -4902,5 +4965,280 @@ args = ["-y", "@modelcontextprotocol/server-github"]
         // Should NOT match: opencarrier lines that aren't PATH-related
         assert!(!is_opencarrier_path_line("# opencarrier config", dir));
         assert!(!is_opencarrier_path_line("alias of=opencarrier", dir));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MCP install / uninstall / list commands
+// ---------------------------------------------------------------------------
+
+fn cmd_mcp_install(source: &str) {
+    use opencarrier_kernel::mcp_registry;
+    use opencarrier_types::mcp_manifest::McpServerManifest;
+
+    let source_path = std::path::Path::new(source);
+
+    // Check if source is a local .mcp.json file
+    let (manifest, manifest_path) = if source_path.exists()
+        && source_path
+            .extension()
+            .is_some_and(|e| e == "json" || source_path.file_name().is_some_and(|f| f.to_string_lossy().ends_with(".mcp.json")))
+    {
+        let content = match std::fs::read_to_string(source_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Failed to read {source}: {e}");
+                std::process::exit(1);
+            }
+        };
+        let manifest: McpServerManifest = match serde_json::from_str(&content) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Failed to parse .mcp.json: {e}");
+                std::process::exit(1);
+            }
+        };
+        (manifest, source_path.to_path_buf())
+    } else {
+        // Treat as Hub server name — download from hub
+        eprintln!("Downloading MCP server '{source}' from Hub...");
+        let hub_url =
+            std::env::var("OPENCLONE_HUB_URL").unwrap_or_else(|_| "https://hub.aginx.net".to_string());
+        let url = format!("{hub_url}/api/mcp-servers/{source}/download");
+        let client = reqwest::blocking::Client::new();
+        let resp = match client.get(&url).send() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Failed to connect to Hub: {e}");
+                std::process::exit(1);
+            }
+        };
+        if !resp.status().is_success() {
+            eprintln!("Hub returned {}: {}", resp.status(), resp.text().unwrap_or_default());
+            std::process::exit(1);
+        }
+        let body = resp.text().unwrap_or_default();
+        let manifest: McpServerManifest = match serde_json::from_str(&body) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Failed to parse Hub response: {e}");
+                std::process::exit(1);
+            }
+        };
+        // Write to temp file for the registry to copy
+        let tmp_dir = std::env::temp_dir().join("opencarrier-mcp-download");
+        std::fs::create_dir_all(&tmp_dir).ok();
+        let tmp_path = tmp_dir.join(format!("{}.mcp.json", manifest.name));
+        std::fs::write(&tmp_path, &body).unwrap();
+        (manifest, tmp_path)
+    };
+
+    println!(
+        "Installing MCP server: {} ({}) v{}",
+        manifest.display_name, manifest.name, manifest.version
+    );
+    println!("  Transport: {}", manifest.transport_type);
+    println!("  Tools: {} available", manifest.tools_preview.len());
+
+    if let Err(e) = mcp_registry::install(&manifest, &manifest_path) {
+        eprintln!("Install failed: {e}");
+        std::process::exit(1);
+    }
+
+    // Ensure config.toml has the include entry
+    if let Err(e) = mcp_registry::ensure_config_include() {
+        eprintln!("Warning: could not update config.toml: {e}");
+        eprintln!(
+            "Add this line to ~/.opencarrier/config.toml:\n  \
+             include = [\"mcp-servers.d/mcp-servers.toml\"]"
+        );
+    }
+
+    println!("Installed! Restart opencarrier or send SIGHUP to reload.");
+}
+
+fn cmd_mcp_uninstall(name: &str) {
+    use opencarrier_kernel::mcp_registry;
+
+    if !mcp_registry::is_installed(name) {
+        eprintln!("MCP server '{name}' is not installed.");
+        std::process::exit(1);
+    }
+
+    if let Err(e) = mcp_registry::uninstall(name) {
+        eprintln!("Uninstall failed: {e}");
+        std::process::exit(1);
+    }
+    println!("MCP server '{name}' uninstalled. Restart opencarrier to apply.");
+}
+
+fn cmd_mcp_list(json: bool) {
+    use opencarrier_kernel::mcp_registry;
+
+    let records = mcp_registry::list_installed();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&records).unwrap_or_default());
+        return;
+    }
+
+    if records.is_empty() {
+        println!("No MCP servers installed.");
+        println!("Install one with: opencarrier mcp install <name-or-path>");
+        return;
+    }
+
+    println!("Installed MCP servers:\n");
+    for r in &records {
+        let status = if r.enabled { "enabled" } else { "disabled" };
+        println!(
+            "  {} v{} [{}] ({})",
+            r.name, r.version, status, r.transport_type
+        );
+    }
+    println!("\nTotal: {} server(s)", records.len());
+}
+
+// ---------------------------------------------------------------------------
+// MCP Docker lifecycle commands (start/stop/restart/status/logs)
+// ---------------------------------------------------------------------------
+
+/// Helper to run an async Docker command with a tokio runtime.
+fn run_docker_cmd<F, T>(name: &str, fut: F) -> T
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    match rt.block_on(fut) {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("MCP server '{name}': {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_mcp_docker_start(name: &str) {
+    use opencarrier_kernel::mcp_docker;
+    let dir = opencarrier_kernel::mcp_registry::mcp_base_dir().join(name);
+    if !dir.exists() {
+        eprintln!("MCP server '{name}' not installed.");
+        std::process::exit(1);
+    }
+    let state = run_docker_cmd(name, mcp_docker::start(&dir));
+    println!("Container '{}' started — running: {}", state.name, state.running);
+}
+
+fn cmd_mcp_docker_stop(name: &str) {
+    use opencarrier_kernel::mcp_docker;
+    let dir = opencarrier_kernel::mcp_registry::mcp_base_dir().join(name);
+    if !dir.exists() {
+        eprintln!("MCP server '{name}' not installed.");
+        std::process::exit(1);
+    }
+    run_docker_cmd(name, mcp_docker::stop(&dir));
+    println!("Container for '{name}' stopped.");
+}
+
+fn cmd_mcp_docker_restart(name: &str) {
+    use opencarrier_kernel::mcp_docker;
+    let dir = opencarrier_kernel::mcp_registry::mcp_base_dir().join(name);
+    if !dir.exists() {
+        eprintln!("MCP server '{name}' not installed.");
+        std::process::exit(1);
+    }
+    let state = run_docker_cmd(name, mcp_docker::restart(&dir));
+    println!("Container '{}' restarted — running: {}", state.name, state.running);
+}
+
+fn cmd_mcp_docker_status(name: &str) {
+    use opencarrier_kernel::mcp_docker;
+    let dir = opencarrier_kernel::mcp_registry::mcp_base_dir().join(name);
+    if !dir.exists() {
+        eprintln!("MCP server '{name}' not installed.");
+        std::process::exit(1);
+    }
+    let state = run_docker_cmd(name, mcp_docker::status(&dir));
+    println!("Container: {}", state.name);
+    println!("Running:    {}", state.running);
+    println!("Status:     {}", state.status);
+    println!("Ports:      {}", state.ports);
+    println!("Uptime:     {}", state.uptime);
+}
+
+fn cmd_mcp_docker_logs(name: &str, lines: usize) {
+    use opencarrier_kernel::mcp_docker;
+    let dir = opencarrier_kernel::mcp_registry::mcp_base_dir().join(name);
+    if !dir.exists() {
+        eprintln!("MCP server '{name}' not installed.");
+        std::process::exit(1);
+    }
+    let logs = run_docker_cmd(name, mcp_docker::logs(&dir, lines));
+    print!("{logs}");
+}
+
+/// Check MCP server dependencies declared in template.json after clone install.
+fn check_mcp_deps(workspace_dir: &std::path::Path) {
+    use opencarrier_kernel::mcp_registry;
+
+    let template_path = workspace_dir.join("template.json");
+    let Ok(content) = std::fs::read_to_string(&template_path) else {
+        return;
+    };
+    let template: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let deps = match template.get("mcp_servers").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return,
+    };
+
+    if deps.is_empty() {
+        return;
+    }
+
+    let installed = mcp_registry::list_installed();
+    let installed_names: Vec<&str> = installed.iter().map(|r| r.name.as_str()).collect();
+
+    let mut missing_required = Vec::new();
+    let mut missing_optional = Vec::new();
+
+    for dep in deps {
+        let name = dep.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let required = dep.get("required").and_then(|v| v.as_bool()).unwrap_or(true);
+        if name.is_empty() {
+            continue;
+        }
+        if !installed_names.contains(&name) {
+            if required {
+                missing_required.push(name.to_string());
+            } else {
+                missing_optional.push(name.to_string());
+            }
+        }
+    }
+
+    if missing_required.is_empty() && missing_optional.is_empty() {
+        return;
+    }
+
+    println!("\n--- MCP Server Dependencies ---");
+    if !missing_required.is_empty() {
+        eprintln!(
+            "Required MCP servers not installed: {}",
+            missing_required.join(", ")
+        );
+        eprintln!("Install them with:");
+        for name in &missing_required {
+            eprintln!("  opencarrier mcp install {name}");
+        }
+    }
+    if !missing_optional.is_empty() {
+        println!(
+            "Optional MCP servers not installed: {}",
+            missing_optional.join(", ")
+        );
     }
 }

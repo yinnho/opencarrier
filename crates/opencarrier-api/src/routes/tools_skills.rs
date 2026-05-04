@@ -83,11 +83,10 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
         .collect();
 
     // Get connected servers and their tools from the live MCP connections
-    let connections = state.kernel.plugins.mcp_connections.lock().await;
-    let connected: Vec<serde_json::Value> = connections
+    let connected: Vec<serde_json::Value> = state.kernel.plugins.mcp_connections
         .iter()
-        .map(|conn| {
-            let tools: Vec<serde_json::Value> = conn
+        .map(|entry| {
+            let tools: Vec<serde_json::Value> = entry.value()
                 .tools()
                 .iter()
                 .map(|t| {
@@ -98,7 +97,7 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
                 })
                 .collect();
             serde_json::json!({
-                "name": conn.name(),
+                "name": entry.value().name(),
                 "tools_count": tools.len(),
                 "tools": tools,
                 "connected": true,

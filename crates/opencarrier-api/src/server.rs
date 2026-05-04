@@ -207,6 +207,11 @@ pub async fn run_daemon(
             });
             opencarrier_runtime::plugin::channels::feishu::tools::register_feishu_tools(&mut registry);
 
+            // Register built-in DingTalk channel adapter
+            registry.register_channel("dingtalk", || {
+                Box::new(opencarrier_runtime::plugin::channels::dingtalk::DingTalkWatcher::new())
+            });
+
             pm.load_all(&resolved, &registry);
             pm.start(&resolved).await;
 

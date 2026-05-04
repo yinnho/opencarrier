@@ -164,7 +164,7 @@ impl PluginManager {
                     // Plugins like weixin/feishu use the tenant name as tenant_id in messages.
                     for channel in plugin.channels() {
                         let ch_type = &channel.channel_type;
-                        if ch_type != "weixin" && ch_type != "feishu" {
+                        if ch_type != "weixin" && ch_type != "feishu" && ch_type != "dingtalk" {
                             continue;
                         }
                         if !channel.tenant_id.is_empty() && channel.tenant_id != *bot_uuid {
@@ -206,6 +206,28 @@ impl PluginManager {
                                 tenant_name = %tenant_name,
                                 agent_id = %agent_uuid,
                                 "Bound feishu bot name to agent"
+                            );
+                        }
+                    }
+
+                    // DingTalk bots also use the bot name as tenant_id.
+                    if channels.contains(&"dingtalk".to_string()) {
+                        let tenant_name = &bot_config.name;
+                        if tenant_name != bot_uuid {
+                            bridge.bind_channel(
+                                "dingtalk".to_string(),
+                                tenant_name.clone(),
+                                agent_uuid.clone(),
+                            );
+                            bridge.map_channel_tenant(
+                                "dingtalk".to_string(),
+                                tenant_name.clone(),
+                                bot_uuid.clone(),
+                            );
+                            info!(
+                                tenant_name = %tenant_name,
+                                agent_id = %agent_uuid,
+                                "Bound dingtalk bot name to agent"
                             );
                         }
                     }

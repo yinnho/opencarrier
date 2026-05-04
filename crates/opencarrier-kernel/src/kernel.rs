@@ -64,8 +64,9 @@ pub struct KernelServices {
 
 /// Plugin and MCP tooling subsystem.
 pub struct KernelPlugins {
-    /// MCP server connections (lazily initialized at start_background_agents).
-    pub mcp_connections: tokio::sync::Mutex<Vec<opencarrier_runtime::mcp::McpConnection>>,
+    /// MCP server connections keyed by normalized server name.
+    /// DashMap allows concurrent tool calls to different servers without blocking each other.
+    pub mcp_connections: dashmap::DashMap<String, opencarrier_runtime::mcp::McpConnection>,
     /// MCP tool definitions cache (populated after connections are established).
     pub mcp_tools: std::sync::Mutex<Vec<ToolDefinition>>,
     /// Configured MCP server list (from config, used for MCP connections).
@@ -84,6 +85,9 @@ pub struct KernelPlugins {
     /// Default plugin tenant per agent — set during boot from bot bindings.
     /// Used as fallback when no channel context is available (e.g. REST API calls).
     pub default_plugin_tenant: dashmap::DashMap<AgentId, String>,
+    /// Per-server consecutive reconnection failure count for exponential backoff.
+    /// Key: normalized server name, Value: failure count.
+    pub mcp_reconnect_failures: dashmap::DashMap<String, u32>,
 }
 
 /// Agent scheduling, supervision, and runtime execution subsystem.
@@ -1281,13 +1285,14 @@ impl OpenCarrierKernel {
                 tts_engine,
             },
             plugins: KernelPlugins {
-                mcp_connections: tokio::sync::Mutex::new(Vec::new()),
+                mcp_connections: dashmap::DashMap::new(),
                 mcp_tools: std::sync::Mutex::new(Vec::new()),
                 effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
                 skill_registry: std::sync::RwLock::new(skill_registry),
                 plugin_tool_dispatcher: std::sync::Mutex::new(None),
                 source_tenant_id: dashmap::DashMap::new(),
                 default_plugin_tenant: dashmap::DashMap::new(),
+                mcp_reconnect_failures: dashmap::DashMap::new(),
             },
             runtime: KernelRuntime {
                 scheduler: AgentScheduler::new(),
@@ -3083,6 +3088,47 @@ impl OpenCarrierKernel {
                         .unwrap_or_else(|e| e.into_inner());
                     catalog.apply_url_overrides(&new_config.provider_urls);
                 }
+                HotAction::ReloadMcpServers => {
+                    info!("Hot-reload: reloading MCP servers");
+                    let new_mcp = &new_config.mcp_servers;
+                    let old_names: Vec<String> = self
+                        .plugins
+                        .effective_mcp_servers
+                        .read()
+                        .map(|s| s.iter().map(|c| c.name.clone()).collect())
+                        .unwrap_or_default();
+                    let new_names: Vec<String> = new_mcp.iter().map(|c| c.name.clone()).collect();
+
+                    // Remove connections for servers no longer in config
+                    {
+                        let removed: Vec<&str> = old_names
+                            .iter()
+                            .filter(|n| !new_names.contains(n))
+                            .map(|s| s.as_str())
+                            .collect();
+                        if !removed.is_empty() {
+                            // Note: mcp_connections is an async Mutex, so we can't
+                            // lock it here in a sync context. Instead, mark removed
+                            // servers by updating effective_mcp_servers — the health
+                            // monitor will detect and clean them on the next cycle.
+                            for name in &removed {
+                                info!(server = %name, "MCP server removed from config — will disconnect on next health check");
+                            }
+                        }
+                    }
+
+                    // Update effective config — the health monitor's next cycle
+                    // will: (1) remove connections for deleted servers,
+                    // (2) reconnect changed servers, (3) connect new servers.
+                    if let Ok(mut effective) = self.plugins.effective_mcp_servers.write() {
+                        *effective = new_mcp.clone();
+                    }
+                    info!(
+                        old_count = old_names.len(),
+                        new_count = new_names.len(),
+                        "MCP server config updated — changes take effect on next health check cycle"
+                    );
+                }
                 _ => {
                     // Other hot actions are logged but not applied here — they
                     // require subsystem-specific reinitialization.
@@ -3906,7 +3952,8 @@ impl OpenCarrierKernel {
                         tools = tool_count,
                         "MCP server connected"
                     );
-                    self.plugins.mcp_connections.lock().await.push(conn);
+                    let key = opencarrier_runtime::mcp::normalize_name(&server_config.name);
+                    self.plugins.mcp_connections.insert(key, conn);
                 }
                 Err(e) => {
                     warn!(
@@ -3922,7 +3969,7 @@ impl OpenCarrierKernel {
         if tool_count > 0 {
             info!(
                 "MCP: {tool_count} tools available from {} server(s)",
-                self.plugins.mcp_connections.lock().await.len()
+                self.plugins.mcp_connections.len()
             );
         }
 
@@ -3939,45 +3986,167 @@ impl OpenCarrierKernel {
             loop {
                 interval.tick().await;
 
-                // Find dead connections by pinging each one
+                // --- Phase 1: Detect dead connections by pinging ---
+                // DashMap lets us ping each server independently — a slow server
+                // doesn't block health checks on others.
                 let mut dead_servers = Vec::new();
                 {
-                    let mut conns = kernel.plugins.mcp_connections.lock().await;
-                    let mut i = 0;
-                    while i < conns.len() {
-                        if conns[i].ping().await.is_err() {
-                            let name = conns[i].name().to_string();
-                            let config = conns[i].config().clone();
-                            warn!(server = %name, "MCP server health check failed, will reconnect");
-                            dead_servers.push((name, config));
-                            conns.remove(i);
-                        } else {
-                            i += 1;
+                    // Collect keys first to avoid holding DashMap references across awaits
+                    let keys: Vec<String> = kernel.plugins.mcp_connections
+                        .iter().map(|e| e.key().clone()).collect();
+                    for key in &keys {
+                        if let Some(mut conn) = kernel.plugins.mcp_connections.get_mut(key) {
+                            if conn.ping().await.is_err() {
+                                let name = conn.name().to_string();
+                                let config = conn.config().clone();
+                                warn!(server = %name, "MCP server health check failed, will reconnect");
+                                dead_servers.push((name, config));
+                            }
+                        }
+                    }
+                    // Remove dead connections (keys collected above)
+                    let dead_keys: Vec<String> = dead_servers.iter()
+                        .map(|(name, _)| opencarrier_runtime::mcp::normalize_name(name))
+                        .collect();
+                    for key in &dead_keys {
+                        kernel.plugins.mcp_connections.remove(key);
+                    }
+                }
+
+                // --- Phase 2: Sync connections with effective config ---
+                // Remove connections for servers no longer in config,
+                // and connect servers that are in config but not yet connected.
+                {
+                    use opencarrier_runtime::mcp::normalize_name;
+
+                    let effective: Vec<opencarrier_types::config::McpServerConfigEntry> =
+                        kernel.plugins.effective_mcp_servers.read()
+                            .map(|s| s.clone())
+                            .unwrap_or_default();
+                    let effective_keys: Vec<String> = effective
+                        .iter().map(|c| normalize_name(&c.name)).collect();
+
+                    // Remove connections not in effective config
+                    {
+                        let mut tools = kernel.plugins.mcp_tools.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut removed = Vec::new();
+                        kernel.plugins.mcp_connections.retain(|key, conn| {
+                            if effective_keys.contains(key) {
+                                true
+                            } else {
+                                let prefix = format!("mcp_{key}_");
+                                tools.retain(|t| !t.name.starts_with(&prefix));
+                                removed.push(conn.name().to_string());
+                                false
+                            }
+                        });
+                        for name in &removed {
+                            info!(server = %name, "MCP server removed (no longer in config)");
+                        }
+                    }
+
+                    // Connect servers in config but not yet connected
+                    let connected_keys: Vec<String> = kernel.plugins.mcp_connections
+                        .iter().map(|e| e.key().clone()).collect();
+                    let missing: Vec<&opencarrier_types::config::McpServerConfigEntry> = effective
+                        .iter()
+                        .filter(|c| !connected_keys.contains(&normalize_name(&c.name)))
+                        .collect();
+
+                    for server_config in &missing {
+                        use opencarrier_runtime::mcp::{McpConnection, McpServerConfig, McpTransport};
+                        use opencarrier_types::config::McpTransportEntry;
+
+                        let transport = match &server_config.transport {
+                            McpTransportEntry::Stdio { command, args } => McpTransport::Stdio {
+                                command: command.clone(),
+                                args: args.clone(),
+                            },
+                            McpTransportEntry::Sse { url } => McpTransport::Sse { url: url.clone() },
+                        };
+                        let mcp_config = McpServerConfig {
+                            name: server_config.name.clone(),
+                            transport,
+                            timeout_secs: server_config.timeout_secs,
+                            env: server_config.env.clone(),
+                        };
+                        info!(server = %server_config.name, "Connecting MCP server (found in config but not connected)");
+                        match McpConnection::connect(mcp_config).await {
+                            Ok(conn) => {
+                                if let Ok(mut tools) = kernel.plugins.mcp_tools.lock() {
+                                    tools.extend(conn.tools().iter().cloned());
+                                }
+                                let key = normalize_name(&server_config.name);
+                                kernel.plugins.mcp_connections.insert(key, conn);
+                                info!(server = %server_config.name, "MCP server connected");
+                            }
+                            Err(e) => {
+                                warn!(server = %server_config.name, error = %e, "Failed to connect MCP server, will retry next cycle");
+                            }
                         }
                     }
                 }
 
-                // Reconnect dead servers
+                // --- Phase 3: Reconnect dead servers with exponential backoff ---
                 for (name, config) in dead_servers {
                     use opencarrier_runtime::mcp::McpConnection;
+                    // Only reconnect if still in effective config
+                    let still_configured = kernel.plugins.effective_mcp_servers.read()
+                        .map(|s| s.iter().any(|c| c.name == name))
+                        .unwrap_or(false);
+                    if !still_configured {
+                        kernel.plugins.mcp_reconnect_failures.remove(
+                            &opencarrier_runtime::mcp::normalize_name(&name)
+                        );
+                        continue;
+                    }
+                    // Exponential backoff: skip reconnection if backoff hasn't elapsed.
+                    // Formula: min(60 * 2^count, 3600) seconds between attempts.
+                    let key = opencarrier_runtime::mcp::normalize_name(&name);
+                    let fail_count = kernel.plugins.mcp_reconnect_failures
+                        .get(&key).map(|g| *g).unwrap_or(0);
+                    if fail_count > 0 {
+                        let backoff_secs = std::cmp::min(60 * 2u64.pow(fail_count), 3600);
+                        // Health check runs every 60s, so skip if backoff > 60s remaining
+                        if backoff_secs > 60 {
+                            if fail_count >= 5 && fail_count % 6 == 5 {
+                                warn!(
+                                    server = %name,
+                                    failures = fail_count,
+                                    backoff_secs,
+                                    "MCP server still unreachable after multiple attempts"
+                                );
+                            }
+                            // Increment failure counter and skip this cycle
+                            kernel.plugins.mcp_reconnect_failures
+                                .insert(key.clone(), fail_count + 1);
+                            continue;
+                        }
+                    }
                     info!(server = %name, "Attempting MCP server reconnection");
                     match McpConnection::connect(config).await {
                         Ok(conn) => {
                             let tool_count = conn.tools().len();
-                            // Remove stale tools for this server before re-adding
                             if let Ok(mut tools) = kernel.plugins.mcp_tools.lock() {
-                                let prefix = format!(
-                                    "mcp_{}",
-                                    opencarrier_runtime::mcp::normalize_name(&name)
-                                );
+                                let prefix = format!("mcp_{key}");
                                 tools.retain(|t| !t.name.starts_with(&prefix));
                                 tools.extend(conn.tools().iter().cloned());
                             }
-                            kernel.plugins.mcp_connections.lock().await.push(conn);
+                            kernel.plugins.mcp_reconnect_failures.remove(&key);
+                            kernel.plugins.mcp_connections.insert(key, conn);
                             info!(server = %name, tools = tool_count, "MCP server reconnected");
                         }
                         Err(e) => {
-                            warn!(server = %name, error = %e, "MCP reconnection failed, will retry next cycle");
+                            let new_count = fail_count + 1;
+                            kernel.plugins.mcp_reconnect_failures.insert(key, new_count);
+                            let backoff_secs = std::cmp::min(60 * 2u64.pow(new_count), 3600);
+                            warn!(
+                                server = %name,
+                                error = %e,
+                                consecutive_failures = new_count,
+                                next_retry_in_secs = backoff_secs,
+                                "MCP reconnection failed"
+                            );
                         }
                     }
                 }
@@ -4285,16 +4454,10 @@ impl OpenCarrierKernel {
             .collect();
 
         // Collect known server names from live connections for correct grouping.
-        // Use try_lock() to avoid panicking inside a tokio runtime.
-        let conns = match self.plugins.mcp_connections.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                // Lock contention — skip MCP summary rather than panic
-                warn!("mcp_connections lock contention, skipping MCP summary");
-                return String::new();
-            }
-        };
-        let known_names: Vec<&str> = conns.iter().map(|c| c.name()).collect();
+        // DashMap iteration doesn't block tool calls.
+        let known_names: Vec<String> = self.plugins.mcp_connections
+            .iter().map(|e| e.value().name().to_string()).collect();
+        let known_refs: Vec<&str> = known_names.iter().map(|s| s.as_str()).collect();
 
         // Group tools by MCP server using known-names resolver
         let mut servers: std::collections::HashMap<String, Vec<String>> =
@@ -4302,7 +4465,7 @@ impl OpenCarrierKernel {
         let mut tool_count = 0usize;
         for tool in &tools {
             let server =
-                opencarrier_runtime::mcp::extract_mcp_server_from_known(&tool.name, &known_names)
+                opencarrier_runtime::mcp::extract_mcp_server_from_known(&tool.name, &known_refs)
                     .map(String::from)
                     .unwrap_or_else(|| "unknown".to_string());
 
