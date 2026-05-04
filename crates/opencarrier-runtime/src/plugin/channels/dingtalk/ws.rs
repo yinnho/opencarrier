@@ -138,26 +138,53 @@ impl DingTalkWsClient {
                     };
 
                     let frame_type = frame.r#type.as_deref().unwrap_or("");
-                    let data = frame.data.as_deref().unwrap_or("");
+                    let topic = frame
+                        .headers
+                        .as_ref()
+                        .and_then(|h| h.topic.as_deref())
+                        .unwrap_or("");
 
                     info!(
                         tenant = %self.tenant_name,
                         frame_type,
-                        data = %data.chars().take(100).collect::<String>(),
+                        topic,
                         "Handshake frame"
                     );
 
                     if frame_type == "SYSTEM" {
-                        if data.contains("CONNECTED") {
-                            info!(tenant = %self.tenant_name, "DingTalk Stream CONNECTED");
-                        } else if data.contains("REGISTERED") {
-                            info!(tenant = %self.tenant_name, "DingTalk Stream REGISTERED");
-                            registered = true;
-                        } else if data.contains("ping") || data.contains("KEEPALIVE") {
-                            // Echo back keep-alive during handshake
-                            let _ = write.send(Message::Text(text)).await;
+                        match topic {
+                            "CONNECTED" => {
+                                info!(tenant = %self.tenant_name, "DingTalk Stream CONNECTED");
+                            }
+                            "REGISTERED" => {
+                                info!(tenant = %self.tenant_name, "DingTalk Stream REGISTERED");
+                                registered = true;
+                            }
+                            "ping" => {
+                                // Echo back as ACK format: {code:200, headers, message:"OK", data}
+                                if let Ok(ack) = serde_json::to_string(&serde_json::json!({
+                                    "code": 200,
+                                    "headers": frame.headers,
+                                    "message": "OK",
+                                    "data": frame.data
+                                })) {
+                                    let _ = write.send(Message::Text(ack)).await;
+                                }
+                            }
+                            "KEEPALIVE" => {
+                                // Just reset liveness, no echo needed
+                            }
+                            "disconnect" => {
+                                return Err("Server sent disconnect during handshake".to_string());
+                            }
+                            _ => {
+                                info!(tenant = %self.tenant_name, topic, "Unknown SYSTEM topic during handshake");
+                            }
                         }
                     }
+                }
+                Some(Ok(Message::Ping(data))) => {
+                    let _ = write.send(Message::Pong(data)).await;
                 }
                 Some(Ok(Message::Close(_))) => return Err("Close frame during handshake".to_string()),
                 Some(Err(e)) => return Err(format!("WebSocket read error during handshake: {e}")),
@@ -227,22 +254,41 @@ impl DingTalkWsClient {
             .or(frame.message_id.clone())
             .unwrap_or_default();
 
+        let topic = frame
+            .headers
+            .as_ref()
+            .and_then(|h| h.topic.as_deref())
+            .unwrap_or("");
+
         match frame_type {
             "SYSTEM" => {
-                let data = frame.data.as_deref().unwrap_or("");
-                if data.contains("ping") || data.contains("KEEPALIVE") {
-                    // Echo back the exact same JSON for keep-alive
-                    if let Err(e) = write.send(Message::Text(text.to_string())).await {
-                        warn!(tenant = %self.tenant_name, "Keep-alive echo failed: {e}");
+                match topic {
+                    "ping" => {
+                        // Echo back as ACK format: {code:200, headers, message:"OK", data}
+                        if let Ok(ack) = serde_json::to_string(&serde_json::json!({
+                            "code": 200,
+                            "headers": frame.headers,
+                            "message": "OK",
+                            "data": frame.data
+                        })) {
+                            if let Err(e) = write.send(Message::Text(ack)).await {
+                                warn!(tenant = %self.tenant_name, "Ping echo failed: {e}");
+                            }
+                        }
                     }
-                } else if data.contains("disconnect") {
-                    warn!(tenant = %self.tenant_name, "Server sent disconnect");
-                } else {
-                    info!(
-                        tenant = %self.tenant_name,
-                        data = %data.chars().take(100).collect::<String>(),
-                        "SYSTEM frame"
-                    );
+                    "KEEPALIVE" => {
+                        // Just reset liveness, no response needed
+                    }
+                    "disconnect" => {
+                        warn!(tenant = %self.tenant_name, "Server sent disconnect");
+                    }
+                    _ => {
+                        info!(
+                            tenant = %self.tenant_name,
+                            topic,
+                            "SYSTEM frame"
+                        );
+                    }
                 }
             }
             "CALLBACK" => {

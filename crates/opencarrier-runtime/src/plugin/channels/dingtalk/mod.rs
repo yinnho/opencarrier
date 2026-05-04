@@ -150,7 +150,6 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<DingTalkTenantEntry
         app_secret,
     };
 
-    info!(bot = %name, bot_uuid = %bot_uuid, "Registered DingTalk bot");
     Some(DingTalkTenantEntry::new(cfg))
 }
 
@@ -197,6 +196,8 @@ fn dingtalk_watcher_loop(
             let token_cache = entry.token_cache.clone();
             DINGTALK_TENANTS.insert(tenant_name.clone(), entry);
             spawned.insert(tenant_name.clone());
+
+            info!(tenant = %tenant_name, "New DingTalk bot discovered, spawning channel");
 
             let tx = sender.clone();
             std::thread::spawn(move || {

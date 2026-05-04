@@ -63,10 +63,16 @@ pub async fn open_gateway(
         client_id: client_id.to_string(),
         client_secret: client_secret.to_string(),
         ua: "opencarrier".to_string(),
-        subscriptions: vec![Subscription {
-            r#type: "CALLBACK".to_string(),
-            topic: TOPIC_ROBOT.to_string(),
-        }],
+        subscriptions: vec![
+            Subscription {
+                r#type: "EVENT".to_string(),
+                topic: "*".to_string(),
+            },
+            Subscription {
+                r#type: "CALLBACK".to_string(),
+                topic: TOPIC_ROBOT.to_string(),
+            },
+        ],
     };
 
     let resp = http
