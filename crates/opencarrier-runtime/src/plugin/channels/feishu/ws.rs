@@ -147,23 +147,28 @@ impl FeishuWsClient {
                             return Ok(());
                         }
                         Some(Ok(Message::Binary(data))) => {
+                            info!(tenant = %self.tenant_name, len = data.len(), "WS binary frame received");
                             self.handle_binary_frame(&data, &mut write, &mut fragments, sender).await;
                         }
                         Some(Ok(Message::Text(text))) => {
-                            info!(tenant = %self.tenant_name, len = text.len(), "Unexpected WS text frame (expected binary)");
+                            info!(tenant = %self.tenant_name, len = text.len(), "WS text frame received");
                         }
-                        Some(Ok(Message::Ping(_))) => {
-                            // tungstenite auto-replies pings
+                        Some(Ok(Message::Ping(data))) => {
+                            info!(tenant = %self.tenant_name, len = data.len(), "WS protocol ping received");
                         }
-                        Some(Ok(Message::Pong(_))) => {}
+                        Some(Ok(Message::Pong(data))) => {
+                            info!(tenant = %self.tenant_name, len = data.len(), "WS protocol pong received");
+                        }
                         Some(Ok(Message::Close(_))) => {
                             warn!(tenant = %self.tenant_name, "WebSocket close frame received");
                             return Ok(());
                         }
+                        Some(Ok(Message::Frame(_))) => {
+                            info!(tenant = %self.tenant_name, "WS raw frame received");
+                        }
                         Some(Err(e)) => {
                             return Err(format!("WebSocket read error: {e}"));
                         }
-                        _ => {}
                     }
                 }
                 _ = ping_interval.tick() => {
