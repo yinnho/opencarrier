@@ -52,9 +52,10 @@ pub async fn get_access_token(
 /// POST `/v1.0/gateway/connections/open`
 ///
 /// Open a Stream gateway connection and get the WebSocket endpoint + ticket.
+/// Note: This endpoint does NOT use the access token header — authentication
+/// is via clientId/clientSecret in the request body (matching the TS SDK behavior).
 pub async fn open_gateway(
     http: &Client,
-    token: &str,
     client_id: &str,
     client_secret: &str,
 ) -> Result<GatewayOpenResponse, String> {
@@ -75,9 +76,13 @@ pub async fn open_gateway(
         ],
     };
 
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", "application/json".parse().unwrap());
+    headers.insert("Accept", "application/json".parse().unwrap());
+
     let resp = http
         .post(&url)
-        .headers(dingtalk_headers(token))
+        .headers(headers)
         .json(&body)
         .timeout(Duration::from_secs(15))
         .send()

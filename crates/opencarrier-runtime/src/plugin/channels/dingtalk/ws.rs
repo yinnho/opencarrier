@@ -82,17 +82,16 @@ impl DingTalkWsClient {
         &self,
         sender: &mpsc::Sender<PluginMessage>,
     ) -> Result<(), String> {
-        // 1. Get access token
-        let token = self
+        // 1. Pre-warm access token cache (needed later for send operations)
+        let _ = self
             .token_cache
             .get_token()
             .await
             .map_err(|e| format!("Token error: {e}"))?;
 
-        // 2. Open gateway connection
+        // 2. Open gateway connection (no access token needed — auth is via body)
         let gw = api::open_gateway(
             self.token_cache.http(),
-            &token,
             self.token_cache.app_key(),
             self.token_cache.app_secret(),
         )
@@ -128,6 +127,9 @@ impl DingTalkWsClient {
         info!(tenant = %self.tenant_name, "DingTalk WebSocket connected");
 
         let (mut write, mut read) = ws_stream.split();
+
+        // Read any first frame with debug to understand what the server sends
+        info!(tenant = %self.tenant_name, "Waiting for first WS frame...");
 
         // 4. Handshake: wait for CONNECTED then REGISTERED
         let mut registered = false;
