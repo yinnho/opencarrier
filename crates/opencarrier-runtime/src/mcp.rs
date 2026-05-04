@@ -82,6 +82,7 @@ enum McpTransportHandle {
     Sse {
         client: reqwest::Client,
         url: String,
+        session_id: Option<String>,
     },
 }
 
@@ -361,11 +362,22 @@ impl McpConnection {
 
                 Ok(response.result)
             }
-            McpTransportHandle::Sse { client, url } => {
-                let response = client
+            McpTransportHandle::Sse {
+                client,
+                url,
+                session_id,
+            } => {
+                let mut req = client
                     .post(url.as_str())
+                    .header("Accept", "application/json, text/event-stream")
                     .json(&request)
-                    .timeout(std::time::Duration::from_secs(self.config.timeout_secs))
+                    .timeout(std::time::Duration::from_secs(self.config.timeout_secs));
+
+                if let Some(sid) = session_id.as_deref() {
+                    req = req.header("mcp-session-id", sid);
+                }
+
+                let response = req
                     .send()
                     .await
                     .map_err(|e| format!("MCP SSE request failed: {e}"))?;
@@ -374,12 +386,30 @@ impl McpConnection {
                     return Err(format!("MCP SSE returned {}", response.status()));
                 }
 
+                // Persist session ID from server for subsequent requests.
+                if let Some(sid) = response.headers().get("mcp-session-id") {
+                    if let Ok(sid_str) = sid.to_str() {
+                        *session_id = Some(sid_str.to_string());
+                    }
+                }
+
                 let body = response
                     .text()
                     .await
                     .map_err(|e| format!("Failed to read SSE response: {e}"))?;
 
-                let rpc_response: JsonRpcResponse = serde_json::from_str(&body)
+                // Handle both plain JSON and SSE format (Streamable-HTTP).
+                // SSE format: "event: message\ndata: {...}\n\n"
+                let json_str = if body.starts_with('{') {
+                    body.clone()
+                } else {
+                    body.lines()
+                        .find_map(|line| line.strip_prefix("data: "))
+                        .unwrap_or(&body)
+                        .to_string()
+                };
+
+                let rpc_response: JsonRpcResponse = serde_json::from_str(&json_str)
                     .map_err(|e| format!("Invalid MCP SSE JSON-RPC response: {e}"))?;
 
                 if let Some(err) = rpc_response.error {
@@ -417,8 +447,20 @@ impl McpConnection {
                     .map_err(|e| format!("Write newline: {e}"))?;
                 stdin.flush().await.map_err(|e| format!("Flush: {e}"))?;
             }
-            McpTransportHandle::Sse { client, url } => {
-                let _ = client.post(url.as_str()).json(&notification).send().await;
+            McpTransportHandle::Sse {
+                client,
+                url,
+                session_id,
+            } => {
+                let mut req = client
+                    .post(url.as_str())
+                    .header("Accept", "application/json, text/event-stream")
+                    .json(&notification);
+
+                if let Some(sid) = session_id.as_deref() {
+                    req = req.header("mcp-session-id", sid);
+                }
+                let _ = req.send().await;
             }
         }
 
@@ -541,6 +583,7 @@ impl McpConnection {
         Ok(McpTransportHandle::Sse {
             client,
             url: url.to_string(),
+            session_id: None,
         })
     }
 }
