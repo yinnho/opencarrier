@@ -184,14 +184,16 @@ fn dingtalk_watcher_loop(
 
         let configs = scan_bot_configs(plugin_dir);
         for (_uuid, config) in configs {
+            // Extract name early to check spawned set before full config load
+            let tenant_name = config["name"].as_str().unwrap_or("").to_string();
+            if tenant_name.is_empty() || spawned.contains(&tenant_name) {
+                continue;
+            }
+
             let entry = match load_bot_config(&config) {
                 Some(e) => e,
                 None => continue,
             };
-            let tenant_name = entry.config.name.clone();
-            if spawned.contains(&tenant_name) {
-                continue;
-            }
 
             let token_cache = entry.token_cache.clone();
             DINGTALK_TENANTS.insert(tenant_name.clone(), entry);

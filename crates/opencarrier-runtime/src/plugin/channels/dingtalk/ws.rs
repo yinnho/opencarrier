@@ -107,12 +107,23 @@ impl DingTalkWsClient {
 
         let ws_url = format!("{endpoint}?ticket={ticket}");
 
-        info!(tenant = %self.tenant_name, "Connecting to DingTalk Stream WebSocket...");
+        info!(
+            tenant = %self.tenant_name,
+            endpoint = %endpoint.chars().take(80).collect::<String>(),
+            ticket_len = ticket.len(),
+            "Gateway opened, connecting to WS"
+        );
 
         // 3. Connect WebSocket
-        let (ws_stream, _response) = connect_async(&ws_url)
+        let (ws_stream, response) = connect_async(&ws_url)
             .await
             .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+
+        info!(
+            tenant = %self.tenant_name,
+            status = %response.status(),
+            "DingTalk WebSocket connected"
+        );
 
         info!(tenant = %self.tenant_name, "DingTalk WebSocket connected");
 
@@ -126,9 +137,13 @@ impl DingTalkWsClient {
                 return Ok(());
             }
 
-            match read.next().await {
-                None => return Err("WebSocket closed during handshake".to_string()),
-                Some(Ok(Message::Text(text))) => {
+            match tokio::time::timeout(Duration::from_secs(30), read.next()).await {
+                Err(_) => {
+                    warn!(tenant = %self.tenant_name, "Timeout waiting for handshake frame (30s)");
+                    return Err("Timeout waiting for handshake frame".to_string());
+                }
+                Ok(None) => return Err("WebSocket closed during handshake".to_string()),
+                Ok(Some(Ok(Message::Text(text)))) => {
                     let frame: WsDownStream = match serde_json::from_str(&text) {
                         Ok(f) => f,
                         Err(e) => {
@@ -183,12 +198,15 @@ impl DingTalkWsClient {
                         }
                     }
                 }
-                Some(Ok(Message::Ping(data))) => {
+                Ok(Some(Ok(Message::Ping(data)))) => {
                     let _ = write.send(Message::Pong(data)).await;
                 }
-                Some(Ok(Message::Close(_))) => return Err("Close frame during handshake".to_string()),
-                Some(Err(e)) => return Err(format!("WebSocket read error during handshake: {e}")),
-                _ => {}
+                Ok(Some(Ok(Message::Close(_)))) => return Err("Close frame during handshake".to_string()),
+                Ok(Some(Ok(Message::Binary(data)))) => {
+                    info!(tenant = %self.tenant_name, len = data.len(), "Unexpected binary frame during handshake");
+                }
+                Ok(Some(Err(e))) => return Err(format!("WebSocket read error during handshake: {e}")),
+                Ok(Some(Ok(_))) => {}
             }
         }
 
