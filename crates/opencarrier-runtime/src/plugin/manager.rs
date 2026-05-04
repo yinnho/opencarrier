@@ -161,9 +161,10 @@ impl PluginManager {
                     }
 
                     // Also bind using channel descriptor tenant_id (may differ from bot_uuid).
-                    // Plugins like weixin use the tenant name as tenant_id in messages.
+                    // Plugins like weixin/feishu use the tenant name as tenant_id in messages.
                     for channel in plugin.channels() {
-                        if channel.channel_type != "weixin" {
+                        let ch_type = &channel.channel_type;
+                        if ch_type != "weixin" && ch_type != "feishu" {
                             continue;
                         }
                         if !channel.tenant_id.is_empty() && channel.tenant_id != *bot_uuid {
@@ -182,6 +183,29 @@ impl PluginManager {
                                 tenant_id = %channel.tenant_id,
                                 agent_id = %agent_uuid,
                                 "Bound channel tenant_id to agent"
+                            );
+                        }
+                    }
+
+                    // Feishu bots use the bot name as tenant_id in messages, but the watcher
+                    // channel has empty tenant_id. Bind using the bot name directly.
+                    if channels.contains(&"feishu".to_string()) {
+                        let tenant_name = &bot_config.name;
+                        if tenant_name != bot_uuid {
+                            bridge.bind_channel(
+                                "feishu".to_string(),
+                                tenant_name.clone(),
+                                agent_uuid.clone(),
+                            );
+                            bridge.map_channel_tenant(
+                                "feishu".to_string(),
+                                tenant_name.clone(),
+                                bot_uuid.clone(),
+                            );
+                            info!(
+                                tenant_name = %tenant_name,
+                                agent_id = %agent_uuid,
+                                "Bound feishu bot name to agent"
                             );
                         }
                     }
