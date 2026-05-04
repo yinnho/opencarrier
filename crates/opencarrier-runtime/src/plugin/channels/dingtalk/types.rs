@@ -90,7 +90,40 @@ pub struct WsHeaders {
     pub event_type: Option<String>,
     pub app_id: Option<String>,
     pub connection_id: Option<String>,
-    pub time: Option<u64>,
+    #[serde(deserialize_with = "deserialize_string_or_u64")]
+    pub time: Option<String>,
+}
+
+fn deserialize_string_or_u64<'de, D>(de: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct StringOrU64;
+    impl<'de> Visitor<'de> for StringOrU64 {
+        type Value = Option<String>;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("string, u64, or null")
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<String>, E> {
+            Ok(None)
+        }
+        fn visit_some<D: serde::Deserializer<'de>>(self, de: D) -> Result<Option<String>, D::Error> {
+            de.deserialize_any(StringOrU64)
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+    }
+    de.deserialize_option(StringOrU64)
 }
 
 /// ACK frame sent back on the WebSocket after receiving a CALLBACK.

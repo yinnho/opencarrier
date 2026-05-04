@@ -124,8 +124,6 @@ impl DingTalkWsClient {
             "DingTalk WebSocket connected"
         );
 
-        info!(tenant = %self.tenant_name, "DingTalk WebSocket connected");
-
         let (mut write, mut read) = ws_stream.split();
 
         // Read any first frame with debug to understand what the server sends
