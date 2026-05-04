@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use opencarrier_types::agent::{AgentIdentity, AgentManifest};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,13 @@ pub struct PatchAgentConfigRequest {
 #[derive(serde::Deserialize)]
 pub struct CloneAgentRequest {
     pub new_name: String,
+}
+
+/// Request body for writing a knowledge file to an agent's workspace.
+#[derive(serde::Deserialize)]
+pub struct WriteKnowledgeRequest {
+    pub filename: String,
+    pub content: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +495,88 @@ pub async fn stop_agent(
             Json(serde_json::json!({"error": format!("{e}")})),
         ),
     }
+}
+
+/// POST /api/agents/{id}/knowledge — Write a knowledge file to an agent's workspace.
+pub async fn write_agent_knowledge(
+    State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
+    Path(id): Path<String>,
+    Json(body): Json<WriteKnowledgeRequest>,
+) -> impl IntoResponse {
+    let ctx = get_tenant_ctx(&extensions);
+    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let entry = match state.kernel.registry.get(agent_id) {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            )
+        }
+    };
+    let workspace = match &entry.manifest.workspace {
+        Some(ws) => ws.clone(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Agent has no workspace"})),
+            )
+        }
+    };
+
+    // Sanitize filename: only allow alphanumeric, hyphens, underscores, and .md extension
+    let safe_name: String = body
+        .filename
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .collect();
+    if safe_name.is_empty()
+        || safe_name != body.filename
+        || !safe_name.ends_with(".md")
+        || safe_name.contains("..")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid filename: use alphanumeric + .md only"})),
+        );
+    }
+
+    let knowledge_dir = workspace.join("data").join("knowledge");
+    let file_path: PathBuf = knowledge_dir.join(&safe_name);
+
+    // Security: ensure resolved path is still under knowledge dir
+    if let Ok(canonical_parent) = knowledge_dir.canonicalize() {
+        if let Ok(canonical_file) = file_path.canonicalize() {
+            if !canonical_file.starts_with(&canonical_parent) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Path traversal denied"})),
+                );
+            }
+        }
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&knowledge_dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create knowledge dir: {e}")})),
+        );
+    }
+    if let Err(e) = std::fs::write(&file_path, &body.content) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to write knowledge file: {e}")})),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "ok", "filename": safe_name})),
+    )
 }
 
 /// POST /api/agents/{id}/suspend — Suspend an agent (keep DB + workspace, stop processing).
@@ -977,4 +1067,5 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/agents/{id}/stop", routing::post(stop_agent))
         .route("/api/agents/{id}/suspend", routing::post(suspend_agent))
         .route("/api/agents/{id}/resume", routing::post(resume_agent))
+        .route("/api/agents/{id}/knowledge", routing::post(write_agent_knowledge))
 }

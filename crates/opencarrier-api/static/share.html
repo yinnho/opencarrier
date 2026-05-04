@@ -297,6 +297,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 </div>
 
 <script>
+// ── URL parameter recovery (for WeChat browser clicks) ──
+(function(){
+  var params = new URLSearchParams(location.search);
+  var uFp = params.get('fp');
+  var uSess = params.get('session');
+  var uPhase = params.get('phase');
+  if (uFp) { try { localStorage.setItem('oc_fingerprint', uFp); } catch(e){} }
+  if (uSess) {
+    try { localStorage.setItem('oc_share_session', uSess); } catch(e){}
+    document.cookie = 'opencarrier_session=' + uSess + ';path=/;max-age=86400;SameSite=Lax';
+  }
+  if (uPhase === '3' && uSess) { window.__jumpPhase3 = true; }
+})();
+
 (function(){
   var sessionToken = '';
   try { sessionToken = localStorage.getItem('oc_share_session') || ''; } catch(e) {}
@@ -309,6 +323,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   var platformCredentials = {};
   var currentBotId = '';
   var fingerprint = '';
+
+  // ── Phase 3 jump from URL params (WeChat browser link) ──
+  if (window.__jumpPhase3 && sessionToken) {
+    // DOM not ready yet; defer until after script executes
+    setTimeout(function(){ showPhase(3); loadAgentsAndHub(); }, 100);
+  }
 
   // ── Fingerprint: stable user id across platforms ──
   function getFingerprint() {
@@ -788,9 +808,42 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     }
     api('POST', '/api/bots', payload).then(function(res){
       currentBotId = res.bot_id || '';
+      // Auto-install guide agent and bind to bot
+      installGuideAgent(platform);
       setTimeout(function(){ showPhase(3); loadAgentsAndHub(); }, 1200);
     }).catch(function(err){
       alert('创建机器人失败: ' + (err.message || '未知错误') + '，请重试');
+    });
+  }
+
+  // ── Auto-install guide agent and bind to bot ──
+  function installGuideAgent(platform) {
+    api('POST', '/api/hub/templates/guide/install', {}).then(function(data) {
+      var guideId = data.agent_id;
+      if (!guideId) return;
+      // Build share URL with fingerprint + session for WeChat browser context
+      var shareUrl = location.origin + '/share?fp=' + encodeURIComponent(getFingerprint())
+        + '&session=' + encodeURIComponent(sessionToken) + '&phase=3';
+      // Write URL into guide agent's knowledge file
+      return api('POST', '/api/agents/' + guideId + '/knowledge', {
+        filename: 'guide.md',
+        content: '# 选择分身链接\n\n请点击以下链接选择你的 AI 分身：\n\n' + shareUrl
+      }).then(function() { return guideId; });
+    }).then(function(guideId) {
+      if (!guideId) return;
+      // Bind guide to bot
+      var bindUrl;
+      if (activePlatform === 'weixin' && tenantName) {
+        bindUrl = '/api/weixin/' + encodeURIComponent(tenantName) + '/bind';
+      } else if (currentBotId) {
+        bindUrl = '/api/bots/' + encodeURIComponent(currentBotId) + '/bind';
+      }
+      if (bindUrl) {
+        var m = activePlatform === 'weixin' ? 'POST' : 'PUT';
+        api(m, bindUrl, { agent_name: guideId }).catch(function(){});
+      }
+    }).catch(function(err) {
+      console.warn('Guide install failed (non-critical):', err);
     });
   }
 

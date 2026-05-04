@@ -52,10 +52,10 @@ pub async fn get_access_token(
 /// POST `/v1.0/gateway/connections/open`
 ///
 /// Open a Stream gateway connection and get the WebSocket endpoint + ticket.
-/// Note: This endpoint does NOT use the access token header — authentication
-/// is via clientId/clientSecret in the request body (matching the TS SDK behavior).
+/// Requires the access token header in addition to client_id/client_secret in body.
 pub async fn open_gateway(
     http: &Client,
+    token: &str,
     client_id: &str,
     client_secret: &str,
 ) -> Result<GatewayOpenResponse, String> {
@@ -66,10 +66,6 @@ pub async fn open_gateway(
         ua: "opencarrier".to_string(),
         subscriptions: vec![
             Subscription {
-                r#type: "EVENT".to_string(),
-                topic: "*".to_string(),
-            },
-            Subscription {
                 r#type: "CALLBACK".to_string(),
                 topic: TOPIC_ROBOT.to_string(),
             },
@@ -79,6 +75,10 @@ pub async fn open_gateway(
     let mut headers = HeaderMap::new();
     headers.insert("Content-Type", "application/json".parse().unwrap());
     headers.insert("Accept", "application/json".parse().unwrap());
+    headers.insert(
+        "x-acs-dingtalk-access-token",
+        token.parse().unwrap(),
+    );
 
     let resp = http
         .post(&url)

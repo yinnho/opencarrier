@@ -82,16 +82,17 @@ impl DingTalkWsClient {
         &self,
         sender: &mpsc::Sender<PluginMessage>,
     ) -> Result<(), String> {
-        // 1. Pre-warm access token cache (needed later for send operations)
-        let _ = self
+        // 1. Get access token (required for both gateway open header and send operations)
+        let token = self
             .token_cache
             .get_token()
             .await
             .map_err(|e| format!("Token error: {e}"))?;
 
-        // 2. Open gateway connection (no access token needed — auth is via body)
+        // 2. Open gateway connection (sends access token as header + credentials in body)
         let gw = api::open_gateway(
             self.token_cache.http(),
+            &token,
             self.token_cache.app_key(),
             self.token_cache.app_secret(),
         )
