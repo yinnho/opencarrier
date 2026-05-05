@@ -182,7 +182,7 @@ const BIRTH_HTML: &str = include_str!("../static/birth.html");
 pub async fn share_page(
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    if params.get("view").map_or(false, |v| v == "birth") {
+    if params.get("view").is_some_and(|v| v == "birth") {
         return (
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
             BIRTH_HTML,
@@ -280,3 +280,14 @@ const SHARE_HTML: &str = concat!(
     "\n</script>\n",
     "</body>\n</html>"
 );
+
+/// Domain verification file content.
+const VERIFICATION_TXT: &str = "16e0caa15c3973ff558268d2d4f4df2f63e86385";
+
+/// Serve domain verification file.
+pub async fn verification_txt() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        VERIFICATION_TXT,
+    )
+}

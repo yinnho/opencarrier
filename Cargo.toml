@@ -13,6 +13,11 @@ members = [
     "crates/opencarrier-plugin-sdk",
     "xtask",
     "tools/wechat-oa-mcp",
+    "tools/bilibili-mcp",
+    "tools/zhihu-mcp",
+    "tools/xiaohongshu-mcp",
+    "tools/reddit-mcp",
+    "tools/twitter-mcp",
 ]
 
 [workspace.package]

@@ -4,6 +4,7 @@
 //! session store, and consolidation engine behind a single async API.
 
 use crate::consolidation::ConsolidationEngine;
+use crate::invites::InviteStore;
 use crate::knowledge::KnowledgeStore;
 use crate::migration::run_migrations;
 use crate::semantic::SemanticStore;
@@ -35,6 +36,7 @@ pub struct MemorySubstrate {
     consolidation: ConsolidationEngine,
     usage: UsageStore,
     tenant: TenantStore,
+    invites: InviteStore,
 }
 
 impl MemorySubstrate {
@@ -56,6 +58,7 @@ impl MemorySubstrate {
             usage: UsageStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
             tenant: TenantStore::new(Arc::clone(&shared)),
+            invites: InviteStore::new(Arc::clone(&shared)),
         })
     }
 
@@ -75,6 +78,7 @@ impl MemorySubstrate {
             usage: UsageStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
             tenant: TenantStore::new(Arc::clone(&shared)),
+            invites: InviteStore::new(Arc::clone(&shared)),
         })
     }
 
@@ -86,6 +90,11 @@ impl MemorySubstrate {
     /// Get a reference to the tenant store.
     pub fn tenant(&self) -> &TenantStore {
         &self.tenant
+    }
+
+    /// Get a reference to the invite store.
+    pub fn invites(&self) -> &InviteStore {
+        &self.invites
     }
 
     /// Get the shared database connection (for constructing stores from outside).

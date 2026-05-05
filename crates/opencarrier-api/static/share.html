@@ -334,6 +334,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   var currentBotId = '';
   try { currentBotId = localStorage.getItem('oc_bot_id') || ''; } catch(e) {}
   var fingerprint = '';
+  var inviteFp = new URLSearchParams(location.search).get('invite') || '';
 
   // ── Phase 3 jump from URL params (WeChat browser link) ──
   if (window.__jumpPhase3 && sessionToken) {
@@ -563,7 +564,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
             };
             // Use fingerprint as tenant_name if available; fallback to ilink_user_id
             var onboardName = getFingerprint() || ilinkData.ilink_user_id || 'weixin-share';
-            api('POST', '/api/onboard', {source:'share', tenant_name: onboardName}).then(function(data){
+            api('POST', '/api/onboard', inviteFp ? {source: inviteFp, tenant_name: onboardName} : {tenant_name: onboardName}).then(function(data){
               if (!data.ok && !data.session_token) throw new Error(data.error || '创建失败');
               sessionToken = data.session_token;
               tenantId = data.tenant_id;
@@ -635,7 +636,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
           // Create onboard session if needed
           var wecomOnboardName = getFingerprint() || res.bot_id || 'wecom-share';
           if (!sessionToken) {
-            api('POST', '/api/onboard', {source:'share', tenant_name: wecomOnboardName}).then(function(data){
+            api('POST', '/api/onboard', inviteFp ? {source: inviteFp, tenant_name: wecomOnboardName} : {tenant_name: wecomOnboardName}).then(function(data){
               if (data.session_token) {
                 sessionToken = data.session_token;
                 tenantId = data.tenant_id;
@@ -703,7 +704,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
           };
           var feishuOnboardName = getFingerprint() || res.app_id || 'feishu-share';
           if (!sessionToken) {
-            api('POST', '/api/onboard', {source:'share', tenant_name: feishuOnboardName}).then(function(data){
+            api('POST', '/api/onboard', inviteFp ? {source: inviteFp, tenant_name: feishuOnboardName} : {tenant_name: feishuOnboardName}).then(function(data){
               if (data.session_token) {
                 sessionToken = data.session_token;
                 tenantId = data.tenant_id;
@@ -776,7 +777,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
           };
           var dingtalkOnboardName = getFingerprint() || res.client_id || 'dingtalk-share';
           // Always call onboard to get a fresh session with correct tenant context
-          api('POST', '/api/onboard', {source:'share', tenant_name: dingtalkOnboardName}).then(function(data){
+          api('POST', '/api/onboard', inviteFp ? {source: inviteFp, tenant_name: dingtalkOnboardName} : {tenant_name: dingtalkOnboardName}).then(function(data){
             if (data.session_token) {
               sessionToken = data.session_token;
               tenantId = data.tenant_id;
@@ -1136,7 +1137,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         var birthUrl = location.origin + '/share?view=birth'
           + '&agent=' + encodeURIComponent(agentId)
           + '&session=' + encodeURIComponent(sessionToken)
-          + '&platform=' + encodeURIComponent(activePlatform);
+          + '&platform=' + encodeURIComponent(activePlatform)
+          + '&fp=' + encodeURIComponent(getFingerprint());
 
         // Proactive platforms: send welcome message + birth link via bot API
         if (activePlatform === 'dingtalk' || activePlatform === 'feishu') {
@@ -1250,13 +1252,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       y += 56;
     });
 
-    // QR code — encodes the birth certificate URL
+    // QR code — encodes the share page with invite param
     var qrSize = 180;
     var qrX = (W - qrSize) / 2;
     var qrY = y + 20;
     try {
+      var qrLink = 'https://carrier.yinnho.cn/share?invite=' + encodeURIComponent(getFingerprint());
       var qr = qrcode(0, 'M');
-      qr.addData(birthUrl || location.href);
+      qr.addData(qrLink);
       qr.make();
       var moduleCount = qr.getModuleCount();
       var cellSize = qrSize / moduleCount;
@@ -1271,7 +1274,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     ctx.textAlign = 'center';
     ctx.font = '20px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
     ctx.fillStyle = '#bbb';
-    ctx.fillText('扫码查看出生证', W/2, qrY + qrSize + 32);
+    ctx.fillText('扫码获取你的 AI 助理', W/2, qrY + qrSize + 32);
 
     ctx.font = '600 18px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
     ctx.fillStyle = '#bbb';

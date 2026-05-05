@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -49,6 +49,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 10 {
         migrate_v10(conn)?;
+    }
+
+    if current_version < 11 {
+        migrate_v11(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -409,6 +413,29 @@ fn migrate_v10(conn: &Connection) -> Result<(), rusqlite::Error> {
         "
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
         VALUES (10, datetime('now'), 'Multi-tenant: tenants table + tenant_id on all data tables');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 11: Add invite tracking table for share-page referral analytics.
+fn migrate_v11(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS invites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inviter_fp TEXT NOT NULL,
+            invitee_tenant_id TEXT,
+            invited_at TEXT NOT NULL,
+            converted_at TEXT,
+            source_platform TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_invites_inviter ON invites(inviter_fp);
+        CREATE INDEX IF NOT EXISTS idx_invites_invitee ON invites(invitee_tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_invites_invited_at ON invites(invited_at);
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (11, datetime('now'), 'Add invite tracking table for share-page referral analytics');
         ",
     )?;
     Ok(())

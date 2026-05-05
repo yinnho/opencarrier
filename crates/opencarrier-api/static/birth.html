@@ -27,6 +27,7 @@ body { font-family: "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-seri
   var agentId = params.get('agent') || '';
   var session = params.get('session') || '';
   var platform = params.get('platform') || '';
+  var fp = params.get('fp') || '';
 
   if (!agentId || !session) {
     document.getElementById('root').innerHTML = '<div class="error">链接不完整</div>';
@@ -124,13 +125,14 @@ body { font-family: "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-seri
       y += 56;
     });
 
-    // QR code
+    // QR code — link to share page with invite param
     var qrSize = 180;
     var qrX = (W - qrSize) / 2;
     var qrY = y + 20;
     try {
+      var qrLink = fp ? 'https://carrier.yinnho.cn/share?invite=' + encodeURIComponent(fp) : location.href;
       var qr = qrcode(0, 'M');
-      qr.addData(location.href);
+      qr.addData(qrLink);
       qr.make();
       var mc = qr.getModuleCount();
       var cs = qrSize / mc;

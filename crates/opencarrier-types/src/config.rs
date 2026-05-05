@@ -766,7 +766,7 @@ impl Default for HubConfig {
 ///
 /// Tracks cumulative token usage and fires alerts at configured
 /// percentage thresholds via channel messages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BudgetConfig {
     /// Monthly token budget (0 = unlimited, no alerts).
@@ -777,17 +777,6 @@ pub struct BudgetConfig {
     pub alert_channel: Option<String>,
     /// Recipient user/tenant identifier for alert messages.
     pub alert_recipient: Option<String>,
-}
-
-impl Default for BudgetConfig {
-    fn default() -> Self {
-        Self {
-            monthly_token_limit: 0,
-            alert_thresholds: Vec::new(),
-            alert_channel: None,
-            alert_recipient: None,
-        }
-    }
 }
 
 /// Top-level kernel configuration.

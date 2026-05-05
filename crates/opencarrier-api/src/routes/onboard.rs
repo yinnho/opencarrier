@@ -15,7 +15,7 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
 
 #[derive(serde::Deserialize)]
 pub struct OnboardRequest {
-    #[allow(dead_code)]
+    /// Inviter fingerprint (from ?invite=fp_xxx on share page).
     source: Option<String>,
     /// Optional stable user identifier (fingerprint or platform user id).
     /// If provided, used as tenant_name; otherwise a random name is generated.
@@ -53,9 +53,22 @@ pub async fn onboard(
 
     let tenant_store = state.kernel.memory.tenant();
 
+    // Record invite attempt if inviter fingerprint is provided
+    if let Some(ref inviter_fp) = req.source {
+        if let Err(e) = state.kernel.memory.invites().record_invite(inviter_fp, Some("share")) {
+            tracing::warn!("Failed to record invite for {}: {}", inviter_fp, e);
+        }
+    }
+
     // Check if tenant already exists by name — reuse instead of creating duplicate
     if let Ok(Some(existing)) = tenant_store.get_tenant_by_name(&tenant_name) {
         let existing_id = existing.id.clone();
+        // Link invitee to existing tenant
+        if let Some(ref inviter_fp) = req.source {
+            if let Err(e) = state.kernel.memory.invites().link_invitee(inviter_fp, &existing_id) {
+                tracing::warn!("Failed to link invitee {} for {}: {}", existing_id, inviter_fp, e);
+            }
+        }
         let api_key = state.kernel.config.api_key.trim().to_string();
         let secret = if !api_key.is_empty() {
             api_key
@@ -82,6 +95,13 @@ pub async fn onboard(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to create tenant: {e}")})),
         );
+    }
+
+    // Link invitee to newly created tenant
+    if let Some(ref inviter_fp) = req.source {
+        if let Err(e) = state.kernel.memory.invites().link_invitee(inviter_fp, &tenant_id) {
+            tracing::warn!("Failed to link invitee {} for {}: {}", tenant_id, inviter_fp, e);
+        }
     }
 
     // Spawn default agents (clone-creator, clone-trainer) from existing templates

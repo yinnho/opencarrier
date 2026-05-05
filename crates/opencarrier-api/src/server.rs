@@ -104,6 +104,10 @@ pub async fn build_router(
         .route("/share", axum::routing::get(webchat::share_page))
         .route("/sw.js", axum::routing::get(webchat::sw_js))
         .route(
+            "/bd00e4fe4983179012e6ffdcc66d0c4b.txt",
+            axum::routing::get(webchat::verification_txt),
+        )
+        .route(
             "/katex-fonts/{name}",
             axum::routing::get(webchat::katex_font),
         )
@@ -118,6 +122,7 @@ pub async fn build_router(
         .merge(routes::cron::router())
         .merge(routes::files::router())
         .merge(routes::hub::router())
+        .merge(routes::invites::router())
         .merge(routes::kv::router())
         .merge(routes::onboard::router())
         .merge(routes::plugins::router())

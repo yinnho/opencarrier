@@ -98,7 +98,7 @@ impl Default for McpDockerInstall {
 }
 
 /// NPX installation details.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpNpxInstall {
     /// NPM package name (e.g., "@anthropic/mcp-server-github").
@@ -107,17 +107,8 @@ pub struct McpNpxInstall {
     pub args: Vec<String>,
 }
 
-impl Default for McpNpxInstall {
-    fn default() -> Self {
-        Self {
-            package: String::new(),
-            args: Vec::new(),
-        }
-    }
-}
-
 /// Cloud/remote installation details.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpCloudInstall {
     /// MCP endpoint URL.
@@ -126,16 +117,6 @@ pub struct McpCloudInstall {
     pub env_required: Vec<String>,
     /// Optional environment variable names.
     pub env_optional: Vec<String>,
-}
-
-impl Default for McpCloudInstall {
-    fn default() -> Self {
-        Self {
-            url: String::new(),
-            env_required: Vec::new(),
-            env_optional: Vec::new(),
-        }
-    }
 }
 
 /// Volume mount definition.

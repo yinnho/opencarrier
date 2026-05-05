@@ -9,6 +9,7 @@
 
 pub mod acp_session;
 pub mod consolidation;
+pub mod invites;
 pub mod knowledge;
 pub mod migration;
 pub mod semantic;
@@ -19,4 +20,5 @@ pub mod usage;
 
 mod substrate;
 pub use substrate::MemorySubstrate;
+pub use invites::InviteStore;
 pub use tenant::TenantStore;
