@@ -3800,10 +3800,10 @@ impl OpenCarrierKernel {
 
         self.runtime.supervisor.shutdown();
 
-        // Update agent states to Suspended in persistent storage (not delete)
+        // Persist all agents with their current state so latest config is
+        // preserved across restarts. Do NOT alter state — Running agents
+        // should resume as Running after reboot.
         for entry in self.registry.list() {
-            let _ = self.registry.set_state(entry.id, AgentState::Suspended);
-            // Re-save with Suspended state for clean resume on next boot
             if let Some(updated) = self.registry.get(entry.id) {
                 let _ = self.memory.save_agent(&updated);
             }
