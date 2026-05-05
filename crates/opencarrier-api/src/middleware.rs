@@ -103,6 +103,15 @@ pub async fn auth(
         || path == "/api/auth/logout"
         || (path == "/api/auth/check" && is_get)
         || path == "/api/onboard"
+        // Share-page platform auth flows (pre-onboarding, no session yet)
+        || path == "/api/weixin/qrcode"
+        || path == "/api/weixin/qrcode-status"
+        || path == "/api/bots/wecom/smartbot/generate"
+        || path == "/api/bots/wecom/smartbot/poll"
+        || path == "/api/bots/feishu/device-auth"
+        || path == "/api/bots/feishu/device-auth/poll"
+        || path == "/api/bots/dingtalk/device-auth"
+        || path == "/api/bots/dingtalk/device-auth/poll"
         // Agent output files — must be public for WeChat direct download links
         || (path.starts_with("/api/agents/") && path.contains("/output/") && is_get);
 
