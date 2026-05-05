@@ -195,6 +195,10 @@ pub struct BrowserConfig {
     pub max_sessions: usize,
     /// Path to Chromium/Chrome binary. Auto-detected if None.
     pub chromium_path: Option<String>,
+    /// External CDP WebSocket endpoint (e.g., "ws://127.0.0.1:9222/devtools/browser").
+    /// When set, skips launching a browser process and connects directly.
+    /// Use this with Obscura (`obscura serve --port 9222`) or remote CDP servers.
+    pub cdp_endpoint: Option<String>,
 }
 
 impl Default for BrowserConfig {
@@ -207,6 +211,7 @@ impl Default for BrowserConfig {
             idle_timeout_secs: 300,
             max_sessions: 5,
             chromium_path: None,
+            cdp_endpoint: None,
         }
     }
 }

@@ -221,17 +221,42 @@ impl Drop for CdpConnection {
 
 // ── Browser session ────────────────────────────────────────────────────────
 
-/// A live browser session: one Chromium process + one CDP connection per agent.
+/// A live browser session: one browser process + one CDP connection per agent.
+/// When cdp_endpoint is configured, `process` is None (external CDP server).
 struct BrowserSession {
-    process: tokio::process::Child,
+    process: Option<tokio::process::Child>,
     cdp: CdpConnection,
     #[allow(dead_code)]
     last_active: Instant,
 }
 
 impl BrowserSession {
-    /// Launch Chromium and establish a CDP connection.
+    /// Launch browser and establish a CDP connection.
+    /// If cdp_endpoint is configured, connects to an external CDP server
+    /// (e.g. Obscura) instead of launching a local process.
     async fn launch(config: &BrowserConfig) -> Result<Self, String> {
+        // ── External CDP endpoint (Obscura, remote Chrome, etc.) ──────────────
+        if let Some(ref endpoint) = config.cdp_endpoint {
+            if endpoint.is_empty() {
+                return Err("cdp_endpoint is set but empty".to_string());
+            }
+            info!(endpoint, "Connecting to external CDP server");
+
+            // Connect to the CDP browser endpoint
+            let cdp = CdpConnection::connect(endpoint).await?;
+
+            // Enable required domains
+            let _ = cdp.send("Page.enable", serde_json::json!({})).await;
+            let _ = cdp.send("Runtime.enable", serde_json::json!({})).await;
+
+            return Ok(Self {
+                process: None,
+                cdp,
+                last_active: Instant::now(),
+            });
+        }
+
+        // ── Launch local Chromium ────────────────────────────────────────────
         let chrome_path = find_chromium(config)?;
         debug!(path = %chrome_path.display(), "Launching Chromium");
 
@@ -256,9 +281,6 @@ impl BrowserSession {
             args.insert(0, "--headless=new".to_string());
             args.push("--disable-gpu".to_string());
         }
-        // Chromium refuses to run as root without --no-sandbox. Detect this
-        // without adding a libc dependency by reading the effective UID from
-        // /proc/self/status (Linux) or falling back to the HOME env var.
         if is_running_as_root() {
             args.push("--no-sandbox".to_string());
         }
@@ -269,7 +291,6 @@ impl BrowserSession {
         cmd.stdout(std::process::Stdio::null());
         cmd.stdin(std::process::Stdio::null());
 
-        // SECURITY: clear environment, pass only essentials
         cmd.env_clear();
         for key in &[
             "PATH",
@@ -298,12 +319,10 @@ impl BrowserSession {
             )
         })?;
 
-        // Parse stderr for the DevTools WebSocket URL
         let stderr = child.stderr.take().ok_or("No stderr from Chromium")?;
         let ws_url = Self::read_devtools_url(stderr).await?;
         debug!(ws_url = %ws_url, "Got CDP WebSocket URL");
 
-        // GET /json/list to find the page target
         let port = ws_url
             .split("://")
             .nth(1)
@@ -317,12 +336,11 @@ impl BrowserSession {
 
         let cdp = CdpConnection::connect(&page_ws).await?;
 
-        // Enable required domains
         let _ = cdp.send("Page.enable", serde_json::json!({})).await;
         let _ = cdp.send("Runtime.enable", serde_json::json!({})).await;
 
         Ok(Self {
-            process: child,
+            process: Some(child),
             cdp,
             last_active: Instant::now(),
         })
@@ -663,7 +681,9 @@ impl BrowserSession {
 
 impl Drop for BrowserSession {
     fn drop(&mut self) {
-        let _ = self.process.start_kill();
+        if let Some(ref mut child) = self.process {
+            let _ = child.start_kill();
+        }
     }
 }
 
