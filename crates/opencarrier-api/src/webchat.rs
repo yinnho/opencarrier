@@ -12,8 +12,10 @@
 //! - WebSocket real-time chat with HTTP fallback
 //! - Agent management, memory browser, audit log, and more
 
+use axum::extract::Query;
 use axum::http::header;
 use axum::response::IntoResponse;
+use std::collections::HashMap;
 
 /// Compile-time ETag based on the crate version.
 const ETAG: &str = concat!("\"opencarrier-", env!("CARGO_PKG_VERSION"), "\"");
@@ -173,8 +175,19 @@ pub async fn webchat_page() -> impl IntoResponse {
     )
 }
 
-/// Serve the public share/onboarding page.
-pub async fn share_page() -> impl IntoResponse {
+/// Embedded birth certificate page.
+const BIRTH_HTML: &str = include_str!("../static/birth.html");
+
+/// Serve the public share/onboarding page or birth certificate.
+pub async fn share_page(
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    if params.get("view").map_or(false, |v| v == "birth") {
+        return (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            BIRTH_HTML,
+        );
+    }
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         SHARE_HTML,

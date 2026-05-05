@@ -1756,6 +1756,76 @@ pub async fn update_bot(
     )
 }
 
+// ---------------------------------------------------------------------------
+// POST /api/bots/{bot_uuid}/send — proactively send a message to a user
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct BotSendBody {
+    #[serde(default)]
+    user_id: String,
+    text: String,
+}
+
+pub async fn bot_send_message(
+    State(state): State<Arc<AppState>>,
+    Path(bot_uuid): Path<String>,
+    Json(body): Json<BotSendBody>,
+) -> impl IntoResponse {
+    let Some(ref pm) = state.plugin_manager else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Plugin manager not available" })),
+        );
+    };
+
+    // Resolve user_id: use provided value, or fall back to owner_id from bot.toml
+    let user_id = if body.user_id.is_empty() {
+        let home = &state.kernel.config.home_dir;
+        let plugins_dir = home.join("plugins");
+        let mut found = None;
+        if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+            for entry in entries.flatten() {
+                let plugin_dir = entry.path();
+                if !plugin_dir.is_dir() { continue; }
+                let bot_toml = plugin_dir.join("bot").join(&bot_uuid).join("bot.toml");
+                if !bot_toml.exists() { continue; }
+                if let Ok(content) = std::fs::read_to_string(&bot_toml) {
+                    if let Ok(doc) = content.parse::<toml::Value>() {
+                        found = doc.get("owner_id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                    }
+                }
+                break;
+            }
+        }
+        match found {
+            Some(uid) if !uid.is_empty() => uid,
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "user_id is required for proactive send (no owner_id in bot.toml)" })),
+                );
+            }
+        }
+    } else {
+        body.user_id
+    };
+
+    let pm = pm.lock().await;
+    match pm.channel_send(&bot_uuid, &user_id, &body.text) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "sent" })),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        ),
+    }
+}
+
 pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
     use axum::routing;
     axum::Router::new()
@@ -1788,5 +1858,9 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
         .route(
             "/api/bots/{bot_uuid}/bind",
             routing::put(bind_bot).delete(unbind_bot),
+        )
+        .route(
+            "/api/bots/{bot_uuid}/send",
+            routing::post(bot_send_message),
         )
 }
