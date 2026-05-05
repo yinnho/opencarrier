@@ -12,7 +12,7 @@
 use crate::registry::AgentRegistry;
 use chrono::Utc;
 use dashmap::DashMap;
-use opencarrier_types::agent::{AgentId, AgentState};
+use opencarrier_types::agent::{AgentId, AgentState, ScheduleMode};
 use tracing::{debug, warn};
 
 /// Default heartbeat check interval (seconds).
@@ -143,6 +143,10 @@ pub fn check_agents(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<H
 
         let inactive_secs = (now - entry_ref.last_active).num_seconds();
 
+        // Reactive agents have no background loop — idle is their normal state.
+        // Only check unresponsiveness for agents with autonomous schedules.
+        let is_reactive = matches!(entry_ref.manifest.schedule, ScheduleMode::Reactive);
+
         // Determine timeout: use agent's autonomous config if set, else default
         let timeout_secs = entry_ref
             .manifest
@@ -151,8 +155,16 @@ pub fn check_agents(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<H
             .map(|a| a.heartbeat_interval_secs * UNRESPONSIVE_MULTIPLIER)
             .unwrap_or(config.default_timeout_secs) as i64;
 
-        // Crashed agents are always considered unresponsive
-        let unresponsive = entry_ref.state == AgentState::Crashed || inactive_secs > timeout_secs;
+        // Crashed agents are always considered unresponsive.
+        // Running agents are unresponsive only if they have a background loop
+        // (Continuous/Periodic) and have exceeded their timeout.
+        let unresponsive = if entry_ref.state == AgentState::Crashed {
+            true
+        } else if is_reactive {
+            false
+        } else {
+            inactive_secs > timeout_secs
+        };
 
         if unresponsive && entry_ref.state == AgentState::Running {
             warn!(

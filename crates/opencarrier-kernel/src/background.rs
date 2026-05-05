@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 /// Maximum number of concurrent background LLM calls across all agents.
-const MAX_CONCURRENT_BG_LLM: usize = 5;
+const MAX_CONCURRENT_BG_LLM: usize = 20;
 
 /// Manages background task loops for autonomous agents.
 pub struct BackgroundExecutor {
