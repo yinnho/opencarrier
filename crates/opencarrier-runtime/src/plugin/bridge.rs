@@ -77,6 +77,18 @@ impl PluginBridgeManager {
             .insert((channel_type, tenant_id), bot_uuid);
     }
 
+    /// Remove a (channel_type, bot_id) binding.
+    pub fn unbind_channel(&mut self, channel_type: &str, bot_id: &str) {
+        self.channel_bindings
+            .remove(&(channel_type.to_string(), bot_id.to_string()));
+    }
+
+    /// Remove a channel tenant mapping.
+    pub fn unmap_channel_tenant(&mut self, channel_type: &str, tenant_id: &str) {
+        self.channel_tenant_to_bot_uuid
+            .remove(&(channel_type.to_string(), tenant_id.to_string()));
+    }
+
     /// Mark a bot as already having an owner (called at startup).
     pub fn mark_bot_owned(&mut self, bot_id: String) {
         self.owned_bots.lock().unwrap().insert(bot_id);

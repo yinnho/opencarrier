@@ -244,6 +244,20 @@ impl PluginManager {
         }
     }
 
+    /// Remove a dynamic channel binding (e.g., when a bot is unbound via API).
+    pub fn remove_channel_binding(&self, channel_type: &str, key: &str) {
+        if let Some(ref bindings) = self.bridge_bindings {
+            bindings.remove(&(channel_type.to_string(), key.to_string()));
+        }
+    }
+
+    /// Remove a dynamic channel tenant mapping.
+    pub fn remove_channel_tenant_map(&self, channel_type: &str, tenant_id: &str) {
+        if let Some(ref map) = self.bridge_tenant_map {
+            map.remove(&(channel_type.to_string(), tenant_id.to_string()));
+        }
+    }
+
     /// Get all plugin tool definitions (for the LLM tool list).
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tool_dispatcher.definitions()

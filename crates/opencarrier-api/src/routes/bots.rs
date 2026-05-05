@@ -1411,8 +1411,8 @@ pub async fn bind_bot(
                         if let Some(ref pm) = state.plugin_manager {
                             let pm = pm.lock().await;
                             pm.add_channel_binding(channel_type, &bot_uuid, &agent_uuid);
-                            // wecom still uses tenant_name in PluginMessage (pending bot_uuid migration)
-                            if channel_type == "wecom" {
+                            // weixin/wecom still use tenant_name in PluginMessage
+                            if channel_type == "wecom" || channel_type == "weixin" {
                                 pm.add_channel_binding(channel_type, &tenant_name, &agent_uuid);
                             }
                             pm.map_channel_tenant(channel_type, &tenant_name, &bot_uuid);
@@ -1537,16 +1537,42 @@ pub async fn unbind_bot(
             continue;
         }
 
+        // Extract platform and tenant_name for dynamic binding removal
+        let (platform, tenant_name) = {
+            let dir_name = plugin_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let platform = plugin_dir_to_platform(dir_name).unwrap_or("");
+            let name = std::fs::read_to_string(&bot_toml)
+                .ok()
+                .and_then(|c| c.parse::<toml::Value>().ok())
+                .and_then(|d| d.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .unwrap_or_default();
+            (platform, name)
+        };
+
         return match update_bot_toml(&bot_toml, |table| {
             table.remove("bind_agent");
         }) {
-            Ok(()) => (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "unbound",
-                    "message": "分身已解绑，重启后生效",
-                })),
-            ),
+            Ok(()) => {
+                // Remove dynamic bridge bindings immediately
+                if let Some(ref pm) = state.plugin_manager {
+                    let pm = pm.lock().await;
+                    pm.remove_channel_binding(platform, &bot_uuid);
+                    if platform == "wecom" || platform == "weixin" {
+                        pm.remove_channel_binding(platform, &tenant_name);
+                    }
+                    pm.remove_channel_tenant_map(platform, &tenant_name);
+                }
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "status": "unbound",
+                        "message": "分身已解绑",
+                    })),
+                )
+            }
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e })),
@@ -1575,9 +1601,22 @@ pub async fn unbind_bot(
                 if user_id != bot_uuid {
                     continue;
                 }
+                let tenant_name = tf
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 tf.as_object_mut().map(|o| o.remove("bind_agent"));
                 if let Ok(updated) = serde_json::to_string_pretty(&tf) {
                     let _ = std::fs::write(&path, updated);
+                }
+                // Remove dynamic bridge bindings immediately
+                if let Some(ref pm) = state.plugin_manager {
+                    let pm = pm.lock().await;
+                    pm.remove_channel_binding("weixin", &bot_uuid);
+                    if !tenant_name.is_empty() {
+                        pm.remove_channel_binding("weixin", &tenant_name);
+                    }
                 }
                 return (
                     StatusCode::OK,
