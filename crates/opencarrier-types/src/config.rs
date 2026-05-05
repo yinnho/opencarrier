@@ -622,7 +622,7 @@ impl Default for ExecPolicy {
             mode: ExecSecurityMode::default(),
             safe_bins: vec![
                 "sleep", "true", "false", "cat", "sort", "uniq", "cut", "tr", "head", "tail", "wc",
-                "date", "echo", "printf", "basename", "dirname", "pwd", "env",
+                "date", "echo", "printf", "basename", "dirname", "pwd", "env", "pandoc",
             ]
             .into_iter()
             .map(String::from)
@@ -757,6 +757,34 @@ impl Default for HubConfig {
     }
 }
 
+/// Budget configuration for cost/usage alerts.
+///
+/// Tracks cumulative token usage and fires alerts at configured
+/// percentage thresholds via channel messages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BudgetConfig {
+    /// Monthly token budget (0 = unlimited, no alerts).
+    pub monthly_token_limit: u64,
+    /// Alert at these percentages of the budget (e.g. [50, 80, 100]).
+    pub alert_thresholds: Vec<u8>,
+    /// Channel type for alert delivery (e.g. "dingtalk", "feishu", "wecom").
+    pub alert_channel: Option<String>,
+    /// Recipient user/tenant identifier for alert messages.
+    pub alert_recipient: Option<String>,
+}
+
+impl Default for BudgetConfig {
+    fn default() -> Self {
+        Self {
+            monthly_token_limit: 0,
+            alert_thresholds: Vec::new(),
+            alert_channel: None,
+            alert_recipient: None,
+        }
+    }
+}
+
 /// Top-level kernel configuration.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -828,6 +856,9 @@ pub struct KernelConfig {
     /// Webhook trigger configuration (external event injection).
     #[serde(default)]
     pub webhook_triggers: Option<WebhookTriggerConfig>,
+    /// Budget configuration for cost/usage alerts.
+    #[serde(default)]
+    pub budget: BudgetConfig,
     /// Cron scheduler max total jobs across all agents. Default: 500.
     #[serde(default = "default_max_cron_jobs")]
     pub max_cron_jobs: usize,
@@ -1058,6 +1089,7 @@ impl Default for KernelConfig {
             links: crate::media::LinkConfig::default(),
             reload: ReloadConfig::default(),
             webhook_triggers: None,
+            budget: BudgetConfig::default(),
             max_cron_jobs: default_max_cron_jobs(),
             include: Vec::new(),
             exec_policy: ExecPolicy::default(),

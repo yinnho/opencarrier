@@ -1411,7 +1411,10 @@ pub async fn bind_bot(
                         if let Some(ref pm) = state.plugin_manager {
                             let pm = pm.lock().await;
                             pm.add_channel_binding(channel_type, &bot_uuid, &agent_uuid);
-                            pm.add_channel_binding(channel_type, &tenant_name, &agent_uuid);
+                            // wecom still uses tenant_name in PluginMessage (pending bot_uuid migration)
+                            if channel_type == "wecom" {
+                                pm.add_channel_binding(channel_type, &tenant_name, &agent_uuid);
+                            }
                             pm.map_channel_tenant(channel_type, &tenant_name, &bot_uuid);
                             tracing::info!(
                                 platform = %platform,

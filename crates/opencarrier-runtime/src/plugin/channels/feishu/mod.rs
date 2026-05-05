@@ -157,6 +157,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuTenantEntry> 
 
     let cfg = types::FeishuTenantConfig {
         name: name.clone(),
+        bot_uuid: bot_uuid.clone(),
         app_id,
         app_secret,
         brand,
@@ -181,8 +182,8 @@ fn feishu_watcher_loop(
 
     // Spawn channels for bots that exist at startup
     if let Some(configs) = scan_and_spawn(plugin_dir, &sender) {
-        for name in configs {
-            spawned.insert(name);
+        for bot_id in configs {
+            spawned.insert(bot_id);
         }
     }
 
@@ -200,23 +201,24 @@ fn feishu_watcher_loop(
         }
 
         let configs = scan_bot_configs(plugin_dir);
-        for (_uuid, config) in configs {
+        for (bot_uuid, config) in configs {
+            if spawned.contains(&bot_uuid) {
+                continue;
+            }
+
             let entry = match load_bot_config(&config) {
                 Some(e) => e,
                 None => continue,
             };
             let tenant_name = entry.config.name.clone();
-            if spawned.contains(&tenant_name) {
-                continue;
-            }
-
             let token_cache = entry.token_cache.clone();
-            FEISHU_TENANTS.insert(tenant_name.clone(), entry);
-            spawned.insert(tenant_name.clone());
+            FEISHU_TENANTS.insert(bot_uuid.clone(), entry);
+            spawned.insert(bot_uuid.clone());
 
             let tx = sender.clone();
+            let bu = bot_uuid.clone();
             std::thread::spawn(move || {
-                let mut ch = channel::FeishuChannel::new(tenant_name.clone(), token_cache);
+                let mut ch = channel::FeishuChannel::new(tenant_name.clone(), bu, token_cache);
                 if let Err(e) = ch.start(tx) {
                     warn!(tenant = %tenant_name, "Feishu channel start error: {e}");
                 }
@@ -238,7 +240,7 @@ fn scan_and_spawn(
     }
 
     let mut spawned = HashSet::new();
-    for (_uuid, config) in configs {
+    for (bot_uuid, config) in configs {
         let entry = match load_bot_config(&config) {
             Some(e) => e,
             None => continue,
@@ -246,18 +248,19 @@ fn scan_and_spawn(
 
         let tenant_name = entry.config.name.clone();
         let token_cache = entry.token_cache.clone();
-        FEISHU_TENANTS.insert(tenant_name.clone(), entry);
+        FEISHU_TENANTS.insert(bot_uuid.clone(), entry);
 
         let tx = sender.clone();
         let tn = tenant_name.clone();
+        let bu = bot_uuid.clone();
         std::thread::spawn(move || {
-            let mut ch = channel::FeishuChannel::new(tn.clone(), token_cache);
+            let mut ch = channel::FeishuChannel::new(tn.clone(), bu, token_cache);
             if let Err(e) = ch.start(tx) {
                 warn!(tenant = %tn, "Feishu channel start error: {e}");
             }
         });
 
-        spawned.insert(tenant_name);
+        spawned.insert(bot_uuid);
     }
 
     info!("Feishu watcher loop started, monitoring for new bots");

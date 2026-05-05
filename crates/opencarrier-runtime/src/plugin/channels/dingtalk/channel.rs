@@ -14,15 +14,17 @@ use tracing::{info, warn};
 
 pub struct DingTalkChannel {
     tenant_name: String,
+    bot_uuid: String,
     token_cache: Arc<AccessTokenCache>,
     shutdown: Arc<AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl DingTalkChannel {
-    pub fn new(tenant_name: String, token_cache: Arc<AccessTokenCache>) -> Self {
+    pub fn new(tenant_name: String, bot_uuid: String, token_cache: Arc<AccessTokenCache>) -> Self {
         Self {
             tenant_name,
+            bot_uuid,
             token_cache,
             shutdown: Arc::new(AtomicBool::new(false)),
             thread_handle: None,
@@ -40,11 +42,12 @@ impl BuiltinChannel for DingTalkChannel {
     }
 
     fn tenant_id(&self) -> &str {
-        &self.tenant_name
+        &self.bot_uuid
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
         let tenant_name = self.tenant_name.clone();
+        let bot_uuid = self.bot_uuid.clone();
         let token_cache = self.token_cache.clone();
         let shutdown = self.shutdown.clone();
 
@@ -63,7 +66,7 @@ impl BuiltinChannel for DingTalkChannel {
                 };
 
                 let client =
-                    DingTalkWsClient::new(tenant_name.clone(), token_cache, shutdown);
+                    DingTalkWsClient::new(tenant_name.clone(), bot_uuid, token_cache, shutdown);
                 rt.block_on(client.run(&sender));
                 info!(tenant = %tenant_name, "DingTalk WS client exited");
             })

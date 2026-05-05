@@ -35,6 +35,7 @@ const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(120);
 
 pub struct FeishuWsClient {
     tenant_name: String,
+    bot_uuid: String,
     token_cache: Arc<TenantTokenCache>,
     shutdown: Arc<AtomicBool>,
     dedup: DashMap<String, Instant>,
@@ -43,11 +44,13 @@ pub struct FeishuWsClient {
 impl FeishuWsClient {
     pub fn new(
         tenant_name: String,
+        bot_uuid: String,
         token_cache: Arc<TenantTokenCache>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
             tenant_name,
+            bot_uuid,
             token_cache,
             shutdown,
             dedup: DashMap::new(),
@@ -394,7 +397,7 @@ impl FeishuWsClient {
             platform_message_id: msg_id.to_string(),
             sender_id: sender_id.clone(),
             sender_name,
-            tenant_id: self.tenant_name.clone(),
+            tenant_id: self.bot_uuid.clone(),
             content: PluginContent::Text(text),
             timestamp_ms: create_time_ms,
             is_group,

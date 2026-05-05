@@ -146,6 +146,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<DingTalkTenantEntry
 
     let cfg = types::DingTalkTenantConfig {
         name: name.clone(),
+        bot_uuid: bot_uuid.clone(),
         app_key,
         app_secret,
     };
@@ -165,8 +166,8 @@ fn dingtalk_watcher_loop(
     let mut spawned: HashSet<String> = HashSet::new();
 
     if let Some(configs) = scan_and_spawn(plugin_dir, &sender) {
-        for name in configs {
-            spawned.insert(name);
+        for bot_id in configs {
+            spawned.insert(bot_id);
         }
     }
 
@@ -183,10 +184,8 @@ fn dingtalk_watcher_loop(
         }
 
         let configs = scan_bot_configs(plugin_dir);
-        for (_uuid, config) in configs {
-            // Extract name early to check spawned set before full config load
-            let tenant_name = config["name"].as_str().unwrap_or("").to_string();
-            if tenant_name.is_empty() || spawned.contains(&tenant_name) {
+        for (bot_uuid, config) in configs {
+            if bot_uuid.is_empty() || spawned.contains(&bot_uuid) {
                 continue;
             }
 
@@ -195,15 +194,17 @@ fn dingtalk_watcher_loop(
                 None => continue,
             };
 
+            let tenant_name = entry.config.name.clone();
             let token_cache = entry.token_cache.clone();
-            DINGTALK_TENANTS.insert(tenant_name.clone(), entry);
-            spawned.insert(tenant_name.clone());
+            DINGTALK_TENANTS.insert(bot_uuid.clone(), entry);
+            spawned.insert(bot_uuid.clone());
 
-            info!(tenant = %tenant_name, "New DingTalk bot discovered, spawning channel");
+            info!(tenant = %tenant_name, bot_uuid = %bot_uuid, "New DingTalk bot discovered, spawning channel");
 
             let tx = sender.clone();
+            let bu = bot_uuid.clone();
             std::thread::spawn(move || {
-                let mut ch = channel::DingTalkChannel::new(tenant_name.clone(), token_cache);
+                let mut ch = channel::DingTalkChannel::new(tenant_name.clone(), bu, token_cache);
                 if let Err(e) = ch.start(tx) {
                     warn!(tenant = %tenant_name, "DingTalk channel start error: {e}");
                 }
@@ -223,7 +224,7 @@ fn scan_and_spawn(
     }
 
     let mut spawned = HashSet::new();
-    for (_uuid, config) in configs {
+    for (bot_uuid, config) in configs {
         let entry = match load_bot_config(&config) {
             Some(e) => e,
             None => continue,
@@ -231,18 +232,19 @@ fn scan_and_spawn(
 
         let tenant_name = entry.config.name.clone();
         let token_cache = entry.token_cache.clone();
-        DINGTALK_TENANTS.insert(tenant_name.clone(), entry);
+        DINGTALK_TENANTS.insert(bot_uuid.clone(), entry);
 
         let tx = sender.clone();
+        let bu = bot_uuid.clone();
         let tn = tenant_name.clone();
         std::thread::spawn(move || {
-            let mut ch = channel::DingTalkChannel::new(tn.clone(), token_cache);
+            let mut ch = channel::DingTalkChannel::new(tn.clone(), bu, token_cache);
             if let Err(e) = ch.start(tx) {
                 warn!(tenant = %tn, "DingTalk channel start error: {e}");
             }
         });
 
-        spawned.insert(tenant_name);
+        spawned.insert(bot_uuid);
     }
 
     info!("DingTalk watcher loop started, monitoring for new bots");

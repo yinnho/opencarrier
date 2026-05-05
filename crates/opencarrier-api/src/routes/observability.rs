@@ -511,6 +511,25 @@ pub async fn usage_daily(
     }))
 }
 // ---------------------------------------------------------------------------
+// Budget endpoint
+// ---------------------------------------------------------------------------
+
+/// GET /api/budget — Get budget configuration and monthly usage status.
+pub async fn budget_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let status = state.kernel.metering.get_budget_status();
+    Json(serde_json::json!({
+        "used_tokens": status.used_tokens,
+        "limit_tokens": status.limit_tokens,
+        "percent": status.percent,
+        "fired_thresholds": status.fired_thresholds,
+        "thresholds": status.thresholds,
+        "alert_channel": status.alert_channel,
+        "alert_recipient": status.alert_recipient,
+        "budget_exceeded": status.limit_tokens > 0 && status.used_tokens > status.limit_tokens,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Security dashboard endpoint
 // ---------------------------------------------------------------------------
 
@@ -599,4 +618,5 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/usage/by-model", routing::get(usage_by_model))
         .route("/api/usage/daily", routing::get(usage_daily))
         .route("/api/usage/summary", routing::get(usage_summary))
+        .route("/api/budget", routing::get(budget_status))
 }

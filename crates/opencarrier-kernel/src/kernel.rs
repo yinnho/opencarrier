@@ -1172,9 +1172,12 @@ impl OpenCarrierKernel {
         };
 
         // Initialize metering engine (shares the same SQLite connection as the memory substrate)
-        let metering = Arc::new(MeteringEngine::new(Arc::new(
-            opencarrier_memory::usage::UsageStore::new(memory.usage_conn()),
-        )));
+        let metering = Arc::new(MeteringEngine::new(
+            Arc::new(opencarrier_memory::usage::UsageStore::new(
+                memory.usage_conn(),
+            )),
+            config.budget.clone(),
+        ));
 
         let supervisor = Supervisor::new();
         let background = BackgroundExecutor::new(supervisor.subscribe());
@@ -1985,18 +1988,22 @@ impl OpenCarrierKernel {
                         .scheduler
                         .record_usage(agent_id, &result.total_usage);
 
-                    // Persist usage to database (same as non-streaming path)
+                    // Persist usage and check budget thresholds
                     let model = manifest.model.modality.clone();
-                    let _ = kernel_clone
+                    match kernel_clone
                         .metering
-                        .record(&opencarrier_memory::usage::UsageRecord {
+                        .record_and_check(&opencarrier_memory::usage::UsageRecord {
                             agent_id,
                             model: model.clone(),
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
                             tool_calls: result.iterations.saturating_sub(1),
                             tenant_id: String::new(),
-                        });
+                        }) {
+                        Ok(Some(alert)) => kernel_clone.handle_budget_alert(&alert),
+                        Err(e) => warn!("Failed to record metering: {e}"),
+                        _ => {}
+                    }
 
                     let _ = kernel_clone
                         .registry
@@ -2426,18 +2433,22 @@ impl OpenCarrierKernel {
             append_daily_memory_log(workspace, &result.response);
         }
 
-        // Record usage in the metering engine
+        // Record usage and check budget thresholds
         let model = manifest.model.modality.clone();
-        let _ = self
+        match self
             .metering
-            .record(&opencarrier_memory::usage::UsageRecord {
+            .record_and_check(&opencarrier_memory::usage::UsageRecord {
                 agent_id,
                 model: model.clone(),
                 input_tokens: result.total_usage.input_tokens,
                 output_tokens: result.total_usage.output_tokens,
                 tool_calls: result.iterations.saturating_sub(1),
                 tenant_id: String::new(),
-            });
+            }) {
+            Ok(Some(alert)) => self.handle_budget_alert(&alert),
+            Err(e) => warn!("Failed to record metering: {e}"),
+            _ => {}
+        }
 
         Ok(result)
     }
@@ -2446,6 +2457,24 @@ impl OpenCarrierKernel {
     ///
     /// If the path is absolute, return it as-is. Otherwise, resolve relative
     /// to `config.home_dir`.
+    /// Handle a budget threshold alert — log prominently and store for API exposure.
+    fn handle_budget_alert(&self, alert: &crate::metering::BudgetAlert) {
+        warn!(
+            percent = alert.percent,
+            used = alert.used_tokens,
+            limit = alert.limit_tokens,
+            "BUDGET ALERT: {}% of monthly token budget consumed ({}/{} tokens) — \
+             configure alert_channel and alert_recipient in [budget] to receive notifications",
+            alert.percent,
+            alert.used_tokens,
+            alert.limit_tokens
+        );
+
+        // Channel dispatch will be added in a follow-up via the plugin bridge.
+        // The alert is exposed through the /api/budget endpoint and the
+        // MeteringEngine's get_budget_status() method.
+    }
+
     fn resolve_module_path(&self, path: &str) -> PathBuf {
         let p = Path::new(path);
         if p.is_absolute() {

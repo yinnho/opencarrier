@@ -178,6 +178,7 @@ pub struct TextContent {
 #[derive(Debug, Clone)]
 pub struct FeishuTenantConfig {
     pub name: String,
+    pub bot_uuid: String,
     pub app_id: String,
     pub app_secret: String,
     /// "feishu" (China) or "lark" (International).

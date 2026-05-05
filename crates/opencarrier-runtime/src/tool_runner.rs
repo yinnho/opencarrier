@@ -13,6 +13,7 @@ use opencarrier_types::tool_compat::normalize_tool_name;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, warn};
 
 /// Maximum inter-agent call depth to prevent infinite recursion (A->B->C->...).
@@ -149,6 +150,7 @@ pub async fn execute_tool(
         "file_read" => tool_file_read(input, workspace_root, sender_id).await,
         "file_write" => tool_file_write(input, workspace_root, sender_id).await,
         "file_list" => tool_file_list(input, workspace_root, sender_id).await,
+        "file_convert" => tool_file_convert(input, workspace_root, sender_id).await,
 
         // Knowledge tools (clone-specific, safe access to data/knowledge/)
         "knowledge_list" => tool_knowledge_list(workspace_root).await,
@@ -1457,6 +1459,20 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["html"]
             }),
         },
+        // --- File conversion tool ---
+        ToolDefinition {
+            name: "file_convert".to_string(),
+            description: "Convert files between formats using Pandoc. Common conversions: PDF→Markdown, DOCX→Markdown, HTML→Markdown, EPUB→Markdown, Markdown→DOCX, Markdown→PDF, Markdown→HTML, LaTeX→PDF. Requires pandoc installed on the system.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "input_path": { "type": "string", "description": "Source file path (workspace-relative)" },
+                    "output_format": { "type": "string", "description": "Target format: markdown, docx, pdf, html, epub, latex, rtf, odt, pptx, etc." },
+                    "output_path": { "type": "string", "description": "Output file path (workspace-relative, optional, auto-generated if omitted)" }
+                },
+                "required": ["input_path", "output_format"]
+            }),
+        },
     ]
 }
 
@@ -1635,6 +1651,106 @@ async fn tool_file_list(
     }
     files.sort();
     Ok(files.join("\n"))
+}
+
+// ---------------------------------------------------------------------------
+// File conversion tool (Pandoc)
+// ---------------------------------------------------------------------------
+
+async fn tool_file_convert(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+    sender_id: Option<&str>,
+) -> Result<String, String> {
+    let raw_input_path = input["input_path"]
+        .as_str()
+        .ok_or("Missing 'input_path' parameter")?;
+    let output_format = input["output_format"]
+        .as_str()
+        .ok_or("Missing 'output_format' parameter")?;
+    let raw_output_path = input["output_path"].as_str();
+
+    // Resolve input path through workspace sandbox
+    let input_path = resolve_file_path(raw_input_path, workspace_root)?;
+    if !input_path.exists() {
+        return Err(format!("Input file not found: {}", input_path.display()));
+    }
+    let metadata = std::fs::metadata(&input_path)
+        .map_err(|e| format!("Cannot read input file metadata: {e}"))?;
+    if metadata.len() > 50 * 1024 * 1024 {
+        return Err(format!(
+            "Input file too large: {} bytes (max 50MB)",
+            metadata.len()
+        ));
+    }
+
+    // Determine output path
+    let output_path = if let Some(op) = raw_output_path {
+        if let Some(root) = workspace_root {
+            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, sender_id)?
+        } else {
+            let _ = validate_path(op)?;
+            PathBuf::from(op)
+        }
+    } else {
+        // Auto-generate output path in users/<sender_id>/output/
+        let input_stem = input_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("converted");
+        let sender = sender_id.unwrap_or("unknown");
+        let output_dir = if let Some(root) = workspace_root {
+            root.join("users").join(sender).join("output")
+        } else {
+            PathBuf::from("output")
+        };
+        let _ = std::fs::create_dir_all(&output_dir);
+        let filename = format!("{input_stem}.{output_format}");
+        output_dir.join(filename)
+    };
+
+    // Build pandoc command: pandoc <input> -t <format> -o <output>
+    let mut cmd = tokio::process::Command::new("pandoc");
+    cmd.arg(&input_path)
+        .arg("-t")
+        .arg(output_format)
+        .arg("-o")
+        .arg(&output_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to run pandoc (is it installed?): {e}"))?;
+
+    let output = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
+        .await
+        .map_err(|_| "Pandoc timed out after 60 seconds".to_string())
+        .and_then(|r| r.map_err(|e| format!("Pandoc process error: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("Pandoc conversion failed: {stderr}"));
+    }
+
+    if !output_path.exists() {
+        return Err("Pandoc completed but no output file was produced".to_string());
+    }
+
+    let out_size = std::fs::metadata(&output_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    Ok(format!(
+        "Successfully converted {} → {}\nInput: {} ({} bytes)\nOutput: {} ({} bytes)",
+        raw_input_path,
+        output_format,
+        input_path.display(),
+        metadata.len(),
+        output_path.display(),
+        out_size,
+    ))
 }
 
 // ---------------------------------------------------------------------------

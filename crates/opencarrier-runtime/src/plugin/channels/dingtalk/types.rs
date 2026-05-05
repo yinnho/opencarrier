@@ -221,6 +221,7 @@ pub struct SendGroupRequest {
 #[derive(Debug, Clone)]
 pub struct DingTalkTenantConfig {
     pub name: String,
+    pub bot_uuid: String,
     pub app_key: String,
     pub app_secret: String,
 }

@@ -187,50 +187,11 @@ impl PluginManager {
                         }
                     }
 
-                    // Feishu bots use the bot name as tenant_id in messages, but the watcher
-                    // channel has empty tenant_id. Bind using the bot name directly.
-                    if channels.contains(&"feishu".to_string()) {
-                        let tenant_name = &bot_config.name;
-                        if tenant_name != bot_uuid {
-                            bridge.bind_channel(
-                                "feishu".to_string(),
-                                tenant_name.clone(),
-                                agent_uuid.clone(),
-                            );
-                            bridge.map_channel_tenant(
-                                "feishu".to_string(),
-                                tenant_name.clone(),
-                                bot_uuid.clone(),
-                            );
-                            info!(
-                                tenant_name = %tenant_name,
-                                agent_id = %agent_uuid,
-                                "Bound feishu bot name to agent"
-                            );
-                        }
-                    }
-
-                    // DingTalk bots also use the bot name as tenant_id.
-                    if channels.contains(&"dingtalk".to_string()) {
-                        let tenant_name = &bot_config.name;
-                        if tenant_name != bot_uuid {
-                            bridge.bind_channel(
-                                "dingtalk".to_string(),
-                                tenant_name.clone(),
-                                agent_uuid.clone(),
-                            );
-                            bridge.map_channel_tenant(
-                                "dingtalk".to_string(),
-                                tenant_name.clone(),
-                                bot_uuid.clone(),
-                            );
-                            info!(
-                                tenant_name = %tenant_name,
-                                agent_id = %agent_uuid,
-                                "Bound dingtalk bot name to agent"
-                            );
-                        }
-                    }
+                    // Feishu / DingTalk per-bot bindings are handled by the bot_uuid binding above.
+                    // Channel plugins now send bot_uuid as tenant_id in PluginMessage,
+                    // so the tenant_name-based binding is no longer needed.
+                    // map_channel_tenant is retained for backward-compatible resolution
+                    // in find_bot_toml (bridge.rs).
 
                     // Set default plugin tenant for the agent (used when no channel context)
                     self.kernel.set_default_plugin_tenant(agent_uuid, bot_uuid);

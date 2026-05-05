@@ -756,22 +756,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
             client_secret: res.client_secret || ''
           };
           var dingtalkOnboardName = getFingerprint() || res.client_id || 'dingtalk-share';
-          if (!sessionToken) {
-            api('POST', '/api/onboard', {source:'share', tenant_name: dingtalkOnboardName}).then(function(data){
-              if (data.session_token) {
-                sessionToken = data.session_token;
-                tenantId = data.tenant_id;
-                tenantName = data.tenant_name || dingtalkOnboardName;
-                setSession(sessionToken);
-              }
-              createPlatformBot('dingtalk');
-            }).catch(function(){
-              createPlatformBot('dingtalk');
-            });
-          } else {
-            tenantName = dingtalkOnboardName;
+          // Always call onboard to get a fresh session with correct tenant context
+          api('POST', '/api/onboard', {source:'share', tenant_name: dingtalkOnboardName}).then(function(data){
+            if (data.session_token) {
+              sessionToken = data.session_token;
+              tenantId = data.tenant_id;
+              tenantName = data.tenant_name || dingtalkOnboardName;
+              setSession(sessionToken);
+            }
             createPlatformBot('dingtalk');
-          }
+          }).catch(function(){
+            createPlatformBot('dingtalk');
+          });
         } else if (res.status === 'expired') {
           clearInterval(dingtalkPollTimer);
           document.getElementById('dingtalk-hint').textContent = '授权已过期，请刷新页面重试';
@@ -818,7 +814,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
   // ── Auto-install guide agent and bind to bot ──
   function installGuideAgent(platform) {
+    console.log('[guide] installing, sessionToken=' + sessionToken + ' tenantName=' + tenantName + ' tenantId=' + tenantId + ' currentBotId=' + currentBotId);
     api('POST', '/api/hub/templates/guide/install', {}).then(function(data) {
+      console.log('[guide] install result:', JSON.stringify(data));
       var guideId = data.agent_id;
       if (!guideId) return;
       // Build share URL with fingerprint + session for WeChat browser context

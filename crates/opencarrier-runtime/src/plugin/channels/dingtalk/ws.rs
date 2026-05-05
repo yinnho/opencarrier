@@ -22,6 +22,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 pub struct DingTalkWsClient {
     tenant_name: String,
+    bot_uuid: String,
     token_cache: Arc<AccessTokenCache>,
     shutdown: Arc<AtomicBool>,
     dedup: DashMap<String, Instant>,
@@ -30,11 +31,13 @@ pub struct DingTalkWsClient {
 impl DingTalkWsClient {
     pub fn new(
         tenant_name: String,
+        bot_uuid: String,
         token_cache: Arc<AccessTokenCache>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
             tenant_name,
+            bot_uuid,
             token_cache,
             shutdown,
             dedup: DashMap::new(),
@@ -350,7 +353,7 @@ impl DingTalkWsClient {
             platform_message_id: message_id.to_string(),
             sender_id: user_id.clone(),
             sender_name: sender_nick,
-            tenant_id: self.tenant_name.clone(),
+            tenant_id: self.bot_uuid.clone(),
             content: PluginContent::Text(content),
             timestamp_ms: now_ms,
             is_group,
