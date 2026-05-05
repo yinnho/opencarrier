@@ -444,14 +444,11 @@ pub async fn get_agent_mcp_servers(
         };
     // Collect known MCP server names from connected tools
     let mut available: Vec<String> = Vec::new();
-    if let Ok(mcp_tools) = state.kernel.plugins.mcp_tools.lock() {
-        let mut seen = std::collections::HashSet::new();
-        for tool in mcp_tools.iter() {
-            if let Some(server) = opencarrier_runtime::mcp::extract_mcp_server(&tool.name) {
-                if seen.insert(server.to_string()) {
-                    available.push(server.to_string());
-                }
-            }
+    let mut seen = std::collections::HashSet::new();
+    for entry in state.kernel.plugins.mcp_connections.iter() {
+        let server = entry.key().clone();
+        if seen.insert(server.clone()) {
+            available.push(server);
         }
     }
     let mode = if entry.manifest.mcp_servers.is_empty() {

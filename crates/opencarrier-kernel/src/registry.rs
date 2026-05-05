@@ -386,6 +386,7 @@ mod tests {
             name: name.to_string(),
             manifest: AgentManifest {
                 name: name.to_string(),
+                display_name: String::new(),
                 version: "0.1.0".to_string(),
                 description: "test".to_string(),
                 author: "test".to_string(),

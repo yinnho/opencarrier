@@ -2777,21 +2777,17 @@ impl OpenCarrierKernel {
     ) -> KernelResult<()> {
         // Validate server names if allowlist is non-empty
         if !servers.is_empty() {
-            if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
-                let mut known_servers: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
-                for tool in mcp_tools.iter() {
-                    if let Some(s) = opencarrier_runtime::mcp::extract_mcp_server(&tool.name) {
-                        known_servers.insert(s.to_string());
-                    }
-                }
-                for name in &servers {
-                    let normalized = opencarrier_runtime::mcp::normalize_name(name);
-                    if !known_servers.contains(&normalized) {
-                        return Err(KernelError::OpenCarrier(OpenCarrierError::Internal(
-                            format!("Unknown MCP server: {name}"),
-                        )));
-                    }
+            let mut known_servers: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for entry in self.plugins.mcp_connections.iter() {
+                known_servers.insert(entry.key().clone());
+            }
+            for name in &servers {
+                let normalized = opencarrier_runtime::mcp::normalize_name(name);
+                if !known_servers.contains(&normalized) {
+                    return Err(KernelError::OpenCarrier(OpenCarrierError::Internal(
+                        format!("Unknown MCP server: {name}"),
+                    )));
                 }
             }
         }
@@ -6097,6 +6093,7 @@ mod tests {
     fn test_manifest_to_capabilities() {
         let mut manifest = AgentManifest {
             name: "test".to_string(),
+            display_name: String::new(),
             version: "0.1.0".to_string(),
             description: "test".to_string(),
             author: "test".to_string(),
@@ -6134,6 +6131,7 @@ mod tests {
     fn test_manifest(name: &str, description: &str, tags: Vec<String>) -> AgentManifest {
         AgentManifest {
             name: name.to_string(),
+            display_name: String::new(),
             version: "0.1.0".to_string(),
             description: description.to_string(),
             author: "test".to_string(),
