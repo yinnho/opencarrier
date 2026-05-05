@@ -855,6 +855,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       }).then(function() { return guideId; });
     }).then(function(guideId) {
       if (!guideId) return;
+      // Reset session so guide reads new knowledge instead of copying old URL from history
+      return api('POST', '/api/agents/' + guideId + '/session/reset').then(function() { return guideId; });
+    }).then(function(guideId) {
+      if (!guideId) return;
       // Bind guide to bot
       var bindUrl;
       if (activePlatform === 'weixin' && tenantName) {
