@@ -825,29 +825,34 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   function installGuideAgent(platform) {
     console.log('[guide] installing, platform=' + platform + ' currentBotId=' + currentBotId + ' tenantName=' + tenantName);
 
-    // First check if guide already exists — if so, just bind
-    api('GET', '/api/agents').then(function(agents) {
+    // Build share URL (always fresh, with current params)
+    var shareUrl = location.origin + '/share?fp=' + encodeURIComponent(getFingerprint())
+      + '&session=' + encodeURIComponent(sessionToken) + '&phase=3'
+      + '&bot=' + encodeURIComponent(currentBotId)
+      + '&platform=' + encodeURIComponent(activePlatform);
+    var knowledgeContent = '# 选择分身链接\n\n请点击以下链接选择你的 AI 分身：\n\n' + shareUrl;
+
+    // Get or create guide agent, then write knowledge + bind
+    var getGuide = api('GET', '/api/agents').then(function(agents) {
       var existing = (agents || []).filter(function(a) { return a.name === 'guide'; });
       if (existing.length > 0) {
-        console.log('[guide] found existing guide, binding directly:', existing[0].id);
+        console.log('[guide] found existing, updating knowledge:', existing[0].id);
         return existing[0].id;
       }
-      // Not found — install from Hub
+      console.log('[guide] not found, installing from Hub');
       return api('POST', '/api/hub/templates/guide/install', {}).then(function(data) {
         console.log('[guide] install result:', JSON.stringify(data));
-        var guideId = data.agent_id;
-        if (!guideId) throw new Error('no agent_id');
-        // Build share URL with fingerprint + session + bot + platform
-        var shareUrl = location.origin + '/share?fp=' + encodeURIComponent(getFingerprint())
-          + '&session=' + encodeURIComponent(sessionToken) + '&phase=3'
-          + '&bot=' + encodeURIComponent(currentBotId)
-          + '&platform=' + encodeURIComponent(activePlatform);
-        // Write URL into guide agent's knowledge file
-        return api('POST', '/api/agents/' + guideId + '/knowledge', {
-          filename: 'guide.md',
-          content: '# 选择分身链接\n\n请点击以下链接选择你的 AI 分身：\n\n' + shareUrl
-        }).then(function() { return guideId; });
+        return data.agent_id;
       });
+    });
+
+    getGuide.then(function(guideId) {
+      if (!guideId) return;
+      // Always write fresh knowledge (updates URL if guide already existed)
+      return api('POST', '/api/agents/' + guideId + '/knowledge', {
+        filename: 'guide.md',
+        content: knowledgeContent
+      }).then(function() { return guideId; });
     }).then(function(guideId) {
       if (!guideId) return;
       // Bind guide to bot
