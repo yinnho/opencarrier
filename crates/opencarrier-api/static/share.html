@@ -304,12 +304,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   var uSess = params.get('session');
   var uPhase = params.get('phase');
   var uBot = params.get('bot');
+  var uPlatform = params.get('platform');
   if (uFp) { try { localStorage.setItem('oc_fingerprint', uFp); } catch(e){} }
   if (uSess) {
     try { localStorage.setItem('oc_share_session', uSess); } catch(e){}
     document.cookie = 'opencarrier_session=' + uSess + ';path=/;max-age=86400;SameSite=Lax';
   }
   if (uBot) { try { localStorage.setItem('oc_bot_id', uBot); } catch(e){} }
+  if (uPlatform) { try { localStorage.setItem('oc_active_platform', uPlatform); } catch(e){} }
   if (uPhase === '3' && uSess) { window.__jumpPhase3 = true; }
 })();
 
@@ -321,7 +323,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   var hubTemplates = [];
   var selectedTemplate = null;
   var installedAgents = [];
-  var activePlatform = 'weixin';
+  var activePlatform = '';
+  try { activePlatform = localStorage.getItem('oc_active_platform') || ''; } catch(e) {}
+  if (!activePlatform) { activePlatform = 'weixin'; }
   var platformCredentials = {};
   var currentBotId = '';
   try { currentBotId = localStorage.getItem('oc_bot_id') || ''; } catch(e) {}
@@ -414,6 +418,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   // ── Platform tab switching ──
   window.switchPlatform = function(platform) {
     activePlatform = platform;
+    try { localStorage.setItem('oc_active_platform', platform); } catch(e) {}
     document.querySelectorAll('.platform-tab').forEach(function(t){
       t.classList.toggle('active', t.dataset.platform === platform);
     });
@@ -818,19 +823,31 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
   // ── Auto-install guide agent and bind to bot ──
   function installGuideAgent(platform) {
-    console.log('[guide] installing, sessionToken=' + sessionToken + ' tenantName=' + tenantName + ' tenantId=' + tenantId + ' currentBotId=' + currentBotId);
-    api('POST', '/api/hub/templates/guide/install', {}).then(function(data) {
-      console.log('[guide] install result:', JSON.stringify(data));
-      var guideId = data.agent_id;
-      if (!guideId) return;
-      // Build share URL with fingerprint + session for WeChat browser context
-      var shareUrl = location.origin + '/share?fp=' + encodeURIComponent(getFingerprint())
-        + '&session=' + encodeURIComponent(sessionToken) + '&phase=3&bot=' + encodeURIComponent(currentBotId);
-      // Write URL into guide agent's knowledge file
-      return api('POST', '/api/agents/' + guideId + '/knowledge', {
-        filename: 'guide.md',
-        content: '# 选择分身链接\n\n请点击以下链接选择你的 AI 分身：\n\n' + shareUrl
-      }).then(function() { return guideId; });
+    console.log('[guide] installing, platform=' + platform + ' currentBotId=' + currentBotId + ' tenantName=' + tenantName);
+
+    // First check if guide already exists — if so, just bind
+    api('GET', '/api/agents').then(function(agents) {
+      var existing = (agents || []).filter(function(a) { return a.name === 'guide'; });
+      if (existing.length > 0) {
+        console.log('[guide] found existing guide, binding directly:', existing[0].id);
+        return existing[0].id;
+      }
+      // Not found — install from Hub
+      return api('POST', '/api/hub/templates/guide/install', {}).then(function(data) {
+        console.log('[guide] install result:', JSON.stringify(data));
+        var guideId = data.agent_id;
+        if (!guideId) throw new Error('no agent_id');
+        // Build share URL with fingerprint + session + bot + platform
+        var shareUrl = location.origin + '/share?fp=' + encodeURIComponent(getFingerprint())
+          + '&session=' + encodeURIComponent(sessionToken) + '&phase=3'
+          + '&bot=' + encodeURIComponent(currentBotId)
+          + '&platform=' + encodeURIComponent(activePlatform);
+        // Write URL into guide agent's knowledge file
+        return api('POST', '/api/agents/' + guideId + '/knowledge', {
+          filename: 'guide.md',
+          content: '# 选择分身链接\n\n请点击以下链接选择你的 AI 分身：\n\n' + shareUrl
+        }).then(function() { return guideId; });
+      });
     }).then(function(guideId) {
       if (!guideId) return;
       // Bind guide to bot
