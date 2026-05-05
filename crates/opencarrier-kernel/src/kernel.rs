@@ -1348,9 +1348,12 @@ impl OpenCarrierKernel {
                         .register(agent_id, entry.manifest.resources.clone());
 
                     // Re-register in the in-memory registry.
-                    // Respect persisted state — only promote Created → Running.
+                    // Restore Running agents as-is; promote Created/Suspended → Running
+                    // so agents resume after service restarts without manual intervention.
                     let mut restored_entry = entry;
-                    if restored_entry.state == AgentState::Created {
+                    if restored_entry.state == AgentState::Created
+                        || restored_entry.state == AgentState::Suspended
+                    {
                         restored_entry.state = AgentState::Running;
                     }
 
