@@ -36,6 +36,22 @@ cargo clippy --workspace --all-targets -- -D warnings  # Zero warnings
 - Dashboard is Alpine.js SPA in `static/index_body.html` — new tabs need both HTML and JS data/methods
 - Config fields need: struct field + `#[serde(default)]` + Default impl entry + Serialize/Deserialize derives
 
+## Deploy Workflow
+
+**Always deploy via `git push deploy main`** — never modify files directly on the server.
+
+```
+git add <files>
+git commit -m "..."        # Follow existing commit style
+git push deploy main       # Triggers post-receive hook:
+                           #   checkout → cargo build → cp binary → systemctl restart
+```
+
+- **Deploy target**: `ubuntu@106.75.129.173:/data/git/opencarrier.git` (a.k.a. `carrier.yinnho.cn`)
+- **Post-receive hook**: checks out to `/data/www/opencarrier`, builds `--release`, atomic mv to `/home/ubuntu/.opencarrier/opencarrier`, then `systemctl restart opencarrier`
+- **Server working dir** `/home/ubuntu/opencarrier` is a separate clone for debugging — the hook uses `/data/www/opencarrier`
+- **DO NOT** scp files or edit directly on the server — it causes divergence and breaks the deploy pipeline
+
 ## Common Gotchas
 - `opencarrier.exe` may be locked if daemon is running — use `--lib` flag or kill daemon first
 - `PeerRegistry` is `Option<PeerRegistry>` on kernel but `Option<Arc<PeerRegistry>>` on `AppState` — wrap with `.as_ref().map(|r| Arc::new(r.clone()))`
