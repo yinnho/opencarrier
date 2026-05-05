@@ -47,7 +47,7 @@
 ## 社区
 
 <p align="center">
-  <img src="docs/wechat-group.png" width="200" alt="微信群" /><br/>
+  <img src="docs/wechat-group.jpg" width="200" alt="微信群" /><br/>
   <sub>扫码加入微信群，聊聊你的 AI 分身</sub>
 </p>
 
