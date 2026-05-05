@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>AI 分身出生证</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; background: #fffdf7; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+#cert-img { width: 320px; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,.12); display: block; margin: 0 auto; }
+.info { text-align: center; margin-top: 20px; color: #666; font-size: 15px; line-height: 1.8; max-width: 320px; }
+.info .highlight { color: #333; font-weight: 600; }
+.btn-row { margin-top: 18px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.btn { padding: 10px 28px; border-radius: 8px; border: none; font-size: 15px; cursor: pointer; font-family: inherit; }
+.btn-primary { background: linear-gradient(135deg,#f0a050,#e08838); color: #fff; }
+.btn-ghost { background: #f5f0e8; color: #888; }
+.loading { color: #999; font-size: 14px; text-align: center; padding: 40px; }
+.error { color: #c44; font-size: 14px; text-align: center; padding: 40px; }
+</style>
+</head>
+<body>
+<div id="root"><div class="loading">加载中...</div></div>
+<script src="vendor/qrcode.min.js"></script>
+<script>
+(function(){
+  var params = new URLSearchParams(location.search);
+  var agentId = params.get('agent') || '';
+  var session = params.get('session') || '';
+  var platform = params.get('platform') || '';
+
+  if (!agentId || !session) {
+    document.getElementById('root').innerHTML = '<div class="error">链接不完整</div>';
+    return;
+  }
+
+  // Restore session for API auth
+  try { localStorage.setItem('oc_share_session', session); } catch(e) {}
+  document.cookie = 'opencarrier_session=' + session + ';path=/;max-age=86400;SameSite=Lax';
+
+  // Fetch agent details
+  fetch('/api/agents/' + encodeURIComponent(agentId) + '?session=' + encodeURIComponent(session))
+    .then(function(r) {
+      if (!r.ok) throw new Error(r.status === 403 ? '无权访问' : '分身不存在');
+      return r.json();
+    })
+    .then(function(agent) { renderCert(agent); })
+    .catch(function(e) {
+      document.getElementById('root').innerHTML = '<div class="error">' + e.message + '</div>';
+    });
+
+  function renderCert(agent) {
+    var W = 640, H = 860;
+    var c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var ctx = c.getContext('2d');
+
+    // Background
+    var bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#fffdf7');
+    bg.addColorStop(1, '#fff8ee');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    // Top accent bar
+    var colors = { weixin: '#07c160', wecom: '#1e6fff', feishu: '#3370ff', dingtalk: '#0089ff' };
+    var barColor = colors[platform] || '#e08838';
+    ctx.fillStyle = barColor;
+    ctx.fillRect(0, 0, W, 8);
+
+    // Emoji avatar
+    var agentName = agent.name || 'agent';
+    ctx.font = '72px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji(agentName), W/2, 90);
+
+    // Display name
+    var displayName = agent.identity && agent.identity.name || agent.name;
+    ctx.font = 'bold 40px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#1a1a1a';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(displayName, W/2, 165);
+
+    // Description
+    var desc = agent.description || 'AI 助理';
+    if (desc.length > 28) desc = desc.substring(0, 28) + '…';
+    ctx.font = '22px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#999';
+    ctx.fillText(desc, W/2, 200);
+
+    // Divider
+    var divGrad = ctx.createLinearGradient(180, 0, 460, 0);
+    divGrad.addColorStop(0, 'rgba(212,197,160,0)');
+    divGrad.addColorStop(0.5, 'rgba(212,197,160,1)');
+    divGrad.addColorStop(1, 'rgba(212,197,160,0)');
+    ctx.strokeStyle = divGrad;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(180, 235); ctx.lineTo(460, 235); ctx.stroke();
+
+    // Fields
+    var now = new Date();
+    var platforms = { weixin: '微信', wecom: '企业微信', feishu: '飞书', dingtalk: '钉钉' };
+    var fields = [
+      ['出生日期', now.getFullYear() + '年' + (now.getMonth()+1) + '月' + now.getDate() + '日'],
+      ['出生时间', String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')],
+      ['分身类型', (agent.tags && agent.tags[0]) || '通用'],
+      ['平台', platforms[platform] || platform || '未知'],
+    ];
+    var y = 285;
+    ctx.textBaseline = 'alphabetic';
+    fields.forEach(function(f) {
+      ctx.font = '26px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+      ctx.fillStyle = '#999';
+      ctx.textAlign = 'left';
+      ctx.fillText(f[0], 100, y);
+      ctx.font = '600 26px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+      ctx.fillStyle = '#333';
+      ctx.textAlign = 'right';
+      ctx.fillText(f[1], W - 100, y);
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = '#eee';
+      ctx.beginPath(); ctx.moveTo(100, y + 16); ctx.lineTo(W - 100, y + 16); ctx.stroke();
+      ctx.setLineDash([]);
+      y += 56;
+    });
+
+    // QR code
+    var qrSize = 180;
+    var qrX = (W - qrSize) / 2;
+    var qrY = y + 20;
+    try {
+      var qr = qrcode(0, 'M');
+      qr.addData(location.href);
+      qr.make();
+      var mc = qr.getModuleCount();
+      var cs = qrSize / mc;
+      for (var row = 0; row < mc; row++) {
+        for (var col = 0; col < mc; col++) {
+          ctx.fillStyle = qr.isDark(row, col) ? '#333' : '#fffdf7';
+          ctx.fillRect(qrX + col * cs, qrY + row * cs, cs + 0.5, cs + 0.5);
+        }
+      }
+    } catch(e) {}
+
+    ctx.textAlign = 'center';
+    ctx.font = '20px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#bbb';
+    ctx.fillText('扫码获取你的 AI 助理', W/2, qrY + qrSize + 32);
+
+    // Footer
+    ctx.font = '600 18px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#bbb';
+    ctx.fillText('OpenCarrier — Digital Clone Engine', W/2, H - 28);
+
+    // Set image
+    var root = document.getElementById('root');
+    var html = '<img id="cert-img" src="' + c.toDataURL('image/png') + '" alt="出生证">';
+    html += '<div class="info">';
+
+    if (platform === 'dingtalk' || platform === 'feishu') {
+      html += '<p>分身已就绪，<span class="highlight">返回聊天窗口</span>就能看到它的消息</p>';
+    } else if (platform === 'weixin') {
+      html += '<p>分身已就绪</p>';
+      html += '<p><span class="highlight">返回聊天窗口</span>，给机器人发条消息，分身就会回复你</p>';
+      html += '<p style="font-size:12px;color:#e08838;margin-top:8px;">微信需每 24 小时内至少发一条消息保持在线；若超时未活动，需重新扫码绑定</p>';
+    } else {
+      html += '<p>分身已就绪</p>';
+      html += '<p><span class="highlight">返回聊天窗口</span>，给机器人发条消息，分身就会回复你</p>';
+    }
+    html += '<p style="font-size:13px;color:#aaa;margin-top:6px;">长按图片可保存或转发</p>';
+    html += '</div>';
+    html += '<div class="btn-row">';
+    html += '<button class="btn btn-primary" onclick="try{WeixinJSBridge.call(\'closeWindow\')}catch(e){};try{window.close()}catch(e){};">关闭页面</button>';
+    html += '</div>';
+    root.innerHTML = html;
+  }
+
+  function emoji(name) {
+    var map = {'customer-service':'🎧','writer':'✍️','analyst':'📊','assistant':'🤖','translator':'🌐','coder':'💻'};
+    var n = (name||'').toLowerCase();
+    for (var k in map) { if (n.indexOf(k) >= 0) return map[k]; }
+    var emojis = ['🤖','🧠','💡','🌟','🎯','🔮','🦾','✨'];
+    var h = 0;
+    for (var i = 0; i < n.length; i++) h = ((h << 5) - h + n.charCodeAt(i)) | 0;
+    return emojis[Math.abs(h) % emojis.length];
+  }
+})();
+</script>
+</body>
+</html>

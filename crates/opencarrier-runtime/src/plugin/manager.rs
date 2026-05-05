@@ -254,6 +254,27 @@ impl PluginManager {
         self.tool_dispatcher.clone()
     }
 
+    /// Send a text message through a channel by bot UUID.
+    ///
+    /// Finds the plugin that owns the channel with `tenant_id == bot_uuid` and
+    /// sends through it. Returns an error if no matching channel is found or the
+    /// platform does not support proactive send.
+    pub fn channel_send(
+        &self,
+        bot_uuid: &str,
+        user_id: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        for plugin in &self.loaded_plugins {
+            for channel in plugin.channels() {
+                if channel.tenant_id == bot_uuid {
+                    return plugin.channel_send(channel, bot_uuid, user_id, text);
+                }
+            }
+        }
+        Err(format!("Channel not found for bot: {bot_uuid}"))
+    }
+
     /// Get status of all loaded plugins.
     pub fn status(&self) -> Vec<opencarrier_types::plugin::PluginStatus> {
         self.loaded_plugins
