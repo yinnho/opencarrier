@@ -303,11 +303,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   var uFp = params.get('fp');
   var uSess = params.get('session');
   var uPhase = params.get('phase');
+  var uBot = params.get('bot');
   if (uFp) { try { localStorage.setItem('oc_fingerprint', uFp); } catch(e){} }
   if (uSess) {
     try { localStorage.setItem('oc_share_session', uSess); } catch(e){}
     document.cookie = 'opencarrier_session=' + uSess + ';path=/;max-age=86400;SameSite=Lax';
   }
+  if (uBot) { try { localStorage.setItem('oc_bot_id', uBot); } catch(e){} }
   if (uPhase === '3' && uSess) { window.__jumpPhase3 = true; }
 })();
 
@@ -322,6 +324,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   var activePlatform = 'weixin';
   var platformCredentials = {};
   var currentBotId = '';
+  try { currentBotId = localStorage.getItem('oc_bot_id') || ''; } catch(e) {}
   var fingerprint = '';
 
   // ── Phase 3 jump from URL params (WeChat browser link) ──
@@ -804,6 +807,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     }
     api('POST', '/api/bots', payload).then(function(res){
       currentBotId = res.bot_id || '';
+	      try { localStorage.setItem('oc_bot_id', currentBotId); } catch(e) {}
       // Auto-install guide agent and bind to bot
       installGuideAgent(platform);
       setTimeout(function(){ showPhase(3); loadAgentsAndHub(); }, 1200);
@@ -821,7 +825,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       if (!guideId) return;
       // Build share URL with fingerprint + session for WeChat browser context
       var shareUrl = location.origin + '/share?fp=' + encodeURIComponent(getFingerprint())
-        + '&session=' + encodeURIComponent(sessionToken) + '&phase=3';
+        + '&session=' + encodeURIComponent(sessionToken) + '&phase=3&bot=' + encodeURIComponent(currentBotId);
       // Write URL into guide agent's knowledge file
       return api('POST', '/api/agents/' + guideId + '/knowledge', {
         filename: 'guide.md',
