@@ -4291,12 +4291,12 @@ impl OpenCarrierKernel {
                     .iter()
                     .map(|s| opencarrier_runtime::mcp::normalize_name(s))
                     .collect();
+                let known: Vec<&str> = normalized.iter().map(|s| s.as_str()).collect();
                 mcp_tools
                     .iter()
                     .filter(|t| {
-                        opencarrier_runtime::mcp::extract_mcp_server(&t.name)
-                            .map(|s| normalized.iter().any(|n| n == s))
-                            .unwrap_or(false)
+                        opencarrier_runtime::mcp::extract_mcp_server_from_known(&t.name, &known)
+                            .is_some()
                     })
                     .cloned()
                     .collect()
