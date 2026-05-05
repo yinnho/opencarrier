@@ -143,8 +143,9 @@ function botsPage() {
     },
 
     agentDisplayName(agent) {
+      const dn = agent.display_name || agent.name;
       const tn = this.tenantName(agent.tenant_id);
-      return tn ? agent.name + ' (' + tn + ')' : agent.name;
+      return tn ? dn + ' (' + tn + ')' : dn;
     },
 
     agentAvatar(id) {

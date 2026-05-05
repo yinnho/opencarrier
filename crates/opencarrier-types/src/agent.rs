@@ -344,8 +344,11 @@ pub struct ToolConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentManifest {
-    /// Human-readable agent name.
+    /// Human-readable agent name (English ID).
     pub name: String,
+    /// Display name for UI (e.g. Chinese name).
+    #[serde(default)]
+    pub display_name: String,
     /// Semantic version.
     pub version: String,
     /// Description of what this agent does.
@@ -443,6 +446,7 @@ impl Default for AgentManifest {
     fn default() -> Self {
         Self {
             name: "unnamed".to_string(),
+            display_name: String::new(),
             version: "0.1.0".to_string(),
             description: String::new(),
             author: String::new(),
@@ -661,6 +665,7 @@ mod tests {
     fn test_agent_manifest_serialization() {
         let manifest = AgentManifest {
             name: "test-agent".to_string(),
+            display_name: "测试分身".to_string(),
             version: "0.1.0".to_string(),
             description: "A test agent".to_string(),
             author: "test".to_string(),

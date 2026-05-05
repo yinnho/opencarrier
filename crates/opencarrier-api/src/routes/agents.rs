@@ -220,6 +220,7 @@ pub async fn list_agents(
             serde_json::json!({
                 "id": e.id.to_string(),
                 "name": e.name,
+                "display_name": e.manifest.display_name,
                 "state": format!("{:?}", e.state),
                 "mode": e.mode,
                 "created_at": e.created_at.to_rfc3339(),

@@ -5832,6 +5832,7 @@ impl KernelHandle for OpenCarrierKernel {
             .unwrap_or_else(|| opencarrier_clone::TemplateManifest {
                 version: "1".to_string(),
                 name: name.to_string(),
+                display_name: String::new(),
                 description: description.clone(),
                 author: String::new(),
                 tags: vec![],

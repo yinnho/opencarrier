@@ -451,7 +451,7 @@
                 <select class="input" x-model="botForm.bind_agent" style="width:100%">
                   <option value="">不绑定</option>
                   <template x-for="a in agents" :key="a.id">
-                    <option :value="a.name" x-text="a.name"></option>
+                    <option :value="a.name" x-text="a.display_name || a.name"></option>
                   </template>
                 </select>
               </div>
@@ -972,7 +972,7 @@
                       <div style="display:flex;align-items:flex-start;gap:10px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md)">
                         <div style="flex:1;min-width:0">
                           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                            <span class="font-bold" style="font-size:13px" x-text="t.name"></span>
+                            <span class="font-bold" style="font-size:13px" x-text="t.display_name || t.name"></span>
                             <span class="badge" style="font-size:9px;padding:1px 6px;background:var(--accent-subtle);color:var(--accent)" x-text="'v' + t.version"></span>
                           </div>
                           <p class="text-xs text-dim" style="margin-top:4px;line-height:1.4" x-text="t.description || 'No description'"></p>
@@ -1127,7 +1127,7 @@
                     <select class="form-select" x-model="newJob.agent_id">
                       <option value="">Any available agent</option>
                       <template x-for="a in availableAgents" :key="a.id">
-                        <option :value="a.id" x-text="a.name + ' (' + (a.model_provider || 'unknown') + ':' + (a.model_name || 'unknown') + ')'"></option>
+                        <option :value="a.id" x-text="(a.display_name || a.name) + ' (' + (a.model_provider || 'unknown') + ':' + (a.model_name || 'unknown') + ')'"></option>
                       </template>
                     </select>
                     <div class="text-xs text-dim mt-1" x-show="!availableAgents.length">No agents running. <a href="#agents" style="color:var(--accent)">Spawn one first.</a></div>
@@ -1566,7 +1566,7 @@
               <select class="form-select" style="width:200px;margin-left:16px" x-model="memAgentId" @change="loadKv()">
                 <option value="">Select agent...</option>
                 <template x-for="a in $store.app.agents" :key="a.id">
-                  <option :value="a.id" x-text="a.name"></option>
+                  <option :value="a.id" x-text="a.display_name || a.name"></option>
                 </template>
               </select>
             </div>
@@ -1804,17 +1804,17 @@
                   <div class="comms-topo-tree">
                     <div class="comms-topo-node" :title="root.id">
                       <span :class="stateBadgeClass(root.state)" style="font-size:10px;padding:1px 6px" x-text="root.state"></span>
-                      <strong x-text="root.name" style="margin:0 4px"></strong>
+                      <strong x-text="root.display_name || root.name" style="margin:0 4px"></strong>
                       <span class="text-dim" x-text="root.model"></span>
                       <template x-for="peer in peersOf(root.id)" :key="peer.id">
-                        <span class="text-dim" style="margin-left:8px" x-text="'\u2194 ' + peer.name"></span>
+                        <span class="text-dim" style="margin-left:8px" x-text="'\u2194 ' + (peer.display_name || peer.name)"></span>
                       </template>
                     </div>
                     <template x-for="(child, ci) in childrenOf(root.id)" :key="child.id">
                       <div class="comms-topo-child">
                         <span class="comms-topo-branch" x-text="ci < childrenOf(root.id).length - 1 ? '\u251c\u2500\u2500 ' : '\u2514\u2500\u2500 '"></span>
                         <span :class="stateBadgeClass(child.state)" style="font-size:10px;padding:1px 6px" x-text="child.state"></span>
-                        <strong x-text="child.name" style="margin:0 4px"></strong>
+                        <strong x-text="child.display_name || child.name" style="margin:0 4px"></strong>
                         <span class="text-dim" x-text="child.model"></span>
                       </div>
                     </template>

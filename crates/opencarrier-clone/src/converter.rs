@@ -88,6 +88,12 @@ pub fn convert_to_manifest(data: &CloneData, hub_template_id: Option<String>) ->
 
     AgentManifest {
         name: data.name.clone(),
+        display_name: data
+            .manifest
+            .as_ref()
+            .map(|m| m.display_name.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default(),
         version: data
             .manifest
             .as_ref()
