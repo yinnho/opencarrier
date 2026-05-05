@@ -4388,6 +4388,31 @@ impl OpenCarrierKernel {
                     all_tools.push(def);
                 }
             }
+            // Also check MCP tools and plugin tools for whitelist matches
+            if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
+                for def in mcp_tools.iter() {
+                    if whitelist.iter().any(|w| w == &def.name)
+                        && !existing_names.contains(&def.name)
+                        && !added.iter().any(|a| a == &def.name)
+                    {
+                        added.push(def.name.clone());
+                        all_tools.push(def.clone());
+                    }
+                }
+            }
+            if let Ok(guard) = self.plugins.plugin_tool_dispatcher.lock() {
+                if let Some(ref dispatcher) = *guard {
+                    for def in dispatcher.definitions() {
+                        if whitelist.iter().any(|w| w == &def.name)
+                            && !existing_names.contains(&def.name)
+                            && !added.iter().any(|a| a == &def.name)
+                        {
+                            added.push(def.name.clone());
+                            all_tools.push(def.clone());
+                        }
+                    }
+                }
+            }
             if !added.is_empty() {
                 tracing::info!(
                     agent = %agent_id,
