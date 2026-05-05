@@ -479,10 +479,15 @@ fn watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<AtomicBool>) 
 
             for entry in WEIXIN_STATE.tenants.iter() {
                 let name = entry.key().clone();
-                if spawned.contains(&name) {
-                    continue;
-                }
                 let state = entry.value();
+                if spawned.contains(&name) {
+                    // Poll thread exited (e.g. session expired) but token is now valid again
+                    if !state.active.load(Ordering::Relaxed) && !state.is_expired() {
+                        spawned.remove(&name);
+                    } else {
+                        continue;
+                    }
+                }
                 if state.is_expired() {
                     continue;
                 }

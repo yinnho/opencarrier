@@ -76,7 +76,7 @@ fn encode_bytes(field_number: u32, data: &[u8]) -> Vec<u8> {
 }
 
 fn encode_varint_field(field_number: u32, value: u64) -> Vec<u8> {
-    let tag = ((field_number << 3) | 0) as u64;
+    let tag = (field_number << 3) as u64;
     let mut buf = encode_varint(tag);
     buf.extend(encode_varint(value));
     buf
@@ -313,15 +313,14 @@ struct FragmentParts {
 /// The server may split large events into multiple frames identified by
 /// `message_id` header. Each fragment has `seq` (index) and `sum` (total)
 /// headers. All fragments must arrive before the event is dispatched.
+#[derive(Default)]
 pub struct FragmentCache {
     fragments: HashMap<String, FragmentParts>,
 }
 
 impl FragmentCache {
     pub fn new() -> Self {
-        Self {
-            fragments: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Try to add a fragment. Returns `Some(complete_payload)` when all parts collected.

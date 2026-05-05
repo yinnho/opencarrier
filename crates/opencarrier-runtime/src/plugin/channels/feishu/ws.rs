@@ -180,7 +180,7 @@ impl FeishuWsClient {
                     let encoded = ping.encode();
                     let hex: Vec<String> = encoded.iter().map(|b| format!("{b:02x}")).collect();
                     info!(tenant = %self.tenant_name, len = encoded.len(), hex = %hex.join(""), "Sending app-level ping");
-                    if let Err(e) = write.send(Message::Binary(encoded.into())).await {
+                    if let Err(e) = write.send(Message::Binary(encoded)).await {
                         return Err(format!("WS ping send failed: {e}"));
                     }
                 }
@@ -281,7 +281,7 @@ impl FeishuWsClient {
             None => {
                 // Still collecting fragments — send ACK for this part
                 let ack = Pbbp2Frame::ack_for(frame, start.elapsed().as_millis() as i64);
-                if let Err(e) = write.send(Message::Binary(ack.encode().into())).await {
+                if let Err(e) = write.send(Message::Binary(ack.encode())).await {
                     warn!(tenant = %self.tenant_name, "ACK send failed: {e}");
                 }
                 return;
@@ -290,7 +290,7 @@ impl FeishuWsClient {
 
         // Send ACK for complete event
         let ack = Pbbp2Frame::ack_for(frame, start.elapsed().as_millis() as i64);
-        if let Err(e) = write.send(Message::Binary(ack.encode().into())).await {
+        if let Err(e) = write.send(Message::Binary(ack.encode())).await {
             warn!(tenant = %self.tenant_name, "ACK send failed: {e}");
         }
 
