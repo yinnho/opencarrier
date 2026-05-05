@@ -96,6 +96,7 @@ pub async fn auth(
         || path == "/favicon.ico"
         || path == "/manifest.json"
         || path == "/sw.js"
+        || path == "/bd00e4fe4983179012e6ffdcc66d0c4b.txt"
         || path.starts_with("/katex-fonts/")
         || (path == "/.well-known/agent.json" && is_get)
         || path == "/api/health"
