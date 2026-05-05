@@ -305,6 +305,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   var uPhase = params.get('phase');
   var uBot = params.get('bot');
   var uPlatform = params.get('platform');
+  var uTenant = params.get('tenant');
   if (uFp) { try { localStorage.setItem('oc_fingerprint', uFp); } catch(e){} }
   if (uSess) {
     try { localStorage.setItem('oc_share_session', uSess); } catch(e){}
@@ -312,6 +313,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   }
   if (uBot) { try { localStorage.setItem('oc_bot_id', uBot); } catch(e){} }
   if (uPlatform) { try { localStorage.setItem('oc_active_platform', uPlatform); } catch(e){} }
+  if (uTenant) { try { localStorage.setItem('oc_tenant_name', uTenant); } catch(e){} }
   if (uPhase === '3' && uSess) { window.__jumpPhase3 = true; }
 })();
 
@@ -320,6 +322,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   try { sessionToken = localStorage.getItem('oc_share_session') || ''; } catch(e) {}
   var tenantId = '';
   var tenantName = '';
+  try { tenantName = localStorage.getItem('oc_tenant_name') || ''; } catch(e) {}
   var hubTemplates = [];
   var selectedTemplate = null;
   var installedAgents = [];
@@ -456,6 +459,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       if (data.error) throw new Error(data.error);
       renderQR('weixin-qr-img', data);
       tenantName = data.tenant || 'share';
+      try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
       pollWeixinStatus(data);
     }).catch(function(e){
       document.getElementById('weixin-hint').textContent = '错误: ' + e.message;
@@ -535,6 +539,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
           if (data.existing) {
             tenantName = data.tenant || tenantName;
+            try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
             if (data.session_token) {
               sessionToken = data.session_token;
               tenantId = data.tenant_id || data.tenant || tenantName;
@@ -562,6 +567,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
               sessionToken = data.session_token;
               tenantId = data.tenant_id;
               tenantName = data.tenant_name || onboardName;
+              try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
               setSession(sessionToken);
               api('POST', '/api/weixin/save-token', {
                 tenant_name: tenantName,
@@ -633,6 +639,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
                 sessionToken = data.session_token;
                 tenantId = data.tenant_id;
                 tenantName = data.tenant_name || wecomOnboardName;
+                try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
                 setSession(sessionToken);
               }
               createPlatformBot('wecom');
@@ -641,6 +648,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
             });
           } else {
             tenantName = wecomOnboardName;
+            try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
             createPlatformBot('wecom');
           }
         } else if (res.status === 'expired') {
@@ -699,6 +707,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
                 sessionToken = data.session_token;
                 tenantId = data.tenant_id;
                 tenantName = data.tenant_name || feishuOnboardName;
+                try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
                 setSession(sessionToken);
               }
               createPlatformBot('feishu');
@@ -707,6 +716,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
             });
           } else {
             tenantName = feishuOnboardName;
+            try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
             createPlatformBot('feishu');
           }
         } else if (res.status === 'expired') {
@@ -770,6 +780,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
               sessionToken = data.session_token;
               tenantId = data.tenant_id;
               tenantName = data.tenant_name || dingtalkOnboardName;
+              try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
               setSession(sessionToken);
             }
             createPlatformBot('dingtalk');
@@ -829,7 +840,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     var shareUrl = location.origin + '/share?fp=' + encodeURIComponent(getFingerprint())
       + '&session=' + encodeURIComponent(sessionToken) + '&phase=3'
       + '&bot=' + encodeURIComponent(currentBotId)
-      + '&platform=' + encodeURIComponent(activePlatform);
+      + '&platform=' + encodeURIComponent(activePlatform)
+      + '&tenant=' + encodeURIComponent(tenantName);
     var knowledgeContent = '# 选择分身链接\n\n请点击以下链接选择你的 AI 分身：\n\n' + shareUrl;
 
     // Get or create guide agent, then write knowledge + bind
