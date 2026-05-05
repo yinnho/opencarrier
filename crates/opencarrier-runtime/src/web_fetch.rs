@@ -217,6 +217,20 @@ pub(crate) fn check_ssrf(url: &str) -> Result<(), String> {
         return Err(format!("SSRF blocked: {hostname} is a restricted hostname"));
     }
 
+    // Safe domain allowlist — known public platforms whose CDN may resolve to
+    // edge nodes incorrectly flagged as private IPs in some network environments.
+    let hostname_lower = hostname.to_lowercase();
+    let allowed_domains = [
+        "github.com",
+        "github.io",
+        "githubusercontent.com",
+    ];
+    for domain in &allowed_domains {
+        if hostname_lower == *domain || hostname_lower.ends_with(&format!(".{domain}")) {
+            return Ok(());
+        }
+    }
+
     // Resolve DNS and check every returned IP
     let port = if url.starts_with("https") { 443 } else { 80 };
     let socket_addr = format!("{hostname}:{port}");

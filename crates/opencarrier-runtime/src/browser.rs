@@ -242,8 +242,19 @@ impl BrowserSession {
             }
             info!(endpoint, "Connecting to external CDP server");
 
-            // Connect to the CDP browser endpoint
-            let cdp = CdpConnection::connect(endpoint).await?;
+            // Extract host:port from ws:// or wss:// URL
+            let ws_host = endpoint
+                .strip_prefix("ws://")
+                .or_else(|| endpoint.strip_prefix("wss://"))
+                .unwrap_or(endpoint)
+                .split('/')
+                .next()
+                .unwrap_or(endpoint);
+            let list_url = format!("http://{ws_host}/json/list");
+
+            // Find page target and connect to its WebSocket (same flow as local Chromium)
+            let page_ws = Self::find_page_ws(&list_url).await?;
+            let cdp = CdpConnection::connect(&page_ws).await?;
 
             // Enable required domains
             let _ = cdp.send("Page.enable", serde_json::json!({})).await;
