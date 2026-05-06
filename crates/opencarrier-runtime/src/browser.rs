@@ -214,11 +214,30 @@ impl CdpConnection {
             return Err(format!("JS error: {desc}"));
         }
 
-        Ok(result
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .cloned()
-            .unwrap_or(serde_json::Value::Null))
+        let result_obj = result.get("result");
+
+        // Primary: read "value" field (standard CDP)
+        if let Some(val) = result_obj.and_then(|r| r.get("value")).cloned() {
+            if !val.is_null() {
+                return Ok(val);
+            }
+        }
+
+        // Fallback: some non-Chromium CDP servers (e.g. Obscura) return
+        // `undefined` in "value" but populate "description" with the actual
+        // result — especially when the expression uses try/catch blocks.
+        if let Some(desc) = result_obj
+            .and_then(|r| r.get("description"))
+            .and_then(|d| d.as_str())
+        {
+            // Try to parse as JSON; if it fails return as plain string
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(desc) {
+                return Ok(parsed);
+            }
+            return Ok(serde_json::Value::String(desc.to_string()));
+        }
+
+        Ok(serde_json::Value::Null)
     }
 }
 
@@ -562,6 +581,7 @@ impl BrowserSession {
     }
 
     async fn cmd_screenshot(&self) -> BrowserResponse {
+        // Try native captureScreenshot first (real Chromium)
         match self
             .cdp
             .send(
@@ -570,7 +590,7 @@ impl BrowserSession {
             )
             .await
         {
-            Ok(result) => {
+            Ok(result) if result.get("data").is_some() => {
                 let b64 = result["data"].as_str().unwrap_or("");
                 let url = self
                     .cdp
@@ -583,7 +603,44 @@ impl BrowserSession {
                     serde_json::json!({"image_base64": b64, "url": url, "format": "png"}),
                 )
             }
-            Err(e) => BrowserResponse::err(format!("Screenshot failed: {e}")),
+            _ => {
+                // Fallback for non-Chromium CDP servers (e.g. Obscura) that
+                // don't support captureScreenshot: return a text description
+                // of the page layout and visible content instead.
+                let layout = self
+                    .cdp
+                    .send("Page.getLayoutMetrics", serde_json::json!({}))
+                    .await
+                    .ok();
+                let viewport = layout
+                    .as_ref()
+                    .and_then(|l| l.get("layoutViewport"))
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+
+                let url = self
+                    .cdp
+                    .run_js("location.href")
+                    .await
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default();
+                let title = self
+                    .cdp
+                    .run_js("document.title")
+                    .await
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default();
+
+                BrowserResponse::ok(serde_json::json!({
+                    "mode": "text_description",
+                    "url": url,
+                    "title": title,
+                    "viewport": viewport,
+                    "note": "Visual screenshot not available (headless CDP server without rendering). Use browser_read_page or browser_run_js to extract page content."
+                }))
+            }
         }
     }
 
@@ -651,7 +708,8 @@ impl BrowserSession {
     }
 
     async fn cmd_back(&self) -> BrowserResponse {
-        match self.cdp.run_js("history.back(); 'ok'").await {
+        let back_result = self.cdp.run_js("(function(){ history.back(); return 'ok'; })()").await;
+        match back_result {
             Ok(_) => {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 self.wait_for_load().await;
@@ -1171,30 +1229,34 @@ pub async fn tool_browser_back(
 // ── Embedded JavaScript ────────────────────────────────────────────────────
 
 /// JavaScript to extract readable page content as markdown.
-const EXTRACT_CONTENT_JS: &str = r#"(() => {
-    const title = document.title || '';
-    const url = location.href || '';
-    const body = document.body;
-    if (!body) return JSON.stringify({title, url, content: ''});
+const EXTRACT_CONTENT_JS: &str = r#"(function(){
+    var title = document.title || '';
+    var url = location.href || '';
+    var body = document.body;
+    if (!body) return JSON.stringify({title: title, url: url, content: ''});
 
-    const clone = body.cloneNode(true);
-    const remove = ['script','style','nav','footer','header','aside','iframe','noscript','svg','canvas'];
-    remove.forEach(tag => clone.querySelectorAll(tag).forEach(el => el.remove()));
+    var clone = body.cloneNode(true);
+    var remove = ['script','style','nav','footer','header','aside','iframe','noscript','svg','canvas'];
+    for (var t = 0; t < remove.length; t++) {
+        var els = clone.querySelectorAll(remove[t]);
+        for (var i = 0; i < els.length; i++) { els[i].remove(); }
+    }
 
-    let root = clone.querySelector('main, article, [role="main"], .content, #content');
+    var root = clone.querySelector('main, article, [role="main"], .content, #content');
     if (!root) root = clone;
 
-    const lines = [];
+    var lines = [];
     function walk(node) {
         if (node.nodeType === 3) {
-            const t = node.textContent.trim();
-            if (t) lines.push(t);
+            var txt = node.textContent.trim();
+            if (txt) lines.push(txt);
             return;
         }
         if (node.nodeType !== 1) return;
-        const tag = node.tagName.toLowerCase();
-        if (['h1','h2','h3','h4','h5','h6'].includes(tag)) {
-            const level = '#'.repeat(parseInt(tag[1]));
+        var tag = node.tagName.toLowerCase();
+        if (tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6') {
+            var level = '';
+            for (var h = 0; h < parseInt(tag[1]); h++) level += '#';
             lines.push('\n' + level + ' ' + node.textContent.trim());
             return;
         }
@@ -1207,15 +1269,15 @@ const EXTRACT_CONTENT_JS: &str = r#"(() => {
             return;
         }
         if (tag === 'br') { lines.push(''); return; }
-        if (['p','div','section','tr'].includes(tag)) lines.push('');
-        for (const child of node.childNodes) walk(child);
-        if (['p','div','section','tr'].includes(tag)) lines.push('');
+        if (tag === 'p' || tag === 'div' || tag === 'section' || tag === 'tr') lines.push('');
+        for (var c = 0; c < node.childNodes.length; c++) walk(node.childNodes[c]);
+        if (tag === 'p' || tag === 'div' || tag === 'section' || tag === 'tr') lines.push('');
     }
     walk(root);
 
-    let content = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    var content = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
     if (content.length > 50000) content = content.substring(0, 50000) + '\n... (truncated)';
-    return JSON.stringify({title, url, content});
+    return JSON.stringify({title: title, url: url, content: content});
 })()"#;
 
 // ── Root detection ─────────────────────────────────────────────────────────
