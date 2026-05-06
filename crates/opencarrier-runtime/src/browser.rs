@@ -85,6 +85,9 @@ struct CdpConnection {
     pending: Arc<DashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>>,
     next_id: AtomicU64,
     _reader_handle: tokio::task::JoinHandle<()>,
+    /// For CDP flatten mode (external servers like Obscura): sessionId
+    /// automatically injected into every outgoing command.
+    default_session_id: std::sync::Mutex<Option<String>>,
 }
 
 impl CdpConnection {
@@ -111,6 +114,7 @@ impl CdpConnection {
             pending,
             next_id: AtomicU64::new(1),
             _reader_handle: reader_handle,
+            default_session_id: std::sync::Mutex::new(None),
         })
     }
 
@@ -165,7 +169,12 @@ impl CdpConnection {
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id, tx);
 
-        let msg = serde_json::json!({ "id": id, "method": method, "params": params });
+        let mut msg = serde_json::json!({ "id": id, "method": method, "params": params });
+        if let Ok(lock) = self.default_session_id.lock() {
+            if let Some(ref sid) = *lock {
+                msg["sessionId"] = serde_json::json!(sid);
+            }
+        }
         self.write
             .lock()
             .await
@@ -242,21 +251,33 @@ impl BrowserSession {
             }
             info!(endpoint, "Connecting to external CDP server");
 
-            // Extract host:port from ws:// or wss:// URL
-            let ws_host = endpoint
-                .strip_prefix("ws://")
-                .or_else(|| endpoint.strip_prefix("wss://"))
-                .unwrap_or(endpoint)
-                .split('/')
-                .next()
-                .unwrap_or(endpoint);
-            let list_url = format!("http://{ws_host}/json/list");
+            // Connect to the browser-level CDP endpoint
+            let cdp = CdpConnection::connect(endpoint).await?;
 
-            // Find page target and connect to its WebSocket (same flow as local Chromium)
-            let page_ws = Self::find_page_ws(&list_url).await?;
-            let cdp = CdpConnection::connect(&page_ws).await?;
+            // CDP flatten mode: create a target page and attach to obtain a sessionId.
+            // Obscura and other non-Chromium CDP servers require this flow because
+            // they do not expose per-page WebSocket URLs.
+            let create_resp = cdp
+                .send("Target.createTarget", serde_json::json!({"url": "about:blank"}))
+                .await?;
+            let target_id = create_resp["targetId"]
+                .as_str()
+                .ok_or("No targetId in createTarget response")?;
 
-            // Enable required domains
+            let attach_resp = cdp
+                .send(
+                    "Target.attachToTarget",
+                    serde_json::json!({"targetId": target_id, "flatten": true}),
+                )
+                .await?;
+            let session_id = attach_resp["sessionId"]
+                .as_str()
+                .ok_or("No sessionId in attachToTarget response")?;
+            *cdp.default_session_id.lock().unwrap() = Some(session_id.to_string());
+
+            info!(target_id, session_id, "External CDP flatten session established");
+
+            // Enable required domains (commands automatically carry sessionId)
             let _ = cdp.send("Page.enable", serde_json::json!({})).await;
             let _ = cdp.send("Runtime.enable", serde_json::json!({})).await;
 
