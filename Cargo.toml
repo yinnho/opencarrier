@@ -12,6 +12,12 @@ members = [
     "crates/opencarrier-lifecycle",
     "crates/opencarrier-plugin-sdk",
     "xtask",
+    "tools/mcp-common",
+    "tools/bilibili-mcp",
+    "tools/zhihu-mcp",
+    "tools/xiaohongshu-mcp",
+    "tools/reddit-mcp",
+    "tools/twitter-mcp",
     "tools/wechat-oa-mcp",
 ]
 
