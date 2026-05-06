@@ -44,7 +44,7 @@ impl MemorySubstrate {
     pub fn open(db_path: &Path, decay_rate: f32) -> OpenCarrierResult<Self> {
         let conn =
             Connection::open(db_path).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;")
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         run_migrations(&conn).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         let shared = Arc::new(Mutex::new(conn));

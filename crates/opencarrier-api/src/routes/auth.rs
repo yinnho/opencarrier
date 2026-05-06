@@ -69,7 +69,7 @@ pub async fn auth_login(
             );
             let ttl_secs = auth_cfg.session_ttl_hours * 3600;
             let cookie = format!(
-                "opencarrier_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl_secs}"
+                "opencarrier_session={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={ttl_secs}"
             );
 
             state.kernel.audit_log.record(
@@ -162,7 +162,7 @@ pub async fn auth_login(
     );
     let ttl_secs = auth_cfg.session_ttl_hours * 3600;
     let cookie = format!(
-        "opencarrier_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl_secs}"
+        "opencarrier_session={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={ttl_secs}"
     );
 
     state.kernel.audit_log.record(
@@ -190,7 +190,7 @@ pub async fn auth_login(
 }
 /// POST /api/auth/logout — Clear the session cookie.
 pub async fn auth_logout() -> impl IntoResponse {
-    let cookie = "opencarrier_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0";
+    let cookie = "opencarrier_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0";
     (
         StatusCode::OK,
         [("content-type", "application/json"), ("set-cookie", cookie)],

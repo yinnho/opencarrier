@@ -109,7 +109,28 @@ pub async fn webhook_agent(
     // Resolve the agent by name or ID (if not specified, use the first running agent)
     let agent_id: AgentId = match &body.agent {
         Some(agent_ref) => match agent_ref.parse() {
-            Ok(id) => id,
+            Ok(id) => {
+                // UUID lookup — verify tenant ownership if tenant_id provided
+                let entry = match state.kernel.registry.get(id) {
+                    Some(e) => e,
+                    None => {
+                        return (
+                            StatusCode::NOT_FOUND,
+                            Json(serde_json::json!({"error": format!("Agent not found: {}", agent_ref)})),
+                        );
+                    }
+                };
+                // If webhook payload specifies tenant_id, verify the agent belongs to that tenant
+                if let Some(ref tid) = body.tenant_id {
+                    if entry.tenant_id != *tid {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(serde_json::json!({"error": "Agent does not belong to the specified tenant"})),
+                        );
+                    }
+                }
+                id
+            }
             Err(_) => {
                 // Name lookup — use tenant-scoped if tenant_id provided
                 let entry = match &body.tenant_id {

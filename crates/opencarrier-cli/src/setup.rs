@@ -99,7 +99,8 @@ session_ttl_hours = 168
     std::fs::write(&config_path, &config_content).map_err(|e| e.to_string())?;
     crate::restrict_file_permissions(&config_path);
 
-    // Load .env into current process so the kernel picks it up
+    // Load .env into current process so the kernel picks it up.
+    // Called before tokio runtime starts, so no concurrent env access.
     std::env::set_var("OPENCLONE_HUB_KEY", &api_key);
 
     println!(

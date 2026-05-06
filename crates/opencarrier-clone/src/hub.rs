@@ -251,7 +251,8 @@ pub fn read_api_key(env_var: &str) -> Result<String> {
                 if let Some(value) = trimmed.strip_prefix(&format!("{}=", env_var)) {
                     let value = value.trim().to_string();
                     if !value.is_empty() {
-                        // Also set it in the process env so subsequent calls don't need file read
+                        // Cache in process env so subsequent lookups skip the file read.
+                        // (Best-effort; env mutation may race but consequence is a stale read.)
                         std::env::set_var(env_var, &value);
                         return Ok(value);
                     }
@@ -461,9 +462,20 @@ pub async fn install_plugin(
     let cursor = std::io::Cursor::new(&bytes[..]);
     let gz = flate2::read::GzDecoder::new(cursor);
     let mut archive = tar::Archive::new(gz);
-    archive
-        .unpack(&plugin_dir)
-        .with_context(|| format!("解压插件失败: {}", plugin_dir.display()))?;
+    // SECURITY: Validate archive entries before extraction to prevent path traversal.
+    // A malicious archive with paths like `../../etc/passwd` could write outside the target directory.
+    for entry in archive.entries().with_context(|| "读取插件归档条目失败")? {
+        let mut entry = entry.with_context(|| "读取归档条目失败")?;
+        let path = entry.path().with_context(|| "获取归档条目路径失败")?;
+        // Block entries that would escape the plugin directory
+        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            bail!("插件归档包含不安全路径: {} (不允许使用 ..)", path.display());
+        }
+        let path_owned = path.to_path_buf();
+        entry
+            .unpack_in(&plugin_dir)
+            .with_context(|| format!("解压归档条目失败: {}", path_owned.display()))?;
+    }
 
     tracing::info!("插件 '{}' 安装完成 → {}", name, plugin_dir.display());
     Ok(name.to_string())

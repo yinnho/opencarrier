@@ -105,6 +105,11 @@ impl TenantContext {
         self.role == TenantRole::Admin
     }
 
+    /// Check if this is the deny-all sentinel (no valid auth provided).
+    pub fn is_deny_all(&self) -> bool {
+        self.tenant_id.as_deref() == Some("__deny__")
+    }
+
     /// Get the tenant_id, returns error string if not set.
     pub fn require_tenant_id(&self) -> Result<&str, String> {
         self.tenant_id

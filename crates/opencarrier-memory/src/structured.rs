@@ -65,6 +65,10 @@ impl StructuredStore {
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
 
+        // Wrap archive + upsert in a transaction for atomicity
+        conn.execute("BEGIN", [])
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+
         // Archive the old value before overwriting (memory immutability)
         let old: Option<(Vec<u8>, i64)> = conn
             .query_row(
@@ -74,10 +78,14 @@ impl StructuredStore {
             )
             .ok();
         if let Some((old_blob, old_version)) = old {
-            let _ = conn.execute(
+            conn.execute(
                 "INSERT INTO kv_history (agent_id, key, value, version, archived_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![agent_id.0.to_string(), key, old_blob, old_version, now],
-            );
+            )
+            .map_err(|e| {
+                let _ = conn.execute("ROLLBACK", []);
+                OpenCarrierError::Memory(e.to_string())
+            })?;
         }
 
         conn.execute(
@@ -85,7 +93,13 @@ impl StructuredStore {
              ON CONFLICT(agent_id, key) DO UPDATE SET value = ?3, version = version + 1, updated_at = ?4",
             rusqlite::params![agent_id.0.to_string(), key, blob, now],
         )
-        .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+        .map_err(|e| {
+            let _ = conn.execute("ROLLBACK", []);
+            OpenCarrierError::Memory(e.to_string())
+        })?;
+
+        conn.execute("COMMIT", [])
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 
@@ -100,6 +114,10 @@ impl StructuredStore {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
 
+        // Wrap archive + delete in a transaction for atomicity
+        conn.execute("BEGIN", [])
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+
         // Archive before deleting
         let old: Option<(Vec<u8>, i64)> = conn
             .query_row(
@@ -109,17 +127,27 @@ impl StructuredStore {
             )
             .ok();
         if let Some((old_blob, old_version)) = old {
-            let _ = conn.execute(
+            conn.execute(
                 "INSERT INTO kv_history (agent_id, key, value, version, archived_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![agent_id.0.to_string(), key, old_blob, old_version, now],
-            );
+            )
+            .map_err(|e| {
+                let _ = conn.execute("ROLLBACK", []);
+                OpenCarrierError::Memory(e.to_string())
+            })?;
         }
 
         conn.execute(
             "DELETE FROM kv_store WHERE agent_id = ?1 AND key = ?2",
             rusqlite::params![agent_id.0.to_string(), key],
         )
-        .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+        .map_err(|e| {
+            let _ = conn.execute("ROLLBACK", []);
+            OpenCarrierError::Memory(e.to_string())
+        })?;
+
+        conn.execute("COMMIT", [])
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 

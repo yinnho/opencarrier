@@ -379,8 +379,8 @@ impl LlmDriver for AnthropicDriver {
                         continue;
                     }
 
-                    // DEBUG: log raw SSE events from GLM
-                    eprintln!(
+                    // DEBUG: log raw SSE events
+                    debug!(
                         "[anthropic-sse] event={} data_len={}",
                         event_type,
                         data.len()
@@ -389,7 +389,7 @@ impl LlmDriver for AnthropicDriver {
                     let json: serde_json::Value = match serde_json::from_str(&data) {
                         Ok(v) => v,
                         Err(_) => {
-                            eprintln!(
+                            debug!(
                                 "[anthropic-sse] JSON parse failed, raw: {}",
                                 &data[..data.len().min(200)]
                             );
@@ -520,7 +520,7 @@ impl LlmDriver for AnthropicDriver {
             }
 
             // Build CompletionResponse from accumulated blocks
-            eprintln!("[anthropic-sse] sending ContentComplete: stop_reason={:?}, usage={:?}, blocks_count={}", stop_reason, usage, blocks.len());
+            debug!("[anthropic-sse] sending ContentComplete: stop_reason={:?}, usage={:?}, blocks_count={}", stop_reason, usage, blocks.len());
             let mut content = Vec::new();
             let mut tool_calls = Vec::new();
             for block in blocks {

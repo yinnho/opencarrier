@@ -25,6 +25,10 @@ pub fn env_file_path() -> Option<PathBuf> {
 /// `secrets.env` is loaded second so `.env` values take priority over secrets
 /// (but both yield to system env vars).
 /// Silently does nothing if the files don't exist.
+///
+/// SAFETY: This is called during kernel boot, before any tokio tasks are spawned.
+/// The set_var calls are safe because there is no concurrent access to the
+/// environment at this point.
 pub fn load_dotenv() {
     load_env_file(env_file_path());
     // Also load secrets.env (written by dashboard "Set API Key" button)
@@ -77,7 +81,9 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     entries.insert(key.to_string(), value.to_string());
     write_env_file(&path, &entries)?;
 
-    // Also set in current process
+    // NOTE: This is a best-effort set. Setting env vars from a tokio thread
+    // is technically racy with concurrent reads. The .env file is the
+    // authoritative source; a restart will pick up the change cleanly.
     std::env::set_var(key, value);
 
     Ok(())
@@ -96,7 +102,8 @@ pub fn delete_env_key(key: &str) -> Result<(), String> {
         write_env_file(&path, &entries)?;
     }
 
-    // Also unset from current process
+    // NOTE: Best-effort unset (env mutation is racy from tokio threads).
+    // The .env file is the authoritative source.
     std::env::remove_var(key);
 
     Ok(())

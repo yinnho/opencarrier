@@ -53,6 +53,24 @@ pub enum LlmError {
     Config(String),
 }
 
+impl LlmError {
+    /// Returns true if this error type is worth retrying on a different driver.
+    ///
+    /// Non-retryable errors (auth failure, model not found, missing key) will
+    /// fail identically on every driver in a fallback chain, so there's no
+    /// point trying the next one.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            LlmError::RateLimited { .. }
+                | LlmError::Overloaded { .. }
+                | LlmError::Http(_)
+                | LlmError::Api { .. }
+                | LlmError::Parse(_)
+        )
+    }
+}
+
 /// A request to an LLM for completion.
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {

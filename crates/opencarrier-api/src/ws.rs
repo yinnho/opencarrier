@@ -570,12 +570,12 @@ async fn handle_text_message(
                                         }
                                         Some(ev) => {
                                             // DEBUG: log every stream event for GLM troubleshooting
-                                            eprintln!("[ws-stream] event: {:?}", ev);
+                                            tracing::debug!("[ws-stream] event: {:?}", ev);
 
                                             // Capture ContentComplete for immediate response
                                             if let StreamEvent::ContentComplete { usage, .. } = &ev {
                                                 stream_usage = Some(*usage);
-                                                eprintln!("[ws-stream] ContentComplete usage: {:?}", usage);
+                                                tracing::debug!("[ws-stream] ContentComplete usage: {:?}", usage);
                                                 // Don't forward — handled below
                                                 continue;
                                             }
@@ -655,11 +655,11 @@ async fn handle_text_message(
                         // If model sent only thinking (no text), use thinking as response
                         // Some providers (e.g. GLM via Anthropic compat) send all content
                         // as thinking blocks with no text block.
-                        eprintln!("[ws-stream] stream ended: text={} bytes, thinking={} bytes, usage={:?}",
+                        tracing::debug!("[ws-stream] stream ended: text={} bytes, thinking={} bytes, usage={:?}",
                             accumulated_text.len(), accumulated_thinking.len(), stream_usage);
                         if accumulated_text.is_empty() && !accumulated_thinking.is_empty() {
                             accumulated_text = accumulated_thinking;
-                            eprintln!(
+                            tracing::debug!(
                                 "[ws-stream] fallback: using thinking as text ({} bytes)",
                                 accumulated_text.len()
                             );

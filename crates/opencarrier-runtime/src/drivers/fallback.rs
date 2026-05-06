@@ -45,23 +45,25 @@ impl LlmDriver for FallbackDriver {
             }
             match driver.complete(req).await {
                 Ok(response) => return Ok(response),
-                Err(e @ LlmError::RateLimited { .. }) | Err(e @ LlmError::Overloaded { .. }) => {
+                Err(e) if e.is_retryable() => {
                     warn!(
                         driver_index = i,
                         model = %model_name,
                         error = %e,
-                        "Driver rate-limited/overloaded, trying next fallback"
+                        "Retryable error, trying next fallback"
                     );
                     last_error = Some(e);
                 }
                 Err(e) => {
+                    // Non-retryable errors (auth, model not found, missing key) —
+                    // these will fail on every driver, so return immediately.
                     warn!(
                         driver_index = i,
                         model = %model_name,
                         error = %e,
-                        "Fallback driver failed, trying next"
+                        "Non-retryable error, skipping remaining fallbacks"
                     );
-                    last_error = Some(e);
+                    return Err(e);
                 }
             }
         }
@@ -86,12 +88,12 @@ impl LlmDriver for FallbackDriver {
             }
             match driver.stream(req, tx.clone()).await {
                 Ok(response) => return Ok(response),
-                Err(e @ LlmError::RateLimited { .. }) | Err(e @ LlmError::Overloaded { .. }) => {
+                Err(e) if e.is_retryable() => {
                     warn!(
                         driver_index = i,
                         model = %model_name,
                         error = %e,
-                        "Driver rate-limited/overloaded (stream), trying next fallback"
+                        "Retryable error (stream), trying next fallback"
                     );
                     last_error = Some(e);
                 }
@@ -100,9 +102,9 @@ impl LlmDriver for FallbackDriver {
                         driver_index = i,
                         model = %model_name,
                         error = %e,
-                        "Fallback driver (stream) failed, trying next"
+                        "Non-retryable error (stream), skipping remaining fallbacks"
                     );
-                    last_error = Some(e);
+                    return Err(e);
                 }
             }
         }
