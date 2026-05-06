@@ -3,7 +3,8 @@
 //! Abstracts over multiple LLM providers (Anthropic, OpenAI, Ollama, etc.).
 
 use async_trait::async_trait;
-use opencarrier_types::brain::{ApiFormat, AuthHeaderType};
+use opencarrier_types::brain::{ApiFormat, AuthHeaderType, EndpointReport};
+use opencarrier_types::error::{OpenCarrierError, OpenCarrierResult};
 use opencarrier_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use opencarrier_types::tool::{ToolCall, ToolDefinition};
 use serde::{Deserialize, Serialize};
@@ -228,6 +229,69 @@ pub trait Brain: Send + Sync {
         _provider: &str,
     ) -> Option<opencarrier_types::brain::ProviderCredentials> {
         None
+    }
+
+    /// Execute a completion through the Brain's endpoint resolution and fallback chain.
+    ///
+    /// Resolves endpoints for the given modality, tries them in order (primary first,
+    /// then fallbacks), reports success/failure for circuit-breaker health tracking,
+    /// and returns the first successful response.
+    ///
+    /// This is the primary API for tools that need to call an LLM for a subtask
+    /// (vision understanding, transcription, image generation, etc.).
+    async fn complete(
+        &self,
+        modality: &str,
+        mut request: CompletionRequest,
+    ) -> OpenCarrierResult<CompletionResponse> {
+        let endpoints = self.endpoints_for(modality);
+        if endpoints.is_empty() {
+            return Err(OpenCarrierError::LlmDriver(format!(
+                "No endpoints configured for modality '{modality}'"
+            )));
+        }
+
+        let mut last_error: Option<String> = None;
+        for ep in &endpoints {
+            let Some(driver) = self.driver_for_endpoint(&ep.id) else {
+                continue;
+            };
+            request.model = ep.model.clone();
+            let start = std::time::Instant::now();
+            match driver.complete(request.clone()).await {
+                Ok(response) => {
+                    let latency = start.elapsed().as_millis() as u64;
+                    self.report(EndpointReport {
+                        endpoint_id: ep.id.clone(),
+                        success: true,
+                        latency_ms: latency,
+                        error: None,
+                    });
+                    return Ok(response);
+                }
+                Err(e) => {
+                    let latency = start.elapsed().as_millis() as u64;
+                    let err_str = format!("{e}");
+                    self.report(EndpointReport {
+                        endpoint_id: ep.id.clone(),
+                        success: false,
+                        latency_ms: latency,
+                        error: Some(err_str.clone()),
+                    });
+                    tracing::warn!(
+                        endpoint = %ep.id,
+                        modality = %modality,
+                        error = %e,
+                        "Brain endpoint failed, trying next fallback"
+                    );
+                    last_error = Some(err_str);
+                }
+            }
+        }
+
+        Err(OpenCarrierError::LlmDriver(last_error.unwrap_or_else(|| {
+            format!("All endpoints exhausted for modality '{modality}'")
+        })))
     }
 
     // --- Legacy methods ---

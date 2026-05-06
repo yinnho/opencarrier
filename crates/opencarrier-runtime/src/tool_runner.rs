@@ -120,6 +120,7 @@ pub async fn execute_tool(
     allowed_env_vars: Option<&[String]>,
     workspace_root: Option<&Path>,
     media_engine: Option<&crate::media_understanding::MediaEngine>,
+    brain: Option<&Arc<dyn crate::llm_driver::Brain>>,
     exec_policy: Option<&opencarrier_types::config::ExecPolicy>,
     tts_engine: Option<&crate::tts::TtsEngine>,
     docker_config: Option<&opencarrier_types::config::DockerSandboxConfig>,
@@ -308,7 +309,7 @@ pub async fn execute_tool(
         "image_analyze" => tool_image_analyze(input).await,
 
         // Media understanding tools
-        "media_describe" => tool_media_describe(input, media_engine).await,
+        "media_describe" => tool_media_describe(input, brain).await,
         "media_transcribe" => tool_media_transcribe(input, media_engine).await,
 
         // Image generation tool
@@ -3860,14 +3861,15 @@ fn tool_system_time() -> String {
 // Media understanding tools
 // ---------------------------------------------------------------------------
 
-/// Describe an image using a vision-capable LLM provider.
+/// Describe an image using a vision-capable LLM through the Brain fallback chain.
 async fn tool_media_describe(
     input: &serde_json::Value,
-    media_engine: Option<&crate::media_understanding::MediaEngine>,
+    brain: Option<&Arc<dyn crate::llm_driver::Brain>>,
 ) -> Result<String, String> {
     use base64::Engine;
-    let engine = media_engine.ok_or("Media engine not available. Check media configuration.")?;
+    let brain = brain.ok_or("Brain not available. Check configuration.")?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
+    let prompt = input["prompt"].as_str().unwrap_or("Describe this image in detail.");
     let _ = validate_path(path)?;
 
     // Read image file
@@ -3891,18 +3893,59 @@ async fn tool_media_describe(
         _ => return Err(format!("Unsupported image format: .{ext}")),
     };
 
-    let attachment = opencarrier_types::media::MediaAttachment {
-        media_type: opencarrier_types::media::MediaType::Image,
-        mime_type: mime.to_string(),
-        source: opencarrier_types::media::MediaSource::Base64 {
-            data: base64::engine::general_purpose::STANDARD.encode(&data),
-            mime_type: mime.to_string(),
-        },
-        size_bytes: data.len() as u64,
+    // Validate image size
+    let max_bytes = 5 * 1024 * 1024; // 5 MB
+    if data.len() > max_bytes {
+        return Err(format!(
+            "Image too large: {} bytes (max {} MB)",
+            data.len(),
+            max_bytes / (1024 * 1024)
+        ));
+    }
+
+    let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+
+    // Build a CompletionRequest with the image for the vision modality
+    let request = crate::llm_driver::CompletionRequest {
+        model: String::new(), // brain sets this from the resolved endpoint
+        messages: vec![opencarrier_types::message::Message {
+            role: opencarrier_types::message::Role::User,
+            content: opencarrier_types::message::MessageContent::Blocks(vec![
+                opencarrier_types::message::ContentBlock::Image {
+                    media_type: mime.to_string(),
+                    data: base64_data,
+                },
+                opencarrier_types::message::ContentBlock::Text {
+                    text: prompt.to_string(),
+                    provider_metadata: None,
+                },
+            ]),
+        }],
+        tools: vec![],
+        max_tokens: 1024,
+        temperature: 0.3,
+        system: None,
+        thinking: None,
     };
 
-    let understanding = engine.describe_image(&attachment).await?;
-    serde_json::to_string_pretty(&understanding).map_err(|e| format!("Serialize error: {e}"))
+    let response = brain
+        .complete("vision", request)
+        .await
+        .map_err(|e| format!("Vision LLM call failed: {e}"))?;
+
+    let description = response.text();
+    if description.is_empty() {
+        return Err("Vision model returned empty response".into());
+    }
+
+    let result = serde_json::json!({
+        "description": description,
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        },
+    });
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
 }
 
 /// Transcribe audio to text using speech-to-text.
@@ -4554,6 +4597,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(
@@ -4584,6 +4628,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4611,6 +4656,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4638,6 +4684,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4669,6 +4716,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         // web_search now attempts a real fetch; may succeed or fail depending on network
@@ -4696,6 +4744,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4723,6 +4772,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4751,6 +4801,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4782,6 +4833,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         // Should fail for file-not-found, NOT for permission denied
@@ -4828,6 +4880,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         // Should NOT be "Permission denied" — it should normalize to file_write
@@ -4862,6 +4915,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -5032,6 +5086,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -5078,6 +5133,7 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
+            None, // brain
         )
         .await;
         assert!(result.is_error);

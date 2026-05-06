@@ -267,6 +267,7 @@ pub async fn mcp_http(
             None,
             None,
             Some(&state.kernel.services.media_engine),
+            None, // brain (MCP HTTP calls don't go through agent_loop)
             Some(&state.kernel.config.exec_policy),
             if state.kernel.config.tts.enabled {
                 Some(&state.kernel.services.tts_engine)
