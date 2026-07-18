@@ -147,7 +147,7 @@ roxmltree = "0.20"
 urlencoding = "2"
 
 # MD5 hashing
-md-5 = "0.10"
+md-5 = "0.11"
 
 # Socket options (SO_REUSEADDR)
 socket2 = "0.5"
