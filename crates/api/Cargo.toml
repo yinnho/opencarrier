@@ -42,7 +42,7 @@ socket2 = { workspace = true }
 reqwest = { workspace = true }
 urlencoding = "2"
 anyhow = { workspace = true }
-fs4 = "0.12"
+fs4 = "1.1"
 lazy_static = "1"
 minijinja = "2"
 pulldown-cmark = "0.11"
