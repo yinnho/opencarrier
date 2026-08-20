@@ -81,9 +81,24 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-      - name: Run workspace tests (excluding aginx-memory, which shares the PG DB and runs serialized below)
-        run: cargo test --workspace --exclude aginx-memory
-        timeout-minutes: 15
+      - name: Bisect A (runtime modules a..plugin — set that always completes before death)
+        run: >
+          cargo test -p runtime --lib
+          a2a agent_loop api_tools apply_patch audit auth_cooldown channel_manager
+          command_lane compactor context_budget context_overflow drivers embedding
+          file_view graceful_shutdown hooks host_functions http_memory
+          intent_classifier kernel_handle link_understanding llm_driver_impl
+          llm_driver llm_errors mcp media_understanding outbound plugin
+      - name: Bisect B (process_manager only — spawn tests, prime suspect)
+        run: cargo test -p runtime --lib process_manager -- --nocapture
+      - name: Bisect C (runtime modules prompt_builder..workspace)
+        run: >
+          cargo test -p runtime --lib
+          prompt_builder python_runtime reply_directives sandbox session_repair
+          shell_bleed str_utils subprocess_sandbox text_tool_recovery think_filter
+          tool web_ wechat_identity workspace
+      - name: Bisect D (full runtime lib — ordering/interaction check)
+        run: cargo test -p runtime --lib
       - name: Run aginx-memory tests serialized (shared PG test DB - reset_and_migrate would trample under parallelism)
         run: cargo test -p aginx-memory -- --test-threads=1
         timeout-minutes: 15
