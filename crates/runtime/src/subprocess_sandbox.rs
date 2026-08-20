@@ -387,61 +387,40 @@ pub async fn kill_process_tree(pid: u32, grace_ms: u64) -> CarrierResult<bool> {
 
 #[cfg(unix)]
 async fn kill_tree_unix(pid: u32, grace_ms: u64) -> CarrierResult<bool> {
-    use tokio::process::Command;
-
+    // SECURITY/STABILITY: never shell out to `/bin/kill -TERM -<pgid>` here.
+    // Ubuntu 22.04 procps `kill` mis-parses `-<signal> -<pid>` and issues
+    // kill(0, SIGTERM) - SIGTERM to the *caller's own* process group. On
+    // GitHub-hosted runners that took down the entire job (the CI "runner
+    // received a shutdown signal" deaths); in production it would SIGTERM the
+    // daemon's own process group. Direct kill(2) syscalls only.
     let pid_i32 = pid as i32;
 
-    // Try to kill the process group first (negative PID).
-    // This kills the process and all its children.
-    let group_kill = Command::new("kill")
-        .args(["-TERM", &format!("-{pid_i32}")])
-        .output()
-        .await;
-
-    if group_kill.is_err() {
-        // Fallback: kill just the process.
-        let _ = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .output()
-            .await;
+    // Try to kill the process group first (negative PID kills the group).
+    // Fall back to killing just the process if no such group exists.
+    if unsafe { libc::kill(-pid_i32, libc::SIGTERM) } != 0 {
+        unsafe { libc::kill(pid_i32, libc::SIGTERM) };
     }
 
     // Wait for grace period.
     tokio::time::sleep(std::time::Duration::from_millis(grace_ms)).await;
 
-    // Check if still alive.
-    let check = Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .output()
-        .await;
+    // Check if still alive (signal 0 = existence probe).
+    let still_alive = unsafe { libc::kill(pid_i32, 0) } == 0;
 
-    match check {
-        Ok(output) if output.status.success() => {
-            // Still alive — force kill.
-            tracing::warn!(
-                pid,
-                "Process still alive after grace period, sending SIGKILL"
-            );
+    if still_alive {
+        tracing::warn!(
+            pid,
+            "Process still alive after grace period, sending SIGKILL"
+        );
 
-            // Try group kill first.
-            let _ = Command::new("kill")
-                .args(["-9", &format!("-{pid_i32}")])
-                .output()
-                .await;
-
-            // Also try direct kill.
-            let _ = Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .output()
-                .await;
-
-            Ok(true)
-        }
-        _ => {
-            // Process is already dead (kill -0 failed = no such process).
-            Ok(true)
+        // Try group kill first, then direct.
+        unsafe {
+            libc::kill(-pid_i32, libc::SIGKILL);
+            libc::kill(pid_i32, libc::SIGKILL);
         }
     }
+
+    Ok(true)
 }
 
 #[cfg(windows)]
@@ -523,6 +502,31 @@ mod tests {
         // Verify the capping logic used in kill_process_tree.
         let capped = 100_000u64.min(MAX_GRACE_MS);
         assert_eq!(capped, 60_000);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_kill_process_tree_kills_child_group_not_caller() {
+        // Regression: the old /bin/kill -TERM -<pgid> shell-out parsed as
+        // kill(0, SIGTERM) on Ubuntu 22.04 procps and SIGTERMed the caller's
+        // own process group (killed CI runners; in prod would kill the daemon
+        // whenever an agent ended a persistent process). Direct libc::kill
+        // must kill ONLY the child's group - if the caller's group died, this
+        // test process would be terminated before reaching the asserts.
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("pid");
+        kill_process_tree(pid, 50)
+            .await
+            .expect("kill_process_tree ok");
+        let status = child.wait().await.expect("wait child");
+        assert!(
+            !status.success(),
+            "sleep 30 must be killed by the group kill, not exit normally"
+        );
     }
 
     #[tokio::test]

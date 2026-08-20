@@ -81,18 +81,9 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-      - name: Probe 5 granular kill path (KPROBE markers)
-        run: cargo test -p runtime --test ci_probe -- probe_kill_granular --nocapture --exact
-      - name: Probe 4 full ProcessManager path (re-confirm)
-        run: cargo test -p runtime --test ci_probe -- probe_tokio_full_path --nocapture --exact
-      - name: Bisect C (runtime modules prompt_builder..workspace)
-        run: >
-          cargo test -p runtime --lib --
-          prompt_builder python_runtime reply_directives sandbox session_repair
-          shell_bleed str_utils subprocess_sandbox text_tool_recovery think_filter
-          tool web_ wechat_identity workspace
-      - name: Bisect D (full runtime lib - ordering/interaction check)
-        run: cargo test -p runtime --lib
+      - name: Run workspace tests (excluding aginx-memory, which shares the PG DB and runs serialized below)
+        run: cargo test --workspace --exclude aginx-memory
+        timeout-minutes: 15
       - name: Run aginx-memory tests serialized (shared PG test DB - reset_and_migrate would trample under parallelism)
         run: cargo test -p aginx-memory -- --test-threads=1
         timeout-minutes: 15

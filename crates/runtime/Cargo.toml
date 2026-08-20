@@ -10,6 +10,7 @@ types = { path = "../types" }
 clone = { path = "../clone" }
 memory = { path = "../memory" }
 lifecycle = { path = "../lifecycle" }
+libc = "0.2"
 tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
