@@ -83,7 +83,7 @@ jobs:
             patchelf
       - name: Bisect A (runtime modules a..plugin — set that always completes before death)
         run: >
-          cargo test -p runtime --lib
+          cargo test -p runtime --lib --
           a2a agent_loop api_tools apply_patch audit auth_cooldown channel_manager
           command_lane compactor context_budget context_overflow drivers embedding
           file_view graceful_shutdown hooks host_functions http_memory
@@ -93,7 +93,7 @@ jobs:
         run: cargo test -p runtime --lib process_manager -- --nocapture
       - name: Bisect C (runtime modules prompt_builder..workspace)
         run: >
-          cargo test -p runtime --lib
+          cargo test -p runtime --lib --
           prompt_builder python_runtime reply_directives sandbox session_repair
           shell_bleed str_utils subprocess_sandbox text_tool_recovery think_filter
           tool web_ wechat_identity workspace
