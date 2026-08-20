@@ -83,7 +83,6 @@ async fn probe_tokio_full_path() {
 #[cfg(unix)]
 #[tokio::test]
 async fn probe_kill_granular() {
-    use std::os::unix::process::CommandExt;
     println!("KPROBE a: spawning cat with process_group(0)...");
     let mut cmd = tokio::process::Command::new("cat");
     cmd.env_clear()
