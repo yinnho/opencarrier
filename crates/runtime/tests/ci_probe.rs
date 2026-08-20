@@ -77,3 +77,48 @@ async fn probe_tokio_full_path() {
     let _ = pm.kill(&id).await;
     println!("PROBE tokio_full: done");
 }
+
+/// Granular kill-path probe: replicate kill_tree_unix step by step with
+/// markers, so the last marker before death pinpoints the killing operation.
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_kill_granular() {
+    use std::os::unix::process::CommandExt;
+    println!("KPROBE a: spawning cat with process_group(0)...");
+    let mut cmd = tokio::process::Command::new("cat");
+    cmd.env_clear()
+        .env("PATH", path_env())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0);
+    let mut child = cmd.spawn().expect("spawn cat");
+    let pid = child.id().expect("pid");
+    println!("KPROBE b: spawned pid={pid}");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    println!("KPROBE c: running /bin/kill -TERM -{pid}...");
+    let out = tokio::process::Command::new("kill")
+        .args(["-TERM", &format!("-{pid}")])
+        .output()
+        .await
+        .expect("run kill");
+    println!(
+        "KPROBE d: group kill done status={:?} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    println!("KPROBE e: kill -0 {pid} liveness check...");
+    let check = tokio::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+        .await
+        .expect("kill -0");
+    println!("KPROBE f: check status={:?}", check.status.code());
+
+    println!("KPROBE g: child.kill() (direct SIGKILL)...");
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    println!("KPROBE h: done");
+}

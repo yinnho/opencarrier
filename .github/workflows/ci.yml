@@ -81,13 +81,9 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-      - name: Probe 1 plain spawn (control)
-        run: cargo test -p runtime --test ci_probe -- probe_plain_spawn --nocapture --exact
-      - name: Probe 2 env_clear
-        run: cargo test -p runtime --test ci_probe -- probe_env_clear --nocapture --exact
-      - name: Probe 3 process_group
-        run: cargo test -p runtime --test ci_probe -- probe_process_group --nocapture --exact
-      - name: Probe 4 full ProcessManager::start path
+      - name: Probe 5 granular kill path (KPROBE markers)
+        run: cargo test -p runtime --test ci_probe -- probe_kill_granular --nocapture --exact
+      - name: Probe 4 full ProcessManager path (re-confirm)
         run: cargo test -p runtime --test ci_probe -- probe_tokio_full_path --nocapture --exact
       - name: Bisect C (runtime modules prompt_builder..workspace)
         run: >
