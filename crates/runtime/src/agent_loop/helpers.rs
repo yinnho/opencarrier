@@ -135,6 +135,20 @@ pub const CUMULATIVE_ESCALATE_AT: u32 = 5;
 /// burned 600s).
 pub const CUMULATIVE_BREAK_AT: u32 = 8;
 
+/// Whole-turn read-without-write stall: the model has called `file_read` this
+/// many times (across DIFFERENT paths — so the per-call cumulative detector
+/// never fires) without a single `file_write`. This is the "must-read-before-
+/// write" compulsion that prompt guidance does not fix: the model announces
+/// "现在落盘" then reads one more file, forever (2026-08-22 86bus:
+/// article-brief fetched its URL, then file_read ~12 distinct paths over 14
+/// iterations while never calling file_write). At this threshold we inject a
+/// hard nudge; at [`READ_WITHOUT_WRITE_BREAK_AT`] we abort the turn.
+pub const READ_WITHOUT_WRITE_REMIND_AT: u32 = 6;
+/// Final read-without-write stage — abort the turn. After this many distinct
+/// `file_read` calls with zero `file_write`, further reading is not going to
+/// converge on writing; abort to save the iteration budget.
+pub const READ_WITHOUT_WRITE_BREAK_AT: u32 = 10;
+
 /// Default context window size (tokens) for token-based trimming.
 pub(in crate::agent_loop) const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 

@@ -135,9 +135,16 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // calls count too: a model hammering a denied call (allowlist wall,
     // missing tool) is exactly the loop worth breaking.
     let mut cumulative_warnings: Vec<String> = Vec::new();
+    let mut this_iter_reads: u32 = 0;
+    let mut this_iter_writes: u32 = 0;
     for tc in &response.tool_calls {
         let key = super::helpers::tool_call_key(&tc.name, &tc.input);
         recent_tool_calls.push(key.clone());
+        if tc.name == "file_read" {
+            this_iter_reads += 1;
+        } else if tc.name == "file_write" {
+            this_iter_writes += 1;
+        }
         // Cumulative (whole-turn) repetition counter — distinct from the
         // sliding window above. Survives recent_tool_calls.clear(). Catches
         // ROTATING repetition (same call interleaved with others so the
@@ -198,6 +205,48 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                  重复同样的调用不会产生新结果——请改变做法：换参数、换工具，或直接基于已有结果产出答案。",
                 name = key.0,
                 preview = super::helpers::tool_args_preview(&tc.input, 120),
+            ));
+        }
+    }
+    // Read-without-write stall detection: the per-call cumulative detector above
+    // only fires on IDENTICAL (name, input) repeats. A model that reads a
+    // DIFFERENT path every iteration evades it while never writing — the
+    // "must-read-before-write" compulsion (2026-08-22 86bus article-brief:
+    // ~12 distinct file_read paths, zero file_write, announced "现在落盘" every
+    // round yet never wrote). Aggregate file_read/file_write counts across the
+    // whole turn (survives interleaving) and nudge at REMIND, abort at BREAK.
+    {
+        let turn_reads: u32 = tool_call_counts
+            .iter()
+            .filter(|((name, _), _)| name == "file_read")
+            .map(|(_, c)| *c)
+            .sum::<u32>()
+            + this_iter_reads;
+        let turn_writes: u32 = tool_call_counts
+            .iter()
+            .filter(|((name, _), _)| name == "file_write")
+            .map(|(_, c)| *c)
+            .sum::<u32>()
+            + this_iter_writes;
+        if turn_writes == 0 && turn_reads >= super::helpers::READ_WITHOUT_WRITE_BREAK_AT {
+            warn!(
+                agent = %manifest.name,
+                turn_reads,
+                threshold = super::helpers::READ_WITHOUT_WRITE_BREAK_AT,
+                iteration,
+                "Read-without-write stall — aborting turn (distinct file_read paths, no file_write)"
+            );
+            return ToolUseAction::BreakToolLoop(format!(
+                "agent 本轮已 file_read {turn_reads} 个（不同）文件却一次 file_write 都没调——\
+                 这是\"写前必读\"的僵死循环，靠提醒改不了。终止本轮以省预算。\
+                 如果任务是创建/更新文件，请直接用 file_write，不要再 file_read 探测。"
+            ));
+        }
+        if turn_writes == 0 && turn_reads >= super::helpers::READ_WITHOUT_WRITE_REMIND_AT {
+            cumulative_warnings.push(format!(
+                "⚠️ 本轮已 file_read {turn_reads} 个文件，但还没有任何 file_write。\
+                 如果你的目标是创建新文件（如 素材.md/状态.md），现在就应该用 file_write 写入——\
+                 不要再读旧管线文件或探测\"不存在\"的文件。再继续只读不写会被判定卡死。"
             ));
         }
     }
