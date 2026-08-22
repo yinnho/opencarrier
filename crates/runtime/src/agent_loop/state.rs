@@ -151,13 +151,21 @@ pub struct LoopState {
     pub iteration: u32,
     /// Consecutive iterations that made no progress (no tool call, no final
     /// answer, not actively generating via MaxTokens). Reaches
-    /// [`super::NO_PROGRESS_THRESHOLD`] -> turn aborted as stuck.
+    /// [`super::NO_PROGRESS_THRESHOLD`] (pure narration spin) or
+    /// [`super::NO_PROGRESS_ACTIVE_THRESHOLD`] (tools called but all errored)
+    /// -> turn aborted as stuck.
     pub idle_streak: u32,
     /// Tools executed in the CURRENT iteration. Reset at the top of each
     /// `loop_iteration`; bumped per SUCCESSFUL tool call in `tool_use` (failed
     /// calls don't count - an all-failed iteration is treated as no-progress).
     /// Drives the no-progress detector.
     pub tools_this_iter: u32,
+    /// Tool calls ATTEMPTED in the current iteration (success or failure —
+    /// bumped before the result check). An all-errored iteration with
+    /// attempts > 0 is "active but failing": the model is still working
+    /// (e.g. deliberate ENOENT existence probes before a write), so the
+    /// no-progress detector gives it a wider leash than a narration spin.
+    pub tools_attempted_this_iter: u32,
     pub context_tokens_used_estimate: usize,
     pub context_tokens_max: usize,
     pub context_pressure: ContextPressure,
@@ -201,6 +209,7 @@ impl LoopState {
             iteration: 0,
             idle_streak: 0,
             tools_this_iter: 0,
+            tools_attempted_this_iter: 0,
             context_tokens_used_estimate: 0,
             context_tokens_max: context_window_tokens,
             context_pressure: ContextPressure::Normal,
@@ -233,14 +242,32 @@ impl LoopState {
     /// "Progress" = the iteration called at least one SUCCESSFUL tool, produced a
     /// final answer, or was actively generating (MaxTokens). A ToolUse iteration
     /// where every tool errored (or an EndTurn/StopSequence spin with no tools)
-    /// counts as idle. Only consecutive idle turns trip the threshold.
-    pub fn record_iteration_progress(&mut self, made_progress: bool) -> Option<u32> {
+    /// counts as idle; if tools were at least ATTEMPTED (`tools_attempted > 0`)
+    /// the wider `NO_PROGRESS_ACTIVE_THRESHOLD` applies instead of the
+    /// narration-spin `NO_PROGRESS_THRESHOLD`. Only consecutive idle turns trip
+    /// either threshold.
+    pub fn record_iteration_progress(
+        &mut self,
+        made_progress: bool,
+        tools_attempted: u32,
+    ) -> Option<u32> {
         if made_progress {
             self.idle_streak = 0;
             return None;
         }
         self.idle_streak += 1;
-        if self.idle_streak >= super::NO_PROGRESS_THRESHOLD {
+        // Active-but-failing iterations (tools were called, every one errored)
+        // get a wider leash than pure narration spins: the model is still
+        // working — e.g. deliberate ENOENT existence probes right before a
+        // file_write (2026-08-22 86bus: article-brief fetched its URL, then
+        // probed 3 missing files and was killed one step before writing).
+        // Same-parameter tool repetition remains BreakToolLoop's jurisdiction.
+        let threshold = if tools_attempted > 0 {
+            super::NO_PROGRESS_ACTIVE_THRESHOLD
+        } else {
+            super::NO_PROGRESS_THRESHOLD
+        };
+        if self.idle_streak >= threshold {
             Some(self.idle_streak)
         } else {
             None

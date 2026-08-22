@@ -114,16 +114,16 @@ fn test_record_progress_aborts_after_threshold_idle_iters() {
     // No progress for 3 consecutive iterations -> Some(streak) on the 3rd.
     let mut state = LoopState::new(128_000);
     assert_eq!(
-        state.record_iteration_progress(false),
+        state.record_iteration_progress(false, 0),
         None,
         "1st idle: under threshold"
     );
     assert_eq!(
-        state.record_iteration_progress(false),
+        state.record_iteration_progress(false, 0),
         None,
         "2nd idle: under threshold"
     );
-    let stuck = state.record_iteration_progress(false);
+    let stuck = state.record_iteration_progress(false, 0);
     assert_eq!(stuck, Some(3), "3rd idle: threshold reached");
 }
 
@@ -131,25 +131,56 @@ fn test_record_progress_aborts_after_threshold_idle_iters() {
 fn test_record_progress_resets_on_tool_or_completion() {
     let mut state = LoopState::new(128_000);
     // Two idle, then progress (tool call) resets the streak.
-    assert_eq!(state.record_iteration_progress(false), None);
-    assert_eq!(state.record_iteration_progress(false), None);
+    assert_eq!(state.record_iteration_progress(false, 0), None);
+    assert_eq!(state.record_iteration_progress(false, 0), None);
     assert_eq!(
-        state.record_iteration_progress(true),
+        state.record_iteration_progress(true, 0),
         None,
         "progress resets streak"
     );
     // Streak restarted - needs 3 more idle to trip.
-    assert_eq!(state.record_iteration_progress(false), None);
-    assert_eq!(state.record_iteration_progress(false), None);
-    assert_eq!(state.record_iteration_progress(false), Some(3));
+    assert_eq!(state.record_iteration_progress(false, 0), None);
+    assert_eq!(state.record_iteration_progress(false, 0), None);
+    assert_eq!(state.record_iteration_progress(false, 0), Some(3));
 }
 
 #[test]
 fn test_record_progress_progress_never_aborts() {
     let mut state = LoopState::new(128_000);
     for _ in 0..100 {
-        assert_eq!(state.record_iteration_progress(true), None);
+        assert_eq!(state.record_iteration_progress(true, 0), None);
     }
+}
+
+#[test]
+fn test_record_progress_active_failing_gets_wider_leash() {
+    // Tools were attempted but all errored ("active but failing"): the wider
+    // NO_PROGRESS_ACTIVE_THRESHOLD applies instead of the narration-spin 3.
+    // 2026-08-22 86bus article-brief: ENOENT existence probes right before a
+    // file_write must not be killed at streak 3.
+    let mut state = LoopState::new(128_000);
+    assert_eq!(state.record_iteration_progress(false, 1), None, "1st active-fail");
+    assert_eq!(state.record_iteration_progress(false, 1), None, "2nd active-fail");
+    assert_eq!(state.record_iteration_progress(false, 1), None, "3rd active-fail: still under active threshold");
+    assert_eq!(state.record_iteration_progress(false, 1), None, "4th active-fail");
+    assert_eq!(
+        state.record_iteration_progress(false, 1),
+        Some(5),
+        "5th active-fail: active threshold reached"
+    );
+    // A successful tool anywhere resets the streak even mid-active-fail run.
+    assert_eq!(state.record_iteration_progress(true, 1), None);
+    assert_eq!(state.record_iteration_progress(false, 1), None);
+    // Mixed classes: the threshold is evaluated per-iteration - a narration
+    // spin (no attempts) still trips the tight 3.
+    let mut mixed = LoopState::new(128_000);
+    assert_eq!(mixed.record_iteration_progress(false, 1), None);
+    assert_eq!(mixed.record_iteration_progress(false, 1), None);
+    assert_eq!(
+        mixed.record_iteration_progress(false, 0),
+        Some(3),
+        "narration spin trips the tight threshold"
+    );
 }
 
 #[test]

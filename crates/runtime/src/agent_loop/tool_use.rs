@@ -94,6 +94,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     consecutive_max_tokens: &mut u32,
     any_tools_executed: &mut bool,
     tools_this_iter: &mut u32,
+    tools_attempted_this_iter: &mut u32,
     recent_tool_calls: &mut Vec<(String, u64)>,
     tools_owned: &mut Vec<ToolDefinition>,
     discovered_tool_names: &mut std::collections::HashSet<String>,
@@ -116,6 +117,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // Note: tools_this_iter is bumped per SUCCESSFUL tool execution below (after
     // the execute_tool call), not here on entry. A ToolUse iteration where every
     // tool call errored counts as no-progress for the idle detector (Problem 3).
+    // tools_attempted_this_iter counts every call regardless of outcome so the
+    // detector can distinguish "active but failing" (wider threshold) from a
+    // narration spin.
 
     let assistant_blocks = response.content.clone();
 
@@ -470,6 +474,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         // (permission denied, path traversal, not found, timeout) leaves
         // tools_this_iter == 0 and is treated as idle. A single success anywhere
         // in the iteration marks it as progress.
+        *tools_attempted_this_iter = tools_attempted_this_iter.saturating_add(1);
         if !result.is_error {
             *tools_this_iter = tools_this_iter.saturating_add(1);
         }

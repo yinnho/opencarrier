@@ -71,6 +71,15 @@ pub use knowledge::merge_key_facts;
 /// Aligns with `CUMULATIVE_REMIND_AT` - 3 idle turns is clearly spinning.
 const NO_PROGRESS_THRESHOLD: u32 = 3;
 
+/// Wider leash for ACTIVE-but-failing iterations: tools were called but every
+/// one errored. The model is still working (deliberate ENOENT existence
+/// probes before a write, retry with different params after an error hint),
+/// so one extra pivot step is granted before declaring the turn stuck
+/// (2026-08-22 86bus article-brief: killed one step before file_write).
+/// Same-parameter repetition is BreakToolLoop's jurisdiction, and the
+/// declared/anchored max_iterations cap remains the ultimate bound.
+const NO_PROGRESS_ACTIVE_THRESHOLD: u32 = 5;
+
 const MAX_TEXT_RECOVERY_RETRIES: u32 = 2;
 
 /// Agent lifecycle phase within the execution loop.
@@ -503,6 +512,7 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
 
     // Reset per-iteration tool counter for the no-progress detector.
     ctx.state.tools_this_iter = 0;
+    ctx.state.tools_attempted_this_iter = 0;
 
     // ---- PREPARE_TURN ----
     prepare_turn(ctx);
@@ -543,11 +553,17 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
     // without converging -> abort as stuck. A successful tool call, completion,
     // or active generation (MaxTokens) resets the streak. Note: a ToolUse
     // iteration where every tool errored is idle (tools_this_iter stays 0) -
-    // stop_reason==ToolUse alone no longer counts as progress.
+    // stop_reason==ToolUse alone no longer counts as progress. But if tools
+    // were at least ATTEMPTED, the wider NO_PROGRESS_ACTIVE_THRESHOLD applies
+    // (active-but-failing != narration spin).
     let made_progress = !matches!(action, LoopAction::Continue)
         || ctx.state.tools_this_iter > 0
         || matches!(stop_reason, StopReason::MaxTokens);
-    if let Some(streak) = ctx.state.record_iteration_progress(made_progress) {
+    let tools_attempted = ctx.state.tools_attempted_this_iter;
+    if let Some(streak) = ctx
+        .state
+        .record_iteration_progress(made_progress, tools_attempted)
+    {
         warn!(
             iteration = ctx.state.iteration,
             idle_streak = streak,
@@ -951,6 +967,7 @@ async fn dispatch(
                 &mut ctx.state.consecutive_max_tokens,
                 &mut ctx.state.any_tools_executed,
                 &mut ctx.state.tools_this_iter,
+                &mut ctx.state.tools_attempted_this_iter,
                 &mut ctx.state.recent_tool_calls,
                 &mut ctx.tools_owned,
                 &mut ctx.discovered_tool_names,
