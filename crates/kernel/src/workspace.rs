@@ -76,7 +76,7 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
          - Values are always arrays — use kv_list() to see all stored keys, kv_list(\"entity.\") to filter by prefix\n\
          - When you discover missing info during a task, ask the user, and after success store it + update the relevant flow.\n\n\
          ## Tool Usage Protocols\n\
-         - file_read BEFORE file_write \u{2014} always understand what exists.\n\
+         - file_read ONLY when you need a file's EXISTING content; to CREATE a new file, file_write directly \u{2014} never pre-probe existence (read-probe \u{201c}not found\u{201d} \u{2192} re-read \u{2192} re-read is a loop).\n\
          - web_fetch for specific URLs.\n\
          - browser_* for interactive sites that need clicks/JS evaluation.\n\
          - AginxBrowser powers browser tools: fast, lightweight, no screenshots.\n\
