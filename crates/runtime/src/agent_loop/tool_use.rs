@@ -135,16 +135,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // calls count too: a model hammering a denied call (allowlist wall,
     // missing tool) is exactly the loop worth breaking.
     let mut cumulative_warnings: Vec<String> = Vec::new();
-    let mut this_iter_reads: u32 = 0;
-    let mut this_iter_writes: u32 = 0;
     for tc in &response.tool_calls {
         let key = super::helpers::tool_call_key(&tc.name, &tc.input);
         recent_tool_calls.push(key.clone());
-        if tc.name == "file_read" {
-            this_iter_reads += 1;
-        } else if tc.name == "file_write" {
-            this_iter_writes += 1;
-        }
         // Cumulative (whole-turn) repetition counter — distinct from the
         // sliding window above. Survives recent_tool_calls.clear(). Catches
         // ROTATING repetition (same call interleaved with others so the
@@ -220,14 +213,12 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             .iter()
             .filter(|((name, _), _)| name == "file_read")
             .map(|(_, c)| *c)
-            .sum::<u32>()
-            + this_iter_reads;
+            .sum::<u32>();
         let turn_writes: u32 = tool_call_counts
             .iter()
             .filter(|((name, _), _)| name == "file_write")
             .map(|(_, c)| *c)
-            .sum::<u32>()
-            + this_iter_writes;
+            .sum::<u32>();
         if turn_writes == 0 && turn_reads >= super::helpers::READ_WITHOUT_WRITE_BREAK_AT {
             warn!(
                 agent = %manifest.name,

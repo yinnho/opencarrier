@@ -210,8 +210,24 @@ impl UnifiedHttpDriver {
             match (&msg.role, &msg.content) {
                 (Role::System, MessageContent::Text(text)) => {
                     if request.system.is_none() {
+                        // No separate system field set — promote the base prompt
+                        // (messages[0]) to a system message.
                         oai_messages.push(OaiMessage {
                             role: "system".to_string(),
+                            content: Some(OaiMessageContent::Text(text.clone())),
+                            tool_calls: None,
+                            tool_call_id: None,
+                            reasoning_content: None,
+                        });
+                    } else {
+                        // `request.system` already carries the base prompt, so any
+                        // System message in the history is a loop-internal nudge
+                        // (repetition warning, text-recovery guidance, stuck-reason
+                        // prompt_line). Silently dropping them made every
+                        // "educate before punish" reminder a no-op since c41502c.
+                        // Inject as a user message so the nudge reaches the model.
+                        oai_messages.push(OaiMessage {
+                            role: "user".to_string(),
                             content: Some(OaiMessageContent::Text(text.clone())),
                             tool_calls: None,
                             tool_call_id: None,
