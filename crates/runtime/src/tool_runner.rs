@@ -885,7 +885,8 @@ mod tests {
         assert!(
             result.content.contains("Failed to read")
                 || result.content.contains("not found")
-                || result.content.contains("No such file"),
+                || result.content.contains("No such file")
+                || result.content.contains("不存在"),
             "Unexpected error: {}",
             result.content
         );

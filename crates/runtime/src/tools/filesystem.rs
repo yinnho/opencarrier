@@ -346,6 +346,19 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<S
             // on different dir paths and evades the exact-match loop guard.
             return Err(CarrierError::InvalidInput(directory_read_hint(raw_path)));
         }
+    } else {
+        // ENOENT on a deliberate existence probe is an ANSWER ("does not
+        // exist"), not a failure. Returning a plain Internal error poisoned
+        // the error tracker and — worse — burned no-progress idle streaks:
+        // the "file_read BEFORE file_write" protocol commands pre-write
+        // probes, so a model following instructions was killed by the stuck
+        // governor mid-pivot (2026-08-22 86bus: article-brief fetched its
+        // URL, probed 素材.md/状态.md, died one step before file_write).
+        return Err(CarrierError::InvalidInput(format!(
+            "文件 '{raw_path}' 不存在（ENOENT）。\
+             如果你是在写前探测存在性：答案是\"不存在\"——不要换路径重试，\
+             请立即用 file_write 创建它。"
+        )));
     }
 
     tokio::fs::read_to_string(&resolved).await.map_err(|e| {
