@@ -348,17 +348,20 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<S
         }
     } else {
         // ENOENT on a deliberate existence probe is an ANSWER ("does not
-        // exist"), not a failure. Returning a plain Internal error poisoned
-        // the error tracker and — worse — burned no-progress idle streaks:
-        // the "file_read BEFORE file_write" protocol commands pre-write
-        // probes, so a model following instructions was killed by the stuck
-        // governor mid-pivot (2026-08-22 86bus: article-brief fetched its
-        // URL, probed 素材.md/状态.md, died one step before file_write).
-        return Err(CarrierError::InvalidInput(format!(
-            "文件 '{raw_path}' 不存在（ENOENT）。\
-             如果你是在写前探测存在性：答案是\"不存在\"——不要换路径重试，\
-             请立即用 file_write 创建它。"
-        )));
+        // exist"), not a failure. Returning Err poisoned the error tracker
+        // and burned no-progress idle streaks: the "file_read BEFORE
+        // file_write" protocol commands pre-write probes, so a model
+        // following instructions was killed by the stuck governor mid-pivot
+        // (2026-08-22 86bus: article-brief fetched its URL, probed
+        // 素材.md/状态.md ENOENT ×4, died one step before file_write).
+        // Even after making the error message explicit ("don't retry, write
+        // now"), the model still probed — the error itself (is_error=true)
+        // triggered "try different path" behavior regardless of content.
+        // Return Ok instead: probe succeeds, answer is "doesn't exist",
+        // counts as progress, model moves on to file_write.
+        return Ok(format!(
+            "文件 '{raw_path}' 不存在。如果你想创建它，请直接用 file_write 写入内容。"
+        ));
     }
 
     tokio::fs::read_to_string(&resolved).await.map_err(|e| {

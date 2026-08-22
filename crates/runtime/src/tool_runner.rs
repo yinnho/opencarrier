@@ -869,7 +869,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_level_allowed() {
-        // file_read is ReadOnly level, noop_ctx has Write level — should pass permission check
+        // file_read is ReadOnly level, noop_ctx has Write level — should pass permission check.
+        // ENOENT is a successful "does not exist" answer (not an error), so assert the result
+        // is NOT a permission denial.
         let result = execute_tool(
             "test-id",
             "file_read",
@@ -878,16 +880,8 @@ mod tests {
         )
         .await;
         assert!(
-            result.is_error,
-            "Expected error but got: {}",
-            result.content
-        );
-        assert!(
-            result.content.contains("Failed to read")
-                || result.content.contains("not found")
-                || result.content.contains("No such file")
-                || result.content.contains("不存在"),
-            "Unexpected error: {}",
+            !result.content.contains("Permission denied"),
+            "file_read should pass permission check but got: {}",
             result.content
         );
     }
