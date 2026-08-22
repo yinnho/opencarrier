@@ -63,6 +63,17 @@ pub(super) struct LoopContext<'a> {
     /// Commands stay scoped: elevation requires the flow's `shell_allow`, and
     /// the pattern gate runs on every shell_exec.
     pub loaded_flow_elevated_tools: Vec<String>,
+    /// Declared tools of ALL flows loaded mid-turn via `flow_load` (elevating
+    /// AND non-elevating). Used to (a) add the just-loaded flow's tools to the
+    /// LLM tool list (`tools_owned`) and (b) widen the flow `tools:` hard
+    /// sandbox so a non-elevating flow's tools (e.g. article-brief declaring
+    /// `file_write`) aren't rejected at execution. `loaded_flow_elevated_tools`
+    /// only covers ELEVATING flows (level + admin-gate bypass); without this
+    /// separate list a non-elevating flow loaded mid-turn got its body injected
+    /// but its declared tools never offered — the model was told "file_write is
+    /// available" by the flow body while the tool wasn't in CompletionRequest
+    /// tools, so it fell back to file_read and looped (2026-08-22 86bus).
+    pub loaded_flow_tools: Vec<String>,
 
     // ---- Kernel & external ----
     pub kernel: Option<Arc<dyn KernelHandle>>,
