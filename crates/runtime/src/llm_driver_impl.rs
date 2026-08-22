@@ -681,6 +681,25 @@ impl UnifiedHttpDriver {
         oai_request: &mut OaiRequest,
         header_timeout_secs: u64,
     ) -> Result<reqwest::Response, LlmError> {
+        // Ops debug capture: dump full LLM request payloads to files when
+        // OPENCARRIER_DUMP_LLM_DIR is set (headers/keys are NOT included —
+        // body only). One file per request, numbered in send order. Used to
+        // diagnose "production turn behaves differently from isolated repro"
+        // cases where the assembled context is the suspected variable.
+        if let Ok(dir) = std::env::var("OPENCARRIER_DUMP_LLM_DIR") {
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::path::Path::new(&dir).join(format!("req-{n:04}.json"));
+            match serde_json::to_vec_pretty(&*oai_request) {
+                Ok(bytes) => {
+                    if let Err(e) = std::fs::write(&path, bytes) {
+                        debug!(?path, error = %e, "LLM request dump failed");
+                    }
+                }
+                Err(e) => debug!(error = %e, "LLM request dump serialize failed"),
+            }
+        }
+
         let max_retries: u8 = 3;
         for attempt in 0..=max_retries {
             let url = self.base_url.clone();
