@@ -801,6 +801,29 @@ impl CarrierKernel {
                 .into_iter()
                 .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
                 .collect();
+        // Bridge core names that live in the plugin dispatcher instead of the
+        // builtin catalog (oa_draft_list) — mirrors resolve_tools in messaging.rs.
+        if let Some(dispatcher) = self
+            .plugins
+            .plugin_tool_dispatcher
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+        {
+            let have: std::collections::HashSet<String> =
+                tools.iter().map(|t| t.name.clone()).collect();
+            let bridged: Vec<types::tool::ToolDefinition> = dispatcher
+                .definitions()
+                .into_iter()
+                .filter(|d| {
+                    types::tool::CORE_TOOL_NAMES.contains(&d.name.as_str())
+                        && !have.contains(&d.name)
+                        && types::tool::PermissionLevel::for_tool(&d.name)
+                            != types::tool::PermissionLevel::Dangerous
+                })
+                .collect();
+            tools.extend(bridged);
+        }
         if !entry.manifest.subagents.is_empty() {
             tools.extend(types::agent::build_subagent_tool_definitions(
                 &entry.manifest.subagents,

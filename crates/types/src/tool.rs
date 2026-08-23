@@ -541,6 +541,13 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     // save credentials the user provides mid-flow — regressing "一直给 app_secret
     // 一直要". Core = always assembled = always inside every flow's allow-list.
     "user_profile",
+    // oa_draft_list must be core (not just catalog): same sandbox logic as
+    // user_profile. It's a plugin-dispatcher tool (weixin-oa builtin), so the
+    // resolver bridges from CORE_TOOL_NAMES to the dispatcher; being in the
+    // assembled base set puts it inside every flow's allow-list — otherwise a
+    // caged turn (consultation fallback) filters both tool_search hits and
+    // execution, and the agent can never read its own OA draft box (08-23).
+    "oa_draft_list",
 ];
 
 #[cfg(test)]
