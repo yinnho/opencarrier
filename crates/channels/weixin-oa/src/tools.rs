@@ -32,6 +32,125 @@ pub(crate) async fn refresh_token(
 }
 
 // ---------------------------------------------------------------------------
+// Draft box read tool (AI + API pattern — no MCP)
+// ---------------------------------------------------------------------------
+
+/// List/read drafts from a WeChat OA draft box. Read-only counterpart to
+/// [`WeixinOaPublishArticleTool`]. Credentials are resolved server-side from
+/// `senders/<app_id>/session.json` (or the caller-provided user-profile path)
+/// and never pass through LLM output — so the web_fetch taint guard that
+/// correctly blocks secret-bearing URLs is not triggered (2026-08-23 86bus:
+/// the agent wanted to check an existing draft but had no tool and no safe
+/// credential path).
+pub struct WeixinOaDraftListTool;
+
+impl ToolProvider for WeixinOaDraftListTool {
+    fn definition(&self) -> PluginToolDef {
+        PluginToolDef {
+            name: "oa_draft_list".to_string(),
+            description: "List or read drafts in a WeChat Official Account draft box (草稿箱). Returns title/digest/media_id/update_time per draft; with content=true also returns article HTML. Credentials are resolved server-side for server-bound accounts — do NOT put app_secret in any URL.".to_string(),
+            parameters_json: r#"{"type":"object","properties":{"app_id":{"type":"string","description":"Target OA app_id (e.g. wx4e35...)"},"offset":{"type":"integer","default":0,"description":"Pagination offset"},"count":{"type":"integer","default":5,"maximum":20,"description":"Drafts per page (1-20)"},"no_content":{"type":"boolean","default":true,"description":"true = metadata only (cheap); false = include article HTML"},"title_filter":{"type":"string","description":"Only return drafts whose title contains this substring"}},"required":["app_id"]}"#.to_string(),
+        }
+    }
+
+    fn execute(
+        &self,
+        args: &Value,
+        _context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
+        let app_id = args["app_id"]
+            .as_str()
+            .ok_or_else(|| PluginToolError::tool("missing app_id"))?
+            .to_string();
+        let offset = args["offset"].as_u64().unwrap_or(0) as u32;
+        let count = args["count"].as_u64().unwrap_or(5).clamp(1, 20) as u32;
+        let no_content = args["no_content"].as_bool().unwrap_or(true);
+        let title_filter = args["title_filter"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        // Server-bound account only: credentials come from the registered OA
+        // session file. Unlike publish (which accepts user-profile secrets
+        // passed by the marker bridge), a read tool has no need for
+        // caller-supplied secrets — keeping them out means the LLM never
+        // handles credential material here at all.
+        let home = types::config::home_dir();
+        let app_secret = wechat_oa::session::load_account(&home, &app_id)
+            .map(|a| a.app_secret)
+            .ok_or_else(|| {
+                PluginToolError::tool(format!(
+                    "没有找到公众号 {app_id} 的服务端绑定账号（senders/{app_id}/session.json 不存在或不是 weixin-oa 渠道）。只有后台绑定的公众号才能读草稿箱。"
+                ))
+            })?;
+
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| PluginToolError::tool(format!("http client: {e}")))?;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
+
+        rt.block_on(async move {
+            let mut token = wechat_oa::token::get_token(&http, &app_id, &app_secret)
+                .await
+                .map_err(|e| PluginToolError::tool(e.to_string()))?;
+
+            let mut page = match api::draft_batchget(&http, &token, offset, count, no_content)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) if is_token_expired(&e.to_string()) => {
+                    wechat_oa::token::invalidate(&app_id);
+                    token = wechat_oa::token::get_token(&http, &app_id, &app_secret)
+                        .await
+                        .map_err(|e| PluginToolError::tool(e.to_string()))?;
+                    api::draft_batchget(&http, &token, offset, count, no_content)
+                        .await
+                        .map_err(|e| PluginToolError::tool(e.to_string()))?
+                }
+                Err(e) => return Err(PluginToolError::tool(e.to_string())),
+            };
+
+            // Optional client-side title filter + strip heavy fields the LLM
+            // doesn't need (cover crop lists, temp-key URLs).
+            if let Some(ref f) = title_filter {
+                if let Some(items) = page.get_mut("item").and_then(|i| i.as_array_mut()) {
+                    items.retain(|it| {
+                        it["content"]["news_item"]
+                            .as_array()
+                            .map(|news| {
+                                news.iter().any(|n| {
+                                    n["title"].as_str().is_some_and(|t| t.contains(f.as_str()))
+                                })
+                            })
+                            .unwrap_or(false)
+                    });
+                }
+            }
+            if let Some(items) = page.get_mut("item").and_then(|i| i.as_array_mut()) {
+                for it in items.iter_mut() {
+                    if let Some(news) =
+                        it.get_mut("content").and_then(|c| c["news_item"].as_array_mut())
+                    {
+                        for n in news.iter_mut() {
+                            if let Some(obj) = n.as_object_mut() {
+                                obj.remove("cover_info");
+                                obj.remove("url");
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(page.to_string())
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Publish article tool (AI + API pattern — no MCP)
 // ---------------------------------------------------------------------------
 

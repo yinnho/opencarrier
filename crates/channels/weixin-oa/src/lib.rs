@@ -14,4 +14,5 @@ pub use channel::{
     opens_cs_window, OaAccountState, SessionWatcher, WeixinOaState, WEIXIN_OA_STATE,
 };
 pub use models::{parse_xml_message, OaMessage, ProxyMessage, WeixinOaSessionFile};
+pub use tools::WeixinOaDraftListTool;
 pub use tools::WeixinOaPublishArticleTool;

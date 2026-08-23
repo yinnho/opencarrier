@@ -358,6 +358,7 @@ pub async fn run_daemon(
                 "1.0.0".to_string(),
                 std::path::PathBuf::new(),
             );
+            builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaDraftListTool));
             builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaPublishArticleTool));
             dispatcher.register(std::sync::Arc::new(builtin));
         }

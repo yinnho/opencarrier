@@ -81,8 +81,12 @@ impl PermissionLevel {
             | "browser_click" | "browser_type" | "browser_scroll"
             | "browser_wait" | "browser_back" | "browser_screenshot"
             | "browser_close"
+            // oa_draft_list — read-only draft box inventory; credentials are
+            // resolved server-side (senders/<app_id>/session.json) and never
+            // pass through LLM output.
             | "image_analyze" | "media_describe" | "media_transcribe"
-            | "speech_to_text" | "location_get" | "system_time" => Self::ReadOnly,
+            | "speech_to_text" | "location_get" | "system_time"
+            | "oa_draft_list" => Self::ReadOnly,
 
             // Write — writes within sandbox
             "file_write"
