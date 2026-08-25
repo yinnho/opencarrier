@@ -23,10 +23,12 @@
    用 `parse_flow_def` 解析本文档内嵌的 flow 示例——文档改了示例没跟解析器对齐、
    或解析器改了字段没改文档，CI 都会失败。**不靠人记得改文档，靠测试挡。**
 
-3. **clone-creator 的 `knowledge/agx-format.md` 是复述，必须同步**。格式演进后，
-   clone-creator 定义层（agx-format.md、clone-generate flow 的格式段落、skill-designer/
-   quality-reviewer 子代理）要在同一批工作中清扫到新格式——否则源头继续产出
-   旧格式分身（"活病人"）。规范的真源只有本文档 + 解析器，clone-creator 是翻译层。
+3. **clone-creator 定义层是复述，必须同步**。格式演进后，clone-creator 的
+   clone-generate flow 格式段落与 skill-designer/quality-reviewer 子代理要在同一批
+   工作中清扫到新格式——否则源头继续产出旧格式分身（"活病人"）。规范的真源只有
+   本文档 + 解析器，clone-creator 是翻译层；分身 workspace 里的 knowledge/format-spec.md
+   由系统按版本重种，是每个分身可读的活副本。历史遗物 knowledge/agx-format.md
+   （.agx tar.gz 归档格式规范）已随文件级格式落地删除，勿再引入。
 
 4. **安装期硬校验兜底**。`validate_install_format` 在 `clone_install_files` 落盘前
    拒收 `skills/` 根目录与缺非空 description 的 flow——即使某个 generator 产出了

@@ -97,4 +97,4 @@ pub const CLONE_FORMAT_SPEC: &str = include_str!("../../../docs/CLONE-FORMAT.md"
 /// materially — the reconciler only reseeds workspaces whose stamped version
 /// is older, so an edited doc WITHOUT a bump never reaches already-seeded
 /// clones.
-pub const CLONE_FORMAT_SPEC_VERSION: &str = "v2";
+pub const CLONE_FORMAT_SPEC_VERSION: &str = "v3";
