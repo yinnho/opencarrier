@@ -95,6 +95,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     any_tools_executed: &mut bool,
     tools_this_iter: &mut u32,
     tools_attempted_this_iter: &mut u32,
+    enoent_probe_reads: &mut u32,
     recent_tool_calls: &mut Vec<(String, u64)>,
     tools_owned: &mut Vec<ToolDefinition>,
     discovered_tool_names: &mut std::collections::HashSet<String>,
@@ -207,8 +208,13 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // DIFFERENT path every iteration evades it while never writing — the
     // "must-read-before-write" compulsion (2026-08-22 86bus article-brief:
     // ~12 distinct file_read paths, zero file_write, announced "现在落盘" every
-    // round yet never wrote). Aggregate file_read/file_write counts across the
-    // whole turn (survives interleaving) and nudge at REMIND, abort at BREAK.
+    // round yet never wrote). Writes count across the whole write-class set
+    // (document_generate produces real files too — counting only literal
+    // file_write killed turns one step before their deliverable, 2026-08-25
+    // review). Remind on raw read count; abort ONLY on the existence-probe
+    // spiral (ENOENT answers counted post-execution) — successful distinct
+    // reads are genuine progress: consult flows legitimately read 10+
+    // knowledge files for a pure text answer.
     {
         let turn_reads: u32 = tool_call_counts
             .iter()
@@ -217,28 +223,33 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             .sum::<u32>();
         let turn_writes: u32 = tool_call_counts
             .iter()
-            .filter(|((name, _), _)| name == "file_write")
+            .filter(|((name, _), _)| {
+                super::helpers::WRITE_CLASS_TOOL_NAMES.contains(&name.as_str())
+            })
             .map(|(_, c)| *c)
             .sum::<u32>();
-        if turn_writes == 0 && turn_reads >= super::helpers::READ_WITHOUT_WRITE_BREAK_AT {
+        if turn_writes == 0 && *enoent_probe_reads >= super::helpers::READ_WITHOUT_WRITE_BREAK_AT
+        {
             warn!(
                 agent = %manifest.name,
+                probes = *enoent_probe_reads,
                 turn_reads,
                 threshold = super::helpers::READ_WITHOUT_WRITE_BREAK_AT,
                 iteration,
-                "Read-without-write stall — aborting turn (distinct file_read paths, no file_write)"
+                "Read-without-write stall (existence-probe spiral) — aborting turn"
             );
             return ToolUseAction::BreakToolLoop(format!(
-                "agent 本轮已 file_read {turn_reads} 个（不同）文件却一次 file_write 都没调——\
-                 这是\"写前必读\"的僵死循环，靠提醒改不了。终止本轮以省预算。\
-                 如果任务是创建/更新文件，请直接用 file_write，不要再 file_read 探测。"
+                "agent 本轮已 {probes} 次探测不存在的文件（file_read 返回\"不存在\"）却没有任何写入类调用——\
+                 这是\"写前必读\"的僵死循环在空转探测。终止本轮以省预算。\
+                 文件不存在时的正确做法是直接用 file_write 创建，而不是继续探测。",
+                probes = *enoent_probe_reads
             ));
         }
         if turn_writes == 0 && turn_reads >= super::helpers::READ_WITHOUT_WRITE_REMIND_AT {
             cumulative_warnings.push(format!(
-                "⚠️ 本轮已 file_read {turn_reads} 个文件，但还没有任何 file_write。\
-                 如果你的目标是创建新文件（如 素材.md/状态.md），现在就应该用 file_write 写入——\
-                 不要再读旧管线文件或探测\"不存在\"的文件。再继续只读不写会被判定卡死。"
+                "⚠️ 本轮已 file_read {turn_reads} 个文件，但还没有任何写入（file_write/document_generate 等）。\
+                 如果你的目标是创建新文件（如 素材.md/状态.md），现在就应该直接写入——\
+                 不要再读旧管线文件或探测\"不存在\"的文件。继续探测不存在的文件而不写入会被判定卡死。"
             ));
         }
     }
@@ -519,6 +530,17 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         *tools_attempted_this_iter = tools_attempted_this_iter.saturating_add(1);
         if !result.is_error {
             *tools_this_iter = tools_this_iter.saturating_add(1);
+        }
+
+        // Existence-probe accounting for the read-without-write detector: a
+        // file_read answered with the friendly ENOENT marker is a PROBE, not
+        // a content read — probes are the abort signal, successful reads
+        // aren't (see the detector block near the top of this function).
+        if tool_name == "file_read"
+            && !result.is_error
+            && result.content.contains(types::tool::FILE_READ_ENOENT_MARKER)
+        {
+            *enoent_probe_reads = enoent_probe_reads.saturating_add(1);
         }
 
         // Fire AfterToolCall hook

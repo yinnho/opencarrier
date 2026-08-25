@@ -166,6 +166,12 @@ pub struct LoopState {
     /// (e.g. deliberate ENOENT existence probes before a write), so the
     /// no-progress detector gives it a wider leash than a narration spin.
     pub tools_attempted_this_iter: u32,
+    /// Whole-turn count of `file_read` existence probes — calls answered with
+    /// the friendly ENOENT marker (`types::tool::FILE_READ_ENOENT_MARKER`).
+    /// Bumped post-execution in `tool_use`; drives the probe-spiral abort of
+    /// the read-without-write stall detector (successful content reads don't
+    /// count toward the abort — they're genuine progress).
+    pub enoent_probe_reads: u32,
     pub context_tokens_used_estimate: usize,
     pub context_tokens_max: usize,
     pub context_pressure: ContextPressure,
@@ -210,6 +216,7 @@ impl LoopState {
             idle_streak: 0,
             tools_this_iter: 0,
             tools_attempted_this_iter: 0,
+            enoent_probe_reads: 0,
             context_tokens_used_estimate: 0,
             context_tokens_max: context_window_tokens,
             context_pressure: ContextPressure::Normal,

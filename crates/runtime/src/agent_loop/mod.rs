@@ -969,6 +969,7 @@ async fn dispatch(
                 &mut ctx.state.any_tools_executed,
                 &mut ctx.state.tools_this_iter,
                 &mut ctx.state.tools_attempted_this_iter,
+                &mut ctx.state.enoent_probe_reads,
                 &mut ctx.state.recent_tool_calls,
                 &mut ctx.tools_owned,
                 &mut ctx.discovered_tool_names,

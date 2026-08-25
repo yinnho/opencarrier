@@ -135,18 +135,33 @@ pub const CUMULATIVE_ESCALATE_AT: u32 = 5;
 /// burned 600s).
 pub const CUMULATIVE_BREAK_AT: u32 = 8;
 
-/// Whole-turn read-without-write stall: the model has called `file_read` this
+/// Tools whose execution produces side-effect output (files/state) — the
+/// write-class counterpart to `file_read` in the read-without-write stall
+/// detector. A turn that produced its deliverable through any of these is
+/// NOT a read-only stall, even with zero literal `file_write` calls (e.g.
+/// read 10 sources then `document_generate` — pandoc writes a real file).
+pub const WRITE_CLASS_TOOL_NAMES: &[&str] = &[
+    "file_write",
+    "document_generate",
+    "kv_set",
+    "knowledge_update",
+    "user_profile",
+];
+
+/// Whole-turn read-without-write nudge: the model has called `file_read` this
 /// many times (across DIFFERENT paths — so the per-call cumulative detector
-/// never fires) without a single `file_write`. This is the "must-read-before-
-/// write" compulsion that prompt guidance does not fix: the model announces
-/// "现在落盘" then reads one more file, forever (2026-08-22 86bus:
-/// article-brief fetched its URL, then file_read ~12 distinct paths over 14
-/// iterations while never calling file_write). At this threshold we inject a
-/// hard nudge; at [`READ_WITHOUT_WRITE_BREAK_AT`] we abort the turn.
+/// never fires) without any write-class tool ([`WRITE_CLASS_TOOL_NAMES`]).
+/// This stays a REMINDER, not an abort: consult flows legitimately read 10+
+/// knowledge files for a pure text answer, and distinct-path reads that
+/// SUCCEED are genuine progress (2026-08-25 review: the raw-read-count abort
+/// killed such turns one iteration before the final answer).
 pub const READ_WITHOUT_WRITE_REMIND_AT: u32 = 6;
-/// Final read-without-write stage — abort the turn. After this many distinct
-/// `file_read` calls with zero `file_write`, further reading is not going to
-/// converge on writing; abort to save the iteration budget.
+/// Final read-without-write stage — abort the turn. Counted on EXISTENCE
+/// PROBES only: `file_read` calls answered with the friendly ENOENT marker
+/// (`types::tool::FILE_READ_ENOENT_MARKER`), with zero write-class calls.
+/// Re-probing nonexistent paths is the pathological shape (2026-08-22 86bus
+/// article-brief: probe 素材.md/状态.md, announce "现在落盘", read one more,
+/// forever); successful distinct reads never count toward the abort.
 pub const READ_WITHOUT_WRITE_BREAK_AT: u32 = 10;
 
 /// Default context window size (tokens) for token-based trimming.
