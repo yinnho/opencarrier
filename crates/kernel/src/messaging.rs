@@ -620,33 +620,8 @@ impl CarrierKernel {
             .collect();
 
         // CORE names not in the builtin catalog resolve from the plugin tool
-        // dispatcher (e.g. oa_draft_list — a weixin-oa channel ToolProvider).
-        // Being core means it lands in the assembled base set, which the flow
-        // `tools:` hard sandbox freezes as the turn allow-list; without this
-        // bridge the name matches nothing here and both tool_search and
-        // execution stay filtered for caged turns. Safety: a core name that
-        // resolves only via the dispatcher must not be Dangerous.
-        if let Some(dispatcher) = self
-            .plugins
-            .plugin_tool_dispatcher
-            .lock()
-            .ok()
-            .and_then(|g| g.clone())
-        {
-            let have: std::collections::HashSet<String> =
-                tools.iter().map(|t| t.name.clone()).collect();
-            let bridged: Vec<types::tool::ToolDefinition> = dispatcher
-                .definitions()
-                .into_iter()
-                .filter(|d| {
-                    types::tool::CORE_TOOL_NAMES.contains(&d.name.as_str())
-                        && !have.contains(&d.name)
-                        && types::tool::PermissionLevel::for_tool(&d.name)
-                            != types::tool::PermissionLevel::Dangerous
-                })
-                .collect();
-            tools.extend(bridged);
-        }
+        // dispatcher (shared bridge — see KernelPlugins::bridge_core_dispatcher_tools).
+        self.plugins.bridge_core_dispatcher_tools(&mut tools);
 
         // Also include declarative API tools — they are always available to all
         // agents (registered via builtin_modules), but not in CORE_TOOL_NAMES.

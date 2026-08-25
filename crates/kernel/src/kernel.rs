@@ -84,6 +84,41 @@ pub struct KernelPlugins {
     pub mcp_reconnect_failures: dashmap::DashMap<String, u32>,
 }
 
+impl KernelPlugins {
+    /// Bridge CORE_TOOL_NAMES entries that live only in the plugin dispatcher
+    /// (not the builtin catalog, e.g. `oa_draft_list` from the weixin-oa
+    /// channel) into an already-assembled core tool set. Being core means the
+    /// name lands in the assembled base set that the flow `tools:` hard
+    /// sandbox freezes as the turn allow-list; without this bridge the name
+    /// matches nothing at assembly and both tool_search and execution stay
+    /// filtered for caged turns. Safety: a core name that resolves only via
+    /// the dispatcher must not be Dangerous. Shared by resolve_tools
+    /// (messaging.rs) and context_report (sessions.rs) — the two assembly
+    /// points must not drift apart.
+    pub fn bridge_core_dispatcher_tools(&self, tools: &mut Vec<ToolDefinition>) {
+        if let Some(dispatcher) = self
+            .plugin_tool_dispatcher
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+        {
+            let have: std::collections::HashSet<String> =
+                tools.iter().map(|t| t.name.clone()).collect();
+            let bridged: Vec<ToolDefinition> = dispatcher
+                .definitions()
+                .into_iter()
+                .filter(|d| {
+                    types::tool::CORE_TOOL_NAMES.contains(&d.name.as_str())
+                        && !have.contains(&d.name)
+                        && types::tool::PermissionLevel::for_tool(&d.name)
+                            != types::tool::PermissionLevel::Dangerous
+                })
+                .collect();
+            tools.extend(bridged);
+        }
+    }
+}
+
 /// Agent scheduling, supervision, and runtime execution subsystem.
 pub struct KernelRuntime {
     /// Agent scheduler.
