@@ -880,8 +880,11 @@ mod tests {
         )
         .await;
         assert!(
-            !result.content.contains("Permission denied"),
-            "file_read should pass permission check but got: {}",
+            !result.is_error
+                && result.content.contains(types::tool::FILE_READ_ENOENT_MARKER),
+            "file_read should pass the permission check and answer ENOENT as a friendly \
+             non-error, got is_error={} content: {}",
+            result.is_error,
             result.content
         );
     }

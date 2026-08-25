@@ -500,6 +500,15 @@ impl From<&str> for PluginToolError {
     }
 }
 
+/// Marker embedded in `file_read`'s friendly ENOENT answer ("文件 '<path>'
+/// 不存在。如果你想创建它，…"). The agent-loop stall detector counts
+/// `file_read` calls whose result contains this marker as EXISTENCE PROBES
+/// (vs. reads that returned real content) — the producer
+/// (runtime `tools/filesystem`) and consumer (runtime
+/// `agent_loop/tool_use`) both reference this single definition so the
+/// answer format and the probe classifier can't drift apart.
+pub const FILE_READ_ENOENT_MARKER: &str = "不存在。如果你想创建它";
+
 /// Core tool names always included in `CompletionRequest.tools`.
 ///
 /// These are the bootstrap tools every agent gets. Other tools are discovered

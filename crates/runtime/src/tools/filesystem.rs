@@ -316,6 +316,42 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<S
 
     tracing::info!(raw_path, resolved = %resolved.display(), "file_read resolved path");
 
+    // Existence gate FIRST — before the document-format dispatch below. Two
+    // ordering/classification bugs fixed (2026-08-25 review):
+    // 1. A probe of a nonexistent .docx/.pdf path used to fall into the
+    //    markitdown path and return an error — resurrecting, on every
+    //    document-format probe, the error-tracker pollution the
+    //    ENOENT-as-answer fix exists to eliminate.
+    // 2. metadata errors other than NotFound (permission, ENOTDIR, transient
+    //    I/O) were all answered "不存在" — actively wrong: it told the model a
+    //    permission-walled file was absent and invited file_write over it.
+    let metadata = match tokio::fs::metadata(&resolved).await {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // ENOENT on a deliberate existence probe is an ANSWER ("does not
+            // exist"), not a failure. Returning Err poisoned the error tracker
+            // and burned no-progress idle streaks: the "file_read BEFORE
+            // file_write" protocol commands pre-write probes, so a model
+            // following instructions was killed by the stuck governor mid-pivot
+            // (2026-08-22 86bus: article-brief fetched its URL, probed
+            // 素材.md/状态.md ENOENT ×4, died one step before file_write).
+            // Even after making the error message explicit ("don't retry, write
+            // now"), the model still probed — the error itself (is_error=true)
+            // triggered "try different path" behavior regardless of content.
+            // Return Ok instead: probe succeeds, answer is "doesn't exist",
+            // counts as progress, model moves on to file_write.
+            return Ok(format!(
+                "文件 '{raw_path}'{}，请直接用 file_write 写入内容。",
+                types::tool::FILE_READ_ENOENT_MARKER
+            ));
+        }
+        Err(e) => {
+            return Err(CarrierError::InvalidInput(format!(
+                "无法访问文件 '{raw_path}'：{e}。这不是\"不存在\"——路径被权限或类型错误挡住了，请修正路径或检查权限。"
+            )));
+        }
+    };
+
     // Binary document formats (pdf/docx/xlsx/pptx/odt/...) - extract text via
     // markitdown so the agent can read user-sent documents, not just plain text.
     // Images/video are not documents and fall through to the binary-refuse path
@@ -327,41 +363,23 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<S
 
     // Friendly error: detect binary files (images, etc.) before reading.
     // file_read only handles text; binary files should use image_analyze etc.
-    if let Ok(metadata) = tokio::fs::metadata(&resolved).await {
-        if metadata.is_file() {
-            // Check magic bytes to detect common binary formats
-            if let Ok(header) = tokio::fs::read(&resolved).await {
-                let kind = detect_binary_kind(&header);
-                if let Some(kind) = kind {
-                    return Err(CarrierError::InvalidInput(format!(
-                        "文件 '{raw_path}' 是二进制文件（{kind}），file_read 只能读取文本文件。\
-                         如果是图片，请用 image_analyze 工具分析；如果是其他二进制文件，\
-                         请直接使用它的路径/URL，不需要读取内容。"
-                    )));
-                }
+    if metadata.is_file() {
+        // Check magic bytes to detect common binary formats
+        if let Ok(header) = tokio::fs::read(&resolved).await {
+            let kind = detect_binary_kind(&header);
+            if let Some(kind) = kind {
+                return Err(CarrierError::InvalidInput(format!(
+                    "文件 '{raw_path}' 是二进制文件（{kind}），file_read 只能读取文本文件。\
+                     如果是图片，请用 image_analyze 工具分析；如果是其他二进制文件，\
+                     请直接使用它的路径/URL，不需要读取内容。"
+                )));
             }
-        } else if metadata.is_dir() {
-            // Reading a directory is the #1 file_read loop trigger (see
-            // directory_read_hint): without an actionable hint the agent retries
-            // on different dir paths and evades the exact-match loop guard.
-            return Err(CarrierError::InvalidInput(directory_read_hint(raw_path)));
         }
-    } else {
-        // ENOENT on a deliberate existence probe is an ANSWER ("does not
-        // exist"), not a failure. Returning Err poisoned the error tracker
-        // and burned no-progress idle streaks: the "file_read BEFORE
-        // file_write" protocol commands pre-write probes, so a model
-        // following instructions was killed by the stuck governor mid-pivot
-        // (2026-08-22 86bus: article-brief fetched its URL, probed
-        // 素材.md/状态.md ENOENT ×4, died one step before file_write).
-        // Even after making the error message explicit ("don't retry, write
-        // now"), the model still probed — the error itself (is_error=true)
-        // triggered "try different path" behavior regardless of content.
-        // Return Ok instead: probe succeeds, answer is "doesn't exist",
-        // counts as progress, model moves on to file_write.
-        return Ok(format!(
-            "文件 '{raw_path}' 不存在。如果你想创建它，请直接用 file_write 写入内容。"
-        ));
+    } else if metadata.is_dir() {
+        // Reading a directory is the #1 file_read loop trigger (see
+        // directory_read_hint): without an actionable hint the agent retries
+        // on different dir paths and evades the exact-match loop guard.
+        return Err(CarrierError::InvalidInput(directory_read_hint(raw_path)));
     }
 
     tokio::fs::read_to_string(&resolved).await.map_err(|e| {
@@ -724,6 +742,74 @@ mod tests {
         });
         let err = tool_file_write(&input, &ctx).await.unwrap_err();
         assert!(err.to_string().contains("U+FFFD"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn file_read_enoent_on_document_extension_is_answer_not_error() {
+        // 2026-08-25 ordering regression: probing output/报告.docx before
+        // generating it used to fall into the markitdown path and return an
+        // error — resurrecting the error-tracker pollution the ENOENT-as-
+        // answer fix exists to kill. The existence gate now runs BEFORE the
+        // document-format dispatch.
+        let ctx = test_read_ctx();
+        let out = tool_file_read(
+            &serde_json::json!({"path": "oc_fs_missing_probe_98765432/报告.docx"}),
+            &ctx,
+        )
+        .await;
+        let s = out.expect("ENOENT probe must be Ok");
+        assert!(s.contains(types::tool::FILE_READ_ENOENT_MARKER), "{s}");
+    }
+
+    #[tokio::test]
+    async fn file_read_enotdir_is_real_error_not_missing_answer() {
+        // A path THROUGH a regular file (file.txt/child) errors ENOTDIR —
+        // that must surface as a real error, not the friendly "不存在"
+        // answer (2026-08-25: non-NotFound metadata errors were all reported
+        // as nonexistence, inviting file_write over permission-walled files).
+        let real = "oc_fs_enotdir_probe_file_2468.txt";
+        std::fs::write(real, "x").unwrap();
+        let out = tool_file_read(
+            &serde_json::json!({"path": format!("{real}/child.md")}),
+            &test_read_ctx(),
+        )
+        .await;
+        let _ = std::fs::remove_file(real);
+        let msg = out.expect_err("ENOTDIR must be Err").to_string();
+        assert!(
+            !msg.contains(types::tool::FILE_READ_ENOENT_MARKER),
+            "must not claim the file doesn't exist: {msg}"
+        );
+        assert!(msg.contains("无法访问"), "{msg}");
+    }
+
+    fn test_read_ctx() -> crate::tool_context::ToolContext<'static> {
+        crate::tool_context::ToolContext {
+            kernel: None,
+            memory: None,
+            caller_agent_id: None,
+            mcp_connections: None,
+            fetch_engine: None,
+            allowed_env_vars: None,
+            workspace_root: None,
+            brain: None,
+            exec_policy: None,
+            cli_exec_config: None,
+            process_manager: None,
+            sender_id: None,
+            owner_id: None,
+            home_dir: None,
+            agent_name: None,
+            subagent_configs: None,
+            channel_type: None,
+            max_tool_level: types::tool::PermissionLevel::Write,
+            is_clone_admin: false,
+            external_url: None,
+            flow_elevated_tools: None,
+            flow_shell_allow: None,
+            flow_deny_tools: None,
+            flow_allowed_tools: None,
+        }
     }
 
     #[test]
