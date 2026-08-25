@@ -48,7 +48,7 @@ impl ToolProvider for WeixinOaDraftListTool {
     fn definition(&self) -> PluginToolDef {
         PluginToolDef {
             name: "oa_draft_list".to_string(),
-            description: "List or read drafts in a WeChat Official Account draft box (草稿箱). Returns title/digest/media_id/update_time per draft; with content=true also returns article HTML. Credentials are resolved server-side for server-bound accounts — do NOT put app_secret in any URL.".to_string(),
+            description: "List or read drafts in a WeChat Official Account draft box (草稿箱). Returns title/digest/media_id/update_time per draft; with no_content=false also returns article HTML. Credentials are resolved server-side for server-bound accounts — do NOT put app_secret in any URL.".to_string(),
             parameters_json: r#"{"type":"object","properties":{"app_id":{"type":"string","description":"Target OA app_id (e.g. wx4e35...)"},"offset":{"type":"integer","default":0,"description":"Pagination offset"},"count":{"type":"integer","default":5,"maximum":20,"description":"Drafts per page (1-20)"},"no_content":{"type":"boolean","default":true,"description":"true = metadata only (cheap); false = include article HTML"},"title_filter":{"type":"string","description":"Only return drafts whose title contains this substring"}},"required":["app_id"]}"#.to_string(),
         }
     }
@@ -56,7 +56,7 @@ impl ToolProvider for WeixinOaDraftListTool {
     fn execute(
         &self,
         args: &Value,
-        _context: &PluginToolContext,
+        context: &PluginToolContext,
     ) -> Result<String, PluginToolError> {
         let app_id = args["app_id"]
             .as_str()
@@ -76,13 +76,25 @@ impl ToolProvider for WeixinOaDraftListTool {
         // caller-supplied secrets — keeping them out means the LLM never
         // handles credential material here at all.
         let home = types::config::home_dir();
-        let app_secret = wechat_oa::session::load_account(&home, &app_id)
-            .map(|a| a.app_secret)
-            .ok_or_else(|| {
-                PluginToolError::tool(format!(
-                    "没有找到公众号 {app_id} 的服务端绑定账号（senders/{app_id}/session.json 不存在或不是 weixin-oa 渠道）。只有后台绑定的公众号才能读草稿箱。"
-                ))
-            })?;
+        let account = wechat_oa::session::load_account(&home, &app_id).ok_or_else(|| {
+            PluginToolError::tool(format!(
+                "没有找到公众号 {app_id} 的服务端绑定账号（senders/{app_id}/session.json 不存在或不是 weixin-oa 渠道）。只有后台绑定的公众号才能读草稿箱。"
+            ))
+        })?;
+        // Cross-clone isolation: only the agent the OA is bound to may read
+        // its draft box. publish.rs applies the same gate on the server-bound
+        // fallback (bind_agent == agent_id, c6839ac); without it here, any
+        // clone on a shared server could read another clone's drafts by
+        // simply passing its app_id. Deny-by-default: no/empty bind_agent or
+        // empty caller context also fails closed.
+        let caller = context.agent_id.as_str();
+        if !account_readable_by(account.bind_agent.as_deref(), caller) {
+            return Err(PluginToolError::tool(format!(
+                "公众号 {app_id} 没有绑定到当前分身（bind_agent 不匹配），无权读取它的草稿箱。\
+                 只有后台把这个公众号绑定到本分身时才能用 oa_draft_list 读它。"
+            )));
+        }
+        let app_secret = account.app_secret;
 
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
@@ -99,7 +111,12 @@ impl ToolProvider for WeixinOaDraftListTool {
                 .await
                 .map_err(|e| PluginToolError::tool(e.to_string()))?;
 
-            let mut page = match api::draft_batchget(&http, &token, offset, count, no_content)
+            // The client-side title_filter reads content.news_item, which
+            // WeChat OMITS when no_content=1 — so a filter forces us to fetch
+            // content (filter_and_strip strips it again afterwards if the
+            // caller only wanted metadata).
+            let fetch_no_content = no_content && title_filter.is_none();
+            let mut page = match api::draft_batchget(&http, &token, offset, count, fetch_no_content)
                 .await
             {
                 Ok(v) => v,
@@ -108,45 +125,59 @@ impl ToolProvider for WeixinOaDraftListTool {
                     token = wechat_oa::token::get_token(&http, &app_id, &app_secret)
                         .await
                         .map_err(|e| PluginToolError::tool(e.to_string()))?;
-                    api::draft_batchget(&http, &token, offset, count, no_content)
+                    api::draft_batchget(&http, &token, offset, count, fetch_no_content)
                         .await
                         .map_err(|e| PluginToolError::tool(e.to_string()))?
                 }
                 Err(e) => return Err(PluginToolError::tool(e.to_string())),
             };
 
-            // Optional client-side title filter + strip heavy fields the LLM
-            // doesn't need (cover crop lists, temp-key URLs).
-            if let Some(ref f) = title_filter {
-                if let Some(items) = page.get_mut("item").and_then(|i| i.as_array_mut()) {
-                    items.retain(|it| {
-                        it["content"]["news_item"]
-                            .as_array()
-                            .map(|news| {
-                                news.iter().any(|n| {
-                                    n["title"].as_str().is_some_and(|t| t.contains(f.as_str()))
-                                })
-                            })
-                            .unwrap_or(false)
-                    });
+            filter_and_strip(&mut page, title_filter.as_deref(), no_content);
+            Ok(page.to_string())
+        })
+    }
+}
+
+/// Returns true if [`WeixinOaDraftListTool`] may read this account's drafts.
+/// Deny-by-default: no bind_agent or empty caller context fails closed.
+fn account_readable_by(bind_agent: Option<&str>, caller_agent_id: &str) -> bool {
+    !caller_agent_id.is_empty() && bind_agent == Some(caller_agent_id)
+}
+
+/// Client-side post-processing of a draft_batchget page: apply the optional
+/// title filter, then strip heavy fields the LLM doesn't need (cover crop
+/// lists, temp-key URLs) — or strip the whole `content` block when the caller
+/// wanted metadata only (content was fetched solely to run the filter).
+fn filter_and_strip(page: &mut Value, title_filter: Option<&str>, strip_content: bool) {
+    if let Some(f) = title_filter {
+        if let Some(items) = page.get_mut("item").and_then(|i| i.as_array_mut()) {
+            items.retain(|it| {
+                it["content"]["news_item"]
+                    .as_array()
+                    .map(|news| {
+                        news.iter()
+                            .any(|n| n["title"].as_str().is_some_and(|t| t.contains(f)))
+                    })
+                    .unwrap_or(false)
+            });
+        }
+    }
+    if let Some(items) = page.get_mut("item").and_then(|i| i.as_array_mut()) {
+        for it in items.iter_mut() {
+            if strip_content {
+                if let Some(obj) = it.as_object_mut() {
+                    obj.remove("content");
                 }
-            }
-            if let Some(items) = page.get_mut("item").and_then(|i| i.as_array_mut()) {
-                for it in items.iter_mut() {
-                    if let Some(news) =
-                        it.get_mut("content").and_then(|c| c["news_item"].as_array_mut())
-                    {
-                        for n in news.iter_mut() {
-                            if let Some(obj) = n.as_object_mut() {
-                                obj.remove("cover_info");
-                                obj.remove("url");
-                            }
-                        }
+            } else if let Some(news) = it.get_mut("content").and_then(|c| c["news_item"].as_array_mut())
+            {
+                for n in news.iter_mut() {
+                    if let Some(obj) = n.as_object_mut() {
+                        obj.remove("cover_info");
+                        obj.remove("url");
                     }
                 }
             }
-            Ok(page.to_string())
-        })
+        }
     }
 }
 
@@ -358,5 +389,70 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             })
             .to_string())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gate_denies_cross_clone_and_defaults_closed() {
+        // Same clone → readable
+        assert!(account_readable_by(Some("agent-a"), "agent-a"));
+        // Cross-clone → denied (the P0: clone B passing clone A's app_id)
+        assert!(!account_readable_by(Some("agent-a"), "agent-b"));
+        // Legacy session without bind_agent → closed
+        assert!(!account_readable_by(None, "agent-a"));
+        // Empty caller context (no inbound agent) → closed
+        assert!(!account_readable_by(Some("agent-a"), ""));
+    }
+
+    fn page_with(titles: &[&str]) -> Value {
+        let items: Vec<Value> = titles
+            .iter()
+            .map(|t| {
+                let mut news = serde_json::json!({ "title": t });
+                news["cover_info"] = serde_json::json!({"crop_list": [1, 2]});
+                news["url"] = serde_json::json!("https://temp/key");
+                serde_json::json!({ "content": { "news_item": [news] }, "media_id": "m" })
+            })
+            .collect();
+        serde_json::json!({ "item": items, "total_count": items.len() })
+    }
+
+    #[test]
+    fn title_filter_with_strip_content_filters_then_strips() {
+        // The P2 regression: filter + metadata-only must not return an EMPTY
+        // list — the caller fetched content only to run the filter.
+        let mut page = page_with(&["白云素材周报", "别的文章"]);
+        filter_and_strip(&mut page, Some("白云"), true);
+        let items = page["item"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "matching draft survives the filter");
+        assert!(
+            items[0].get("content").is_none(),
+            "content block stripped for metadata-only caller"
+        );
+    }
+
+    #[test]
+    fn no_filter_strips_only_heavy_fields() {
+        let mut page = page_with(&["a", "b"]);
+        filter_and_strip(&mut page, None, false);
+        let items = page["item"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        for it in items {
+            let news = &it["content"]["news_item"][0];
+            assert!(news.get("cover_info").is_none());
+            assert!(news.get("url").is_none());
+            assert!(news.get("title").is_some(), "title kept when content kept");
+        }
+    }
+
+    #[test]
+    fn filter_no_match_drops_all() {
+        let mut page = page_with(&["a"]);
+        filter_and_strip(&mut page, Some("zzz"), false);
+        assert_eq!(page["item"].as_array().map(|a| a.len()), Some(0));
     }
 }
