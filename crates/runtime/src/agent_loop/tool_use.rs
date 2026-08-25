@@ -101,8 +101,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     discovered_tool_names: &mut std::collections::HashSet<String>,
     loaded_flows: &mut std::collections::HashSet<String>,
     loaded_flow_shell_allow: &mut Vec<String>,
-    loaded_flow_elevated_tools: &mut Vec<String>,
-    loaded_flow_tools: &mut Vec<String>,
+    loaded_flow_tools: &mut Vec<(String, bool)>,
     error_tracker: &mut crate::agent_loop::state::ToolErrorTracker,
     tool_loop_rearm: &mut std::collections::HashMap<String, u32>,
     tool_call_counts: &mut std::collections::HashMap<(String, u64), u32>,
@@ -385,7 +384,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         // they bypass the level/admin gates exactly like turn-start elevated
         // tools (`flow_elevated` in tool_runner).
         let mut flow_elevated_owned = flow_elevated_owned;
-        for t in loaded_flow_elevated_tools.iter() {
+        for (t, _) in loaded_flow_tools.iter().filter(|(_, e)| *e) {
             if !flow_elevated_owned.contains(t) {
                 flow_elevated_owned.push(t.clone());
             }
@@ -437,10 +436,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         // an explicitly flow_load-ed flow's tools are sanctioned, so the active
         // flow's sandbox must not cage them (e.g. a chat turn caged to a flow
         // without file_write, then the agent loads article-brief which declares
-        // it). `loaded_flow_tools` covers ALL loaded flows (elevating +
-        // non-elevating); `loaded_flow_elevated_tools` is a subset.
+        // it). All loaded flows count, elevating or not.
         let mut flow_allowed_owned = flow_allowed_owned;
-        for t in loaded_flow_tools.iter() {
+        for (t, _) in loaded_flow_tools.iter() {
             if !flow_allowed_owned.contains(t) {
                 flow_allowed_owned.push(t.clone());
             }
@@ -637,22 +635,18 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     // 2. Record the name in `loaded_flow_tools` so the flow
                     //    `tools:` hard sandbox is widened below (execution would
                     //    otherwise reject the call even after it's offered).
-                    // Elevating flows additionally land in
-                    // `loaded_flow_elevated_tools` for the level/admin-gate
-                    // bypass (shell_exec etc.). An explicit flow_load is
-                    // sanctioned intent — the default_flow fallback cage never
-                    // reaches this path.
+                    // The pair's flag marks tools from ELEVATING flows for the
+                    // level/admin-gate bypass (shell_exec etc.). An explicit
+                    // flow_load is sanctioned intent — the default_flow
+                    // fallback cage never reaches this path.
                     {
                         let mut granted = 0;
                         for t in &loaded_def.tools {
-                            if t.is_empty() || loaded_flow_tools.contains(t) {
+                            if t.is_empty() || loaded_flow_tools.iter().any(|(n, _)| n == t) {
                                 continue;
                             }
-                            loaded_flow_tools.push(t.clone());
+                            loaded_flow_tools.push((t.clone(), loaded_def.elevates()));
                             granted += 1;
-                            if loaded_def.elevates() && !loaded_flow_elevated_tools.contains(t) {
-                                loaded_flow_elevated_tools.push(t.clone());
-                            }
                             // Resolve the definition and offer it to the LLM.
                             // Non-elevating tools are granted only up to the
                             // agent's max_tool_level (file_write = Write is
@@ -855,10 +849,10 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             // granted tools (e.g. shell_exec) are candidates at all — the
             // post-filter below re-cages anything above the agent's own level
             // that isn't in the granted set.
-            let search_level = if loaded_flow_elevated_tools.is_empty() {
-                manifest.max_tool_level
-            } else {
+            let search_level = if loaded_flow_tools.iter().any(|(_, e)| *e) {
                 types::tool::PermissionLevel::Dangerous
+            } else {
+                manifest.max_tool_level
             };
             for q in &search_queries {
                 let results =
@@ -895,7 +889,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     .unwrap_or_default();
                 // Same widening as the execute-time sandbox above: tools of
                 // flow_load-ed flows are exempt from the cage.
-                for t in loaded_flow_tools.iter() {
+                for (t, _) in loaded_flow_tools.iter() {
                     if !flow_allowed_owned.contains(t) {
                         flow_allowed_owned.push(t.clone());
                     }
@@ -913,9 +907,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     // it (base names normalized on both sides).
                     .filter(|t| {
                         types::tool::PermissionLevel::for_tool(&t.name) <= manifest.max_tool_level
-                            || loaded_flow_elevated_tools
-                                .iter()
-                                .any(|g| crate::tool_runner::base_tool_name(g) == t.name)
+                            || loaded_flow_tools.iter().any(|(g, e)| {
+                                *e && crate::tool_runner::base_tool_name(g) == t.name
+                            })
                     })
                     .filter(|t| !tools_owned.iter().any(|existing| existing.name == t.name))
                     .take(remaining_capacity)
